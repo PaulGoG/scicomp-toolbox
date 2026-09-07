@@ -9,5 +9,6 @@ updates:
       - "/hardware-diagnostics"
       - "/hardware-diagnostics/test"
       - "/formatter"
+      - "/plot-benchmarks"
     schedule:
       interval: "weekly"

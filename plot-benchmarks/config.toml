@@ -1,0 +1,11 @@
+# Configuration of the plot-benchmarks tool
+
+[input]
+dataset_directory = "../hardware-diagnostics/data"  # path; relative to this tool; the newest hardware_benchmark_*.csv is used unless --input is given
+
+[figures]
+format = "pdf"  # one of: "pdf" | "png" | "svg"
+width_mm = 178.0  # float in [60, 300]; printed figure width (double column 178 to 183 mm)
+px_per_unit = 5  # integer >= 1; raster export only (5 gives about 360 dpi at 178 mm)
+fontsize_pt = 9.0  # float in [6, 14]
+output_directory = "plots"  # path; relative to this tool
