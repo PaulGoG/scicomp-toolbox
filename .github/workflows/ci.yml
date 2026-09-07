@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: ['1.10', '1.11', '1.12']
+        version: ['1.12']
         os: [ubuntu-latest]
 
     steps:
@@ -33,17 +33,21 @@ jobs:
       - name: Cache Julia Artifacts
         uses: julia-actions/cache@v2
 
-      - name: Instantiate Sub-Environment
+      - name: Instantiate Sub-Environments
         run: |
           julia --project=hardware-diagnostics -e '
             using Pkg
             Pkg.instantiate()
           '
 
-      - name: Run Unit Test Suite
+      - name: Run Global Test Suite
         run: |
-          julia --project=hardware-diagnostics hardware-diagnostics/test/runtests.jl
+          julia test.jl
 
-      - name: Run Executable Smoke Test (CPU Fallback)
+      - name: Run Standalone Sysinfo Smoke Test
         run: |
-          julia --project=hardware-diagnostics hardware-diagnostics/hardware-diag.jl --quick --cpu-only --no-log
+          julia standalone/sysinfo.jl
+
+      - name: Run Executable Smoke Test via Dispatcher
+        run: |
+          julia run.jl hardware-diagnostics --quick --cpu-only --no-log

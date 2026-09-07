@@ -124,12 +124,12 @@ const SUPPORTED_TYPE_MAP = Dict{String, DataType}(
     "Float16" => Float16,
     "Float32" => Float32,
     "Float64" => Float64,
-    "Int8"    => Int8,
-    "Int16"   => Int16,
-    "Int32"   => Int32,
-    "Int64"   => Int64,
+    "Int8" => Int8,
+    "Int16" => Int16,
+    "Int32" => Int32,
+    "Int64" => Int64,
     "ComplexF32" => ComplexF32,
-    "ComplexF64" => ComplexF64
+    "ComplexF64" => ComplexF64,
 )
 
 const ALLOWED_GPU_BACKENDS = ["auto", "all", "oneapi", "cuda", "amdgpu", "metal"]
@@ -150,19 +150,29 @@ function validate_config(raw::Dict{String, Any})
     mode = lowercase(string(get(bench, "mode", "standard")))
     allowed_modes = ["quick", "standard", "stress", "custom"]
     if !(mode in allowed_modes)
-        throw(ArgumentError("Invalid mode '$mode'. Allowed choices: $(join(allowed_modes, ", "))"))
+        throw(
+            ArgumentError(
+                "Invalid mode '$mode'. Allowed choices: $(join(allowed_modes, ", "))",
+            ),
+        )
     end
 
     # Compute engine validation
     engine = lowercase(string(get(bench, "compute_engine", "both")))
     if !(engine in ALLOWED_COMPUTE_ENGINES)
-        throw(ArgumentError("Invalid compute_engine '$engine'. Allowed choices: $(join(ALLOWED_COMPUTE_ENGINES, ", "))"))
+        throw(
+            ArgumentError(
+                "Invalid compute_engine '$engine'. Allowed choices: $(join(ALLOWED_COMPUTE_ENGINES, ", "))",
+            ),
+        )
     end
 
     # Problem sizes
     sizes_raw = get(bench, "problem_sizes", [1024, 2048])
     if !isa(sizes_raw, AbstractVector) || isempty(sizes_raw)
-        throw(ArgumentError("problem_sizes must be a non-empty vector of positive integers"))
+        throw(
+            ArgumentError("problem_sizes must be a non-empty vector of positive integers"),
+        )
     end
     problem_sizes = Int[Int(s) for s in sizes_raw]
     for s in problem_sizes
@@ -194,11 +204,19 @@ function validate_config(raw::Dict{String, Any})
     end
 
     # Target types
-    types_raw = get(bench, "target_types", ["Float16", "Float32", "Float64", "Int8", "Int16", "Int32", "Int64"])
+    types_raw = get(
+        bench,
+        "target_types",
+        ["Float16", "Float32", "Float64", "Int8", "Int16", "Int32", "Int64"],
+    )
     target_types = DataType[]
     for t_str in types_raw
         if !haskey(SUPPORTED_TYPE_MAP, string(t_str))
-            throw(ArgumentError("Unsupported data type '$t_str'. Allowed: $(join(keys(SUPPORTED_TYPE_MAP), ", "))"))
+            throw(
+                ArgumentError(
+                    "Unsupported data type '$t_str'. Allowed: $(join(keys(SUPPORTED_TYPE_MAP), ", "))",
+                ),
+            )
         end
         push!(target_types, SUPPORTED_TYPE_MAP[string(t_str)])
     end
@@ -209,7 +227,11 @@ function validate_config(raw::Dict{String, Any})
     # Backend selection
     gpu_backend = lowercase(string(get(bench, "gpu_backend", "auto")))
     if !(gpu_backend in ALLOWED_GPU_BACKENDS)
-        throw(ArgumentError("Invalid gpu_backend '$gpu_backend'. Allowed choices: $(join(ALLOWED_GPU_BACKENDS, ", "))"))
+        throw(
+            ArgumentError(
+                "Invalid gpu_backend '$gpu_backend'. Allowed choices: $(join(ALLOWED_GPU_BACKENDS, ", "))",
+            ),
+        )
     end
 
     # Safety limits
@@ -237,7 +259,7 @@ function validate_config(raw::Dict{String, Any})
         export_csv,
         export_metadata,
         out_dir,
-        log_to_file
+        log_to_file,
     )
 end
 
@@ -282,7 +304,11 @@ function parse_cli_args(args::Vector{String}, base_dir::String)
         elseif arg in ["-e", "--engine"]
             idx += 1
             if idx > length(args)
-                throw(ArgumentError("$arg requires an engine identifier: $(join(ALLOWED_COMPUTE_ENGINES, ", "))"))
+                throw(
+                    ArgumentError(
+                        "$arg requires an engine identifier: $(join(ALLOWED_COMPUTE_ENGINES, ", "))",
+                    ),
+                )
             end
             bench["compute_engine"] = lowercase(strip(args[idx]))
         elseif arg == "--ka-only"
@@ -318,7 +344,11 @@ function parse_cli_args(args::Vector{String}, base_dir::String)
         elseif arg in ["--gpu-backend", "--backend"]
             idx += 1
             if idx > length(args)
-                throw(ArgumentError("$arg requires a backend identifier: $(join(ALLOWED_GPU_BACKENDS, ", "))"))
+                throw(
+                    ArgumentError(
+                        "$arg requires a backend identifier: $(join(ALLOWED_GPU_BACKENDS, ", "))",
+                    ),
+                )
             end
             bench["gpu_backend"] = lowercase(strip(args[idx]))
         elseif arg == "--config"
@@ -343,21 +373,20 @@ function parse_cli_args(args::Vector{String}, base_dir::String)
             end
             output["output_directory"] = args[idx]
         else
-            throw(ArgumentError("Unknown command-line argument: $arg. Use --help for usage."))
+            throw(
+                ArgumentError("Unknown command-line argument: $arg. Use --help for usage."),
+            )
         end
         idx += 1
     end
 
-    merged = Dict{String, Any}(
-        "benchmark" => bench,
-        "safety" => safety,
-        "output" => output
-    )
+    merged = Dict{String, Any}("benchmark" => bench, "safety" => safety, "output" => output)
     return validate_config(merged)
 end
 
 function print_usage()
-    println("""
+    println(
+        """
 Julia System Diagnostics & High-Intensity Benchmark Suite
 
 Usage:
@@ -394,7 +423,8 @@ Examples:
   julia hardware-diag.jl --engine ka
   julia hardware-diag.jl --gpu-backend oneapi --engine both
   julia hardware-diag.jl --sizes 512,1024,2048 --trials 3
-""")
+""",
+    )
 end
 
 # ------------------------------------------------------------------------------
@@ -461,17 +491,18 @@ estimate_matrix_bytes(N::Int, ::Type{T}) where {T} = 4 * N * N * sizeof(T)
 
 Computes the total arithmetic operations for dual GEMM accumulation D = A*B + A*C (4 N^3 FLOPs/OPs).
 """
-arithmetic_ops(::Type{T}, N::Int) where {T<:Real} = 4.0 * Float64(N)^3
-arithmetic_ops(::Type{T}, N::Int) where {T<:Complex} = 16.0 * Float64(N)^3
+arithmetic_ops(::Type{T}, N::Int) where {T <: Real} = 4.0 * Float64(N)^3
+arithmetic_ops(::Type{T}, N::Int) where {T <: Complex} = 16.0 * Float64(N)^3
 
 """
     create_matrix(::Type{T}, N::Int) where {T} -> Matrix{T}
 
 Allocates an N × N host matrix initialized with pseudorandom numbers.
 """
-create_matrix(::Type{T}, N::Int) where {T<:AbstractFloat} = randn(T, N, N)
-create_matrix(::Type{T}, N::Int) where {T<:Integer} = rand(T(1):T(4), N, N)
-create_matrix(::Type{Complex{T}}, N::Int) where {T<:AbstractFloat} = randn(Complex{T}, N, N)
+create_matrix(::Type{T}, N::Int) where {T <: AbstractFloat} = randn(T, N, N)
+create_matrix(::Type{T}, N::Int) where {T <: Integer} = rand(T(1):T(4), N, N)
+create_matrix(::Type{Complex{T}}, N::Int) where {T <: AbstractFloat} =
+    randn(Complex{T}, N, N)
 
 """
     render_progress(current::Int, total::Int, start_time::Float64, task_label::String)
@@ -491,8 +522,13 @@ function render_progress(current::Int, total::Int, start_time::Float64, task_lab
     eta = (pct > 0.0) ? (elapsed / pct) - elapsed : 0.0
     label_clean = length(task_label) > 28 ? task_label[1:25] * "..." : rpad(task_label, 28)
 
-    Printf.@printf("\r  [%s] %5.1f%% | ETA: %-7s | %s\033[K",
-                   bar, pct * 100, format_seconds(eta), label_clean)
+    Printf.@printf(
+        "\r  [%s] %5.1f%% | ETA: %-7s | %s\033[K",
+        bar,
+        pct * 100,
+        format_seconds(eta),
+        label_clean
+    )
     flush(stdout)
 end
 
@@ -535,8 +571,18 @@ function query_linux_cpu_features()
                 parts = split(line, ":")
                 if length(parts) >= 2
                     raw_flags = split(parts[2])
-                    interesting = ["fma", "avx", "avx2", "avx512f", "avx512dq", "avx512vl",
-                                   "sse4_2", "vnni", "amx_bf16", "amx_tile"]
+                    interesting = [
+                        "fma",
+                        "avx",
+                        "avx2",
+                        "avx512f",
+                        "avx512dq",
+                        "avx512vl",
+                        "sse4_2",
+                        "vnni",
+                        "amx_bf16",
+                        "amx_tile",
+                    ]
                     for f in interesting
                         if f in raw_flags
                             push!(features, f)
@@ -566,18 +612,39 @@ function scan_cpu_and_system(io::IO)
     total_mem = Sys.total_memory()
     free_mem = Sys.free_memory()
 
-    println(io, "Julia Version        : ", VERSION, " (commit ", Base.GIT_VERSION_INFO.commit_short, ")")
+    println(
+        io,
+        "Julia Version        : ",
+        VERSION,
+        " (commit ",
+        Base.GIT_VERSION_INFO.commit_short,
+        ")",
+    )
     println(io, "Platform / OS        : ", Sys.MACHINE, " (", Sys.KERNEL, " kernel)")
     println(io, "Architecture         : ", Sys.ARCH, " (", Sys.WORD_SIZE, "-bit pointer)")
     println(io, "CPU Model            : ", cpu_model)
-    println(io, "Physical / Logical   : ", length(cpu_info), " cores reported / ", logical_cores, " logical threads")
+    println(
+        io,
+        "Physical / Logical   : ",
+        length(cpu_info),
+        " cores reported / ",
+        logical_cores,
+        " logical threads",
+    )
 
     # Clock speeds
     if !isempty(cpu_info) && hasproperty(cpu_info[1], :speed)
         speeds = [c.speed for c in cpu_info if c.speed > 0]
         if !isempty(speeds)
             min_sp, max_sp = minimum(speeds), maximum(speeds)
-            println(io, "CPU Frequencies      : ", min_sp, " MHz to ", max_sp, " MHz (current samples)")
+            println(
+                io,
+                "CPU Frequencies      : ",
+                min_sp,
+                " MHz to ",
+                max_sp,
+                " MHz (current samples)",
+            )
         end
     end
 
@@ -607,7 +674,12 @@ function scan_cpu_and_system(io::IO)
 
     # KernelAbstractions backend
     println(io, "\n--- Portable Hardware Abstraction ---")
-    println(io, "KernelAbstractions   : v", pkgversion(KernelAbstractions), " (CPUBackend: Active)")
+    println(
+        io,
+        "KernelAbstractions   : v",
+        pkgversion(KernelAbstractions),
+        " (CPUBackend: Active)",
+    )
 end
 
 """
@@ -623,7 +695,22 @@ function probe_oneapi_backend(io::IO)
 
     if Base.find_package("oneAPI") === nothing
         println(io, "  [-] oneAPI.jl is not installed in the active environment.")
-        return GpuDeviceInfo(pkg, arr, label, false, "N/A", "N/A", 0, 0, 0, 0, 0, 0, "N/A", Dict{String,String}())
+        return GpuDeviceInfo(
+            pkg,
+            arr,
+            label,
+            false,
+            "N/A",
+            "N/A",
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "N/A",
+            Dict{String, String}(),
+        )
     end
 
     try
@@ -632,7 +719,22 @@ function probe_oneapi_backend(io::IO)
             mod = getfield(Main, :oneAPI)
             if !isdefined(mod, :functional) || !mod.functional()
                 println(io, "  [-] Driver or hardware not functional.")
-                return GpuDeviceInfo(pkg, arr, label, false, "N/A", "N/A", 0, 0, 0, 0, 0, 0, "N/A", Dict{String,String}())
+                return GpuDeviceInfo(
+                    pkg,
+                    arr,
+                    label,
+                    false,
+                    "N/A",
+                    "N/A",
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "N/A",
+                    Dict{String, String}(),
+                )
             end
 
             dev = mod.device()
@@ -641,7 +743,8 @@ function probe_oneapi_backend(io::IO)
             drv = mod.driver()
             drv_props = mod.oneL0.properties(drv)
 
-            total_eus = props.numSlices * props.numSubslicesPerSlice * props.numEUsPerSubslice
+            total_eus =
+                props.numSlices * props.numSubslicesPerSlice * props.numEUsPerSubslice
             hardware_threads = total_eus * props.numThreadsPerEU
             total_vram = isempty(mem_props) ? 0 : mem_props[1].totalSize
             max_alloc = props.maxMemAllocSize
@@ -661,20 +764,63 @@ function probe_oneapi_backend(io::IO)
             println(io, "  [+] Status           : Functional")
             println(io, "  [+] Device Name      : ", props.name)
             println(io, "  [+] Driver Version   : Level Zero v", driver_ver)
-            println(io, "  [+] Execution Units  : ", total_eus, " EUs (", hardware_threads, " hardware threads, SIMD width ", simd_width, ")")
+            println(
+                io,
+                "  [+] Execution Units  : ",
+                total_eus,
+                " EUs (",
+                hardware_threads,
+                " hardware threads, SIMD width ",
+                simd_width,
+                ")",
+            )
             println(io, "  [+] Core Clock       : ", clock_mhz, " MHz")
-            println(io, "  [+] Device Memory    : ", format_bytes(total_vram), " (Max single allocation: ", format_bytes(max_alloc), ")")
+            println(
+                io,
+                "  [+] Device Memory    : ",
+                format_bytes(total_vram),
+                " (Max single allocation: ",
+                format_bytes(max_alloc),
+                ")",
+            )
             println(io, "  [+] Timer Resolution : ", timer_ns, " ns")
             println(io, "  [+] KA Abstraction   : ", ka_name)
 
             return GpuDeviceInfo(
-                pkg, arr, label, true, props.name, driver_ver,
-                total_eus, hardware_threads, clock_mhz, total_vram, max_alloc, timer_ns, ka_name, extra
+                pkg,
+                arr,
+                label,
+                true,
+                props.name,
+                driver_ver,
+                total_eus,
+                hardware_threads,
+                clock_mhz,
+                total_vram,
+                max_alloc,
+                timer_ns,
+                ka_name,
+                extra,
             )
         end
     catch err
         println(io, "  [-] Detection Error: ", sprint(showerror, err))
-        return GpuDeviceInfo(pkg, arr, label, false, "N/A", "N/A", 0, 0, 0, 0, 0, 0, "N/A", Dict{String,String}())
+        return GpuDeviceInfo(
+            pkg,
+            arr,
+            label,
+            false,
+            "N/A",
+            "N/A",
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "N/A",
+            Dict{String, String}(),
+        )
     end
 end
 
@@ -691,7 +837,22 @@ function probe_cuda_backend(io::IO)
 
     if Base.find_package("CUDA") === nothing
         println(io, "  [-] CUDA.jl is not installed in the active environment.")
-        return GpuDeviceInfo(pkg, arr, label, false, "N/A", "N/A", 0, 0, 0, 0, 0, 0, "N/A", Dict{String,String}())
+        return GpuDeviceInfo(
+            pkg,
+            arr,
+            label,
+            false,
+            "N/A",
+            "N/A",
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "N/A",
+            Dict{String, String}(),
+        )
     end
 
     try
@@ -700,49 +861,117 @@ function probe_cuda_backend(io::IO)
             mod = getfield(Main, :CUDA)
             if !isdefined(mod, :functional) || !mod.functional()
                 println(io, "  [-] CUDA driver or hardware not functional.")
-                return GpuDeviceInfo(pkg, arr, label, false, "N/A", "N/A", 0, 0, 0, 0, 0, 0, "N/A", Dict{String,String}())
+                return GpuDeviceInfo(
+                    pkg,
+                    arr,
+                    label,
+                    false,
+                    "N/A",
+                    "N/A",
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "N/A",
+                    Dict{String, String}(),
+                )
             end
 
             dev = mod.device()
             dev_name = mod.name(dev)
             vram = mod.totalmem(dev)
             drv_ver = isdefined(mod, :driver_version) ? string(mod.driver_version()) : "N/A"
-            rt_ver = isdefined(mod, :runtime_version) ? string(mod.runtime_version()) : "N/A"
+            rt_ver =
+                isdefined(mod, :runtime_version) ? string(mod.runtime_version()) : "N/A"
             cap = isdefined(mod, :capability) ? string(mod.capability(dev)) : "N/A"
 
-            sms = isdefined(mod, :attribute) && isdefined(mod, :DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT) ?
-                  mod.attribute(dev, mod.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT) : 0
-            clock_khz = isdefined(mod, :attribute) && isdefined(mod, :DEVICE_ATTRIBUTE_CLOCK_RATE) ?
-                        mod.attribute(dev, mod.DEVICE_ATTRIBUTE_CLOCK_RATE) : 0
+            sms =
+                isdefined(mod, :attribute) &&
+                isdefined(mod, :DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT) ?
+                mod.attribute(dev, mod.DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT) : 0
+            clock_khz =
+                isdefined(mod, :attribute) && isdefined(mod, :DEVICE_ATTRIBUTE_CLOCK_RATE) ?
+                mod.attribute(dev, mod.DEVICE_ATTRIBUTE_CLOCK_RATE) : 0
             clock_mhz = round(Int, clock_khz / 1000)
-            max_threads = isdefined(mod, :attribute) && isdefined(mod, :DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK) ?
-                          mod.attribute(dev, mod.DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK) : 1024
+            max_threads =
+                isdefined(mod, :attribute) &&
+                isdefined(mod, :DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK) ?
+                mod.attribute(dev, mod.DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK) : 1024
 
             extra = Dict{String, String}(
                 "compute_capability" => cap,
                 "runtime_toolkit" => rt_ver,
-                "max_threads_per_block" => string(max_threads)
+                "max_threads_per_block" => string(max_threads),
             )
 
             ka_name = isdefined(mod, :CUDABackend) ? "CUDABackend" : "N/A"
 
             println(io, "  [+] Status           : Functional")
-            println(io, "  [+] Device Name      : ", dev_name, " (Compute Capability ", cap, ")")
-            println(io, "  [+] Driver / Toolkit : Driver v", drv_ver, " / Toolkit v", rt_ver)
+            println(
+                io,
+                "  [+] Device Name      : ",
+                dev_name,
+                " (Compute Capability ",
+                cap,
+                ")",
+            )
+            println(
+                io,
+                "  [+] Driver / Toolkit : Driver v",
+                drv_ver,
+                " / Toolkit v",
+                rt_ver,
+            )
             if sms > 0
-                println(io, "  [+] Multiprocessors  : ", sms, " SMs (Clock: ", clock_mhz, " MHz)")
+                println(
+                    io,
+                    "  [+] Multiprocessors  : ",
+                    sms,
+                    " SMs (Clock: ",
+                    clock_mhz,
+                    " MHz)",
+                )
             end
             println(io, "  [+] Device VRAM      : ", format_bytes(vram))
             println(io, "  [+] KA Abstraction   : ", ka_name)
 
             return GpuDeviceInfo(
-                pkg, arr, label, true, dev_name, drv_ver,
-                sms, sms * 128, clock_mhz, vram, vram, 0, ka_name, extra
+                pkg,
+                arr,
+                label,
+                true,
+                dev_name,
+                drv_ver,
+                sms,
+                sms * 128,
+                clock_mhz,
+                vram,
+                vram,
+                0,
+                ka_name,
+                extra,
             )
         end
     catch err
         println(io, "  [-] CUDA Detection Error: ", sprint(showerror, err))
-        return GpuDeviceInfo(pkg, arr, label, false, "N/A", "N/A", 0, 0, 0, 0, 0, 0, "N/A", Dict{String,String}())
+        return GpuDeviceInfo(
+            pkg,
+            arr,
+            label,
+            false,
+            "N/A",
+            "N/A",
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "N/A",
+            Dict{String, String}(),
+        )
     end
 end
 
@@ -759,7 +988,22 @@ function probe_amdgpu_backend(io::IO)
 
     if Base.find_package("AMDGPU") === nothing
         println(io, "  [-] AMDGPU.jl is not installed in the active environment.")
-        return GpuDeviceInfo(pkg, arr, label, false, "N/A", "N/A", 0, 0, 0, 0, 0, 0, "N/A", Dict{String,String}())
+        return GpuDeviceInfo(
+            pkg,
+            arr,
+            label,
+            false,
+            "N/A",
+            "N/A",
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "N/A",
+            Dict{String, String}(),
+        )
     end
 
     try
@@ -768,13 +1012,34 @@ function probe_amdgpu_backend(io::IO)
             mod = getfield(Main, :AMDGPU)
             if !isdefined(mod, :functional) || !mod.functional()
                 println(io, "  [-] AMDGPU driver or hardware not functional.")
-                return GpuDeviceInfo(pkg, arr, label, false, "N/A", "N/A", 0, 0, 0, 0, 0, 0, "N/A", Dict{String,String}())
+                return GpuDeviceInfo(
+                    pkg,
+                    arr,
+                    label,
+                    false,
+                    "N/A",
+                    "N/A",
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "N/A",
+                    Dict{String, String}(),
+                )
             end
 
             dev = mod.device()
-            dev_name = isdefined(mod, :name) ? mod.name(dev) : (hasproperty(dev, :name) ? dev.name : string(dev))
-            vram = isdefined(mod, :totalmem) ? mod.totalmem(dev) : (hasproperty(dev, :total_memory) ? dev.total_memory : 0)
-            arch = isdefined(mod, :architecture) ? string(mod.architecture(dev)) : (hasproperty(dev, :gcn_arch_name) ? dev.gcn_arch_name : "N/A")
+            dev_name =
+                isdefined(mod, :name) ? mod.name(dev) :
+                (hasproperty(dev, :name) ? dev.name : string(dev))
+            vram =
+                isdefined(mod, :totalmem) ? mod.totalmem(dev) :
+                (hasproperty(dev, :total_memory) ? dev.total_memory : 0)
+            arch =
+                isdefined(mod, :architecture) ? string(mod.architecture(dev)) :
+                (hasproperty(dev, :gcn_arch_name) ? dev.gcn_arch_name : "N/A")
             wave_size = isdefined(mod, :wavefrontsize) ? mod.wavefrontsize(dev) : 64
             cus = hasproperty(dev, :compute_units) ? dev.compute_units : 0
             clock_mhz = hasproperty(dev, :max_clock_frequency) ? dev.max_clock_frequency : 0
@@ -782,7 +1047,7 @@ function probe_amdgpu_backend(io::IO)
 
             extra = Dict{String, String}(
                 "architecture" => arch,
-                "wavefront_size" => string(wave_size)
+                "wavefront_size" => string(wave_size),
             )
 
             ka_name = isdefined(mod, :ROCBackend) ? "ROCBackend" : "N/A"
@@ -791,7 +1056,16 @@ function probe_amdgpu_backend(io::IO)
             println(io, "  [+] Device Name      : ", dev_name, " (Arch: ", arch, ")")
             println(io, "  [+] Runtime Version  : ", rocm_ver)
             if cus > 0
-                println(io, "  [+] Compute Units    : ", cus, " CUs (Wavefront: ", wave_size, ", Clock: ", clock_mhz, " MHz)")
+                println(
+                    io,
+                    "  [+] Compute Units    : ",
+                    cus,
+                    " CUs (Wavefront: ",
+                    wave_size,
+                    ", Clock: ",
+                    clock_mhz,
+                    " MHz)",
+                )
             end
             if vram > 0
                 println(io, "  [+] Device VRAM      : ", format_bytes(vram))
@@ -799,13 +1073,40 @@ function probe_amdgpu_backend(io::IO)
             println(io, "  [+] KA Abstraction   : ", ka_name)
 
             return GpuDeviceInfo(
-                pkg, arr, label, true, dev_name, rocm_ver,
-                cus, cus * wave_size, clock_mhz, vram, vram, 0, ka_name, extra
+                pkg,
+                arr,
+                label,
+                true,
+                dev_name,
+                rocm_ver,
+                cus,
+                cus * wave_size,
+                clock_mhz,
+                vram,
+                vram,
+                0,
+                ka_name,
+                extra,
             )
         end
     catch err
         println(io, "  [-] AMDGPU Detection Error: ", sprint(showerror, err))
-        return GpuDeviceInfo(pkg, arr, label, false, "N/A", "N/A", 0, 0, 0, 0, 0, 0, "N/A", Dict{String,String}())
+        return GpuDeviceInfo(
+            pkg,
+            arr,
+            label,
+            false,
+            "N/A",
+            "N/A",
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "N/A",
+            Dict{String, String}(),
+        )
     end
 end
 
@@ -822,7 +1123,22 @@ function probe_metal_backend(io::IO)
 
     if Base.find_package("Metal") === nothing
         println(io, "  [-] Metal.jl is not installed in the active environment.")
-        return GpuDeviceInfo(pkg, arr, label, false, "N/A", "N/A", 0, 0, 0, 0, 0, 0, "N/A", Dict{String,String}())
+        return GpuDeviceInfo(
+            pkg,
+            arr,
+            label,
+            false,
+            "N/A",
+            "N/A",
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "N/A",
+            Dict{String, String}(),
+        )
     end
 
     try
@@ -831,33 +1147,82 @@ function probe_metal_backend(io::IO)
             mod = getfield(Main, :Metal)
             if !isdefined(mod, :functional) || !mod.functional()
                 println(io, "  [-] Metal framework not functional.")
-                return GpuDeviceInfo(pkg, arr, label, false, "N/A", "N/A", 0, 0, 0, 0, 0, 0, "N/A", Dict{String,String}())
+                return GpuDeviceInfo(
+                    pkg,
+                    arr,
+                    label,
+                    false,
+                    "N/A",
+                    "N/A",
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "N/A",
+                    Dict{String, String}(),
+                )
             end
 
             dev = mod.device()
-            dev_name = isdefined(mod, :name) ? mod.name(dev) : (hasproperty(dev, :name) ? dev.name : string(dev))
+            dev_name =
+                isdefined(mod, :name) ? mod.name(dev) :
+                (hasproperty(dev, :name) ? dev.name : string(dev))
             vram = Sys.total_memory() # Apple Unified Memory architecture
             max_alloc = hasproperty(dev, :maxBufferLength) ? dev.maxBufferLength : 0
 
-            extra = Dict{String, String}(
-                "architecture" => "Apple Silicon Unified Memory"
-            )
+            extra = Dict{String, String}("architecture" => "Apple Silicon Unified Memory")
 
             ka_name = isdefined(mod, :MetalBackend) ? "MetalBackend" : "N/A"
 
             println(io, "  [+] Status           : Functional")
             println(io, "  [+] Device Name      : ", dev_name)
-            println(io, "  [+] Unified Memory   : ", format_bytes(vram), " (Max Buffer: ", format_bytes(max_alloc), ")")
+            println(
+                io,
+                "  [+] Unified Memory   : ",
+                format_bytes(vram),
+                " (Max Buffer: ",
+                format_bytes(max_alloc),
+                ")",
+            )
             println(io, "  [+] KA Abstraction   : ", ka_name)
 
             return GpuDeviceInfo(
-                pkg, arr, label, true, dev_name, "Metal",
-                0, 0, 0, vram, max_alloc, 0, ka_name, extra
+                pkg,
+                arr,
+                label,
+                true,
+                dev_name,
+                "Metal",
+                0,
+                0,
+                0,
+                vram,
+                max_alloc,
+                0,
+                ka_name,
+                extra,
             )
         end
     catch err
         println(io, "  [-] Metal Detection Error: ", sprint(showerror, err))
-        return GpuDeviceInfo(pkg, arr, label, false, "N/A", "N/A", 0, 0, 0, 0, 0, 0, "N/A", Dict{String,String}())
+        return GpuDeviceInfo(
+            pkg,
+            arr,
+            label,
+            false,
+            "N/A",
+            "N/A",
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "N/A",
+            Dict{String, String}(),
+        )
     end
 end
 
@@ -866,7 +1231,7 @@ end
 
 Detects and profiles GPU accelerator backends according to the requested filter.
 """
-function probe_all_gpus(io::IO, backend_filter::String="auto")
+function probe_all_gpus(io::IO, backend_filter::String = "auto")
     println(io, "\n" * "="^80)
     println(io, "  Heterogeneous GPU Accelerator Discovery")
     println(io, "="^80)
@@ -889,7 +1254,10 @@ function probe_all_gpus(io::IO, backend_filter::String="auto")
 
     functional = filter(d -> d.is_functional, devices)
     if isempty(functional) && filter_norm != "auto" && filter_norm != "all"
-        println(io, "\n[!] Warning: Requested GPU backend '$backend_filter' is not functional or not installed.")
+        println(
+            io,
+            "\n[!] Warning: Requested GPU backend '$backend_filter' is not functional or not installed.",
+        )
     end
 
     return functional
@@ -925,8 +1293,13 @@ end
 
 Benchmarks CPU multi-threaded scaling on Float32 matrices across thread counts using BLAS.
 """
-function run_cpu_thread_scaling(config::BenchmarkConfig, log_io::IO, start_time::Float64,
-                                prog::Ref{Int}, total_steps::Int)
+function run_cpu_thread_scaling(
+    config::BenchmarkConfig,
+    log_io::IO,
+    start_time::Float64,
+    prog::Ref{Int},
+    total_steps::Int,
+)
     records = BenchmarkRecord[]
     max_threads = Sys.CPU_THREADS
     p2_threads = [2^i for i in 0:floor(Int, log2(max_threads))]
@@ -945,14 +1318,30 @@ function run_cpu_thread_scaling(config::BenchmarkConfig, log_io::IO, start_time:
         for N in config.problem_sizes
             required_bytes = estimate_matrix_bytes(N, Float32)
             if required_bytes > max_allowed_ram
-                println(log_io, "\n[!] SKIPPED Problem Size $(N)x$(N): Memory footprint $(format_bytes(required_bytes)) exceeds threshold $(format_bytes(max_allowed_ram))")
+                println(
+                    log_io,
+                    "\n[!] SKIPPED Problem Size $(N)x$(N): Memory footprint $(format_bytes(required_bytes)) exceeds threshold $(format_bytes(max_allowed_ram))",
+                )
                 continue
             end
 
             total_ops = arithmetic_ops(Float32, N)
-            println(log_io, "\n▶ Problem Size: $(N) x $(N) | Matrix Footprint: ", format_bytes(required_bytes))
-            Printf.@printf(log_io, "  %-10s | %-12s | %-12s | %-12s | %-8s | %-12s | %-10s\n",
-                           "Threads", "Min Time", "Median Time", "Throughput", "Scaling", "Parallel Eff", "Jitter")
+            println(
+                log_io,
+                "\n▶ Problem Size: $(N) x $(N) | Matrix Footprint: ",
+                format_bytes(required_bytes),
+            )
+            Printf.@printf(
+                log_io,
+                "  %-10s | %-12s | %-12s | %-12s | %-8s | %-12s | %-10s\n",
+                "Threads",
+                "Min Time",
+                "Median Time",
+                "Throughput",
+                "Scaling",
+                "Parallel Eff",
+                "Jitter"
+            )
             println(log_io, "  " * "-"^80)
 
             A = create_matrix(Float32, N)
@@ -963,7 +1352,12 @@ function run_cpu_thread_scaling(config::BenchmarkConfig, log_io::IO, start_time:
 
             for t in thread_counts
                 prog[] += 1
-                render_progress(prog[], total_steps, start_time, "CPU BLAS $(N)x$(N) ($(t)T)")
+                render_progress(
+                    prog[],
+                    total_steps,
+                    start_time,
+                    "CPU BLAS $(N)x$(N) ($(t)T)",
+                )
 
                 BLAS.set_num_threads(t)
 
@@ -996,15 +1390,42 @@ function run_cpu_thread_scaling(config::BenchmarkConfig, log_io::IO, start_time:
 
                 label = (t == max_threads && !(t in p2_threads)) ? "$t (Max)" : "$t"
                 tp_str = format_throughput(gflops, Float32)
-                Printf.@printf(log_io, "  %-10s | %9.3f ms | %9.3f ms | %-12s | %6.2fx  | %8.1f%%   | %6.2f%%\n",
-                               label, min_t_ms, med_t_ms, tp_str, scaling, parallel_eff, jitter)
+                Printf.@printf(
+                    log_io,
+                    "  %-10s | %9.3f ms | %9.3f ms | %-12s | %6.2fx  | %8.1f%%   | %6.2f%%\n",
+                    label,
+                    min_t_ms,
+                    med_t_ms,
+                    tp_str,
+                    scaling,
+                    parallel_eff,
+                    jitter
+                )
                 flush(log_io)
 
-                push!(records, BenchmarkRecord(
-                    "CPU", "OpenBLAS", "VendorBLAS", cpu_model, "Float32", N, t, total_ops,
-                    min_t_ms, med_t_ms, mean_t_ms, std_t_ms, jitter, gflops,
-                    scaling, parallel_eff, 1.0, 1.0
-                ))
+                push!(
+                    records,
+                    BenchmarkRecord(
+                        "CPU",
+                        "OpenBLAS",
+                        "VendorBLAS",
+                        cpu_model,
+                        "Float32",
+                        N,
+                        t,
+                        total_ops,
+                        min_t_ms,
+                        med_t_ms,
+                        mean_t_ms,
+                        std_t_ms,
+                        jitter,
+                        gflops,
+                        scaling,
+                        parallel_eff,
+                        1.0,
+                        1.0,
+                    ),
+                )
             end
         end
     finally
@@ -1021,8 +1442,13 @@ end
 Evaluates multi-precision floating-point and integer GEMM throughput on CPU.
 Supports both Vendor BLAS and unified KernelAbstractions.jl native kernels.
 """
-function run_cpu_multitype(config::BenchmarkConfig, log_io::IO, start_time::Float64,
-                           prog::Ref{Int}, total_steps::Int)
+function run_cpu_multitype(
+    config::BenchmarkConfig,
+    log_io::IO,
+    start_time::Float64,
+    prog::Ref{Int},
+    total_steps::Int,
+)
     records = BenchmarkRecord[]
     max_threads = Sys.CPU_THREADS
     original_blas_threads = BLAS.get_num_threads()
@@ -1033,20 +1459,36 @@ function run_cpu_multitype(config::BenchmarkConfig, log_io::IO, start_time::Floa
     max_allowed_ram = free_ram * config.memory_safety_fraction
 
     println(log_io, "\n" * "="^80)
-    println(log_io, "  CPU Multi-Precision & Multi-Type Suite (Engine: $(uppercase(config.compute_engine)))")
+    println(
+        log_io,
+        "  CPU Multi-Precision & Multi-Type Suite (Engine: $(uppercase(config.compute_engine)))",
+    )
     println(log_io, "="^80)
 
     try
         for N in config.problem_sizes
             println(log_io, "\n▶ Problem Size: $(N) x $(N)")
-            Printf.@printf(log_io, "  %-10s | %-12s | %-10s | %-12s | %-12s | %-12s | %-14s | %-10s\n",
-                           "Type", "Engine", "Threads", "Footprint", "Min Time", "Median Time", "Throughput", "Jitter")
+            Printf.@printf(
+                log_io,
+                "  %-10s | %-12s | %-10s | %-12s | %-12s | %-12s | %-14s | %-10s\n",
+                "Type",
+                "Engine",
+                "Threads",
+                "Footprint",
+                "Min Time",
+                "Median Time",
+                "Throughput",
+                "Jitter"
+            )
             println(log_io, "  " * "-"^98)
 
             for T in config.target_types
                 required_bytes = estimate_matrix_bytes(N, T)
                 if required_bytes > max_allowed_ram
-                    println(log_io, "  [!] Skipped $(T): Memory $(format_bytes(required_bytes)) exceeds threshold")
+                    println(
+                        log_io,
+                        "  [!] Skipped $(T): Memory $(format_bytes(required_bytes)) exceeds threshold",
+                    )
                     continue
                 end
 
@@ -1056,7 +1498,12 @@ function run_cpu_multitype(config::BenchmarkConfig, log_io::IO, start_time::Floa
                 if config.compute_engine in ["both", "blas"]
                     for t in [1, max_threads]
                         prog[] += 1
-                        render_progress(prog[], total_steps, start_time, "CPU BLAS $(T) $(N)x$(N) ($(t)T)")
+                        render_progress(
+                            prog[],
+                            total_steps,
+                            start_time,
+                            "CPU BLAS $(T) $(N)x$(N) ($(t)T)",
+                        )
 
                         BLAS.set_num_threads(t)
                         label_t = (t == max_threads) ? "$t (Max)" : "$t"
@@ -1085,23 +1532,57 @@ function run_cpu_multitype(config::BenchmarkConfig, log_io::IO, start_time::Floa
                             med_t_ms = median(times) * 1000.0
                             mean_t_ms = mean(times) * 1000.0
                             std_t_ms = std(times) * 1000.0
-                            jitter = ((maximum(times) - minimum(times)) / minimum(times)) * 100.0
+                            jitter =
+                                ((maximum(times) - minimum(times)) / minimum(times)) * 100.0
                             gflops = total_ops / (minimum(times) * 1e9)
 
                             tp_str = format_throughput(gflops, T)
-                            Printf.@printf(log_io, "  %-10s | %-12s | %-10s | %-12s | %9.3f ms | %9.3f ms | %-14s | %6.2f%%\n",
-                                           string(T), "VendorBLAS", label_t, format_bytes(required_bytes),
-                                           min_t_ms, med_t_ms, tp_str, jitter)
+                            Printf.@printf(
+                                log_io,
+                                "  %-10s | %-12s | %-10s | %-12s | %9.3f ms | %9.3f ms | %-14s | %6.2f%%\n",
+                                string(T),
+                                "VendorBLAS",
+                                label_t,
+                                format_bytes(required_bytes),
+                                min_t_ms,
+                                med_t_ms,
+                                tp_str,
+                                jitter
+                            )
 
-                            push!(records, BenchmarkRecord(
-                                "CPU", "OpenBLAS", "VendorBLAS", cpu_model, string(T), N, t, total_ops,
-                                min_t_ms, med_t_ms, mean_t_ms, std_t_ms, jitter, gflops,
-                                1.0, 100.0, 1.0, 1.0
-                            ))
+                            push!(
+                                records,
+                                BenchmarkRecord(
+                                    "CPU",
+                                    "OpenBLAS",
+                                    "VendorBLAS",
+                                    cpu_model,
+                                    string(T),
+                                    N,
+                                    t,
+                                    total_ops,
+                                    min_t_ms,
+                                    med_t_ms,
+                                    mean_t_ms,
+                                    std_t_ms,
+                                    jitter,
+                                    gflops,
+                                    1.0,
+                                    100.0,
+                                    1.0,
+                                    1.0,
+                                ),
+                            )
                         catch err
-                            Printf.@printf(log_io, "  %-10s | %-12s | %-10s | %-12s | %-40s\n",
-                                           string(T), "VendorBLAS", label_t, format_bytes(required_bytes),
-                                           "UNSUPPORTED / FAILED: $(typeof(err))")
+                            Printf.@printf(
+                                log_io,
+                                "  %-10s | %-12s | %-10s | %-12s | %-40s\n",
+                                string(T),
+                                "VendorBLAS",
+                                label_t,
+                                format_bytes(required_bytes),
+                                "UNSUPPORTED / FAILED: $(typeof(err))"
+                            )
                         end
                         flush(log_io)
                     end
@@ -1110,7 +1591,12 @@ function run_cpu_multitype(config::BenchmarkConfig, log_io::IO, start_time::Floa
                 # 2. KernelAbstractions.jl Native Execution
                 if config.compute_engine in ["both", "ka"]
                     prog[] += 1
-                    render_progress(prog[], total_steps, start_time, "CPU KA $(T) $(N)x$(N)")
+                    render_progress(
+                        prog[],
+                        total_steps,
+                        start_time,
+                        "CPU KA $(T) $(N)x$(N)",
+                    )
 
                     try
                         A = create_matrix(T, N)
@@ -1120,14 +1606,14 @@ function run_cpu_multitype(config::BenchmarkConfig, log_io::IO, start_time::Floa
 
                         ka_kernel! = gemm_accum_kernel!(cpu_backend, (16, 16))
                         # Warmup
-                        ka_kernel!(D, A, B, C, N; ndrange=(N, N))
+                        ka_kernel!(D, A, B, C, N; ndrange = (N, N))
                         KernelAbstractions.synchronize(cpu_backend)
 
                         GC.gc(false)
                         times = Float64[]
                         for _ in 1:config.trials
                             t_run = @elapsed begin
-                                ka_kernel!(D, A, B, C, N; ndrange=(N, N))
+                                ka_kernel!(D, A, B, C, N; ndrange = (N, N))
                                 KernelAbstractions.synchronize(cpu_backend)
                             end
                             push!(times, t_run)
@@ -1137,23 +1623,57 @@ function run_cpu_multitype(config::BenchmarkConfig, log_io::IO, start_time::Floa
                         med_t_ms = median(times) * 1000.0
                         mean_t_ms = mean(times) * 1000.0
                         std_t_ms = std(times) * 1000.0
-                        jitter = ((maximum(times) - minimum(times)) / minimum(times)) * 100.0
+                        jitter =
+                            ((maximum(times) - minimum(times)) / minimum(times)) * 100.0
                         gflops = total_ops / (minimum(times) * 1e9)
 
                         tp_str = format_throughput(gflops, T)
-                        Printf.@printf(log_io, "  %-10s | %-12s | %-10s | %-12s | %9.3f ms | %9.3f ms | %-14s | %6.2f%%\n",
-                                       string(T), "KernelAbstr", "$(Threads.nthreads()) (Pool)", format_bytes(required_bytes),
-                                       min_t_ms, med_t_ms, tp_str, jitter)
+                        Printf.@printf(
+                            log_io,
+                            "  %-10s | %-12s | %-10s | %-12s | %9.3f ms | %9.3f ms | %-14s | %6.2f%%\n",
+                            string(T),
+                            "KernelAbstr",
+                            "$(Threads.nthreads()) (Pool)",
+                            format_bytes(required_bytes),
+                            min_t_ms,
+                            med_t_ms,
+                            tp_str,
+                            jitter
+                        )
 
-                        push!(records, BenchmarkRecord(
-                            "CPU", "KA.CPU", "KernelAbstractions", cpu_model, string(T), N, Threads.nthreads(), total_ops,
-                            min_t_ms, med_t_ms, mean_t_ms, std_t_ms, jitter, gflops,
-                            1.0, 100.0, 1.0, 1.0
-                        ))
+                        push!(
+                            records,
+                            BenchmarkRecord(
+                                "CPU",
+                                "KA.CPU",
+                                "KernelAbstractions",
+                                cpu_model,
+                                string(T),
+                                N,
+                                Threads.nthreads(),
+                                total_ops,
+                                min_t_ms,
+                                med_t_ms,
+                                mean_t_ms,
+                                std_t_ms,
+                                jitter,
+                                gflops,
+                                1.0,
+                                100.0,
+                                1.0,
+                                1.0,
+                            ),
+                        )
                     catch err
-                        Printf.@printf(log_io, "  %-10s | %-12s | %-10s | %-12s | %-40s\n",
-                                       string(T), "KernelAbstr", "Pool", format_bytes(required_bytes),
-                                       "UNSUPPORTED / FAILED: $(typeof(err))")
+                        Printf.@printf(
+                            log_io,
+                            "  %-10s | %-12s | %-10s | %-12s | %-40s\n",
+                            string(T),
+                            "KernelAbstr",
+                            "Pool",
+                            format_bytes(required_bytes),
+                            "UNSUPPORTED / FAILED: $(typeof(err))"
+                        )
                     end
                     flush(log_io)
                 end
@@ -1208,15 +1728,24 @@ end
 Executes GPU benchmarks across matrix sizes and numeric types on any detected GPU backend.
 Evaluates both architecture-agnostic KernelAbstractions.jl kernels and vendor-optimized BLAS libraries.
 """
-function run_gpu_benchmarks(gpu_info::GpuDeviceInfo, config::BenchmarkConfig,
-                            cpu_records::Vector{BenchmarkRecord}, log_io::IO,
-                            start_time::Float64, prog::Ref{Int}, total_steps::Int)
+function run_gpu_benchmarks(
+    gpu_info::GpuDeviceInfo,
+    config::BenchmarkConfig,
+    cpu_records::Vector{BenchmarkRecord},
+    log_io::IO,
+    start_time::Float64,
+    prog::Ref{Int},
+    total_steps::Int,
+)
     records = BenchmarkRecord[]
     max_t = Sys.CPU_THREADS
 
     println(log_io, "\n" * "="^80)
     println(log_io, "  GPU Accelerator Benchmark: $(gpu_info.vendor_label)")
-    println(log_io, "  Target Device: $(gpu_info.device_name) | Abstraction: $(gpu_info.ka_backend_name)")
+    println(
+        log_io,
+        "  Target Device: $(gpu_info.device_name) | Abstraction: $(gpu_info.ka_backend_name)",
+    )
     println(log_io, "="^80)
 
     Base.invokelatest() do
@@ -1225,8 +1754,18 @@ function run_gpu_benchmarks(gpu_info::GpuDeviceInfo, config::BenchmarkConfig,
 
         for N in config.problem_sizes
             println(log_io, "\n▶ Problem Size: $(N) x $(N)")
-            Printf.@printf(log_io, "  %-10s | %-12s | %-12s | %-12s | %-14s | %-10s | %-14s | %-15s\n",
-                           "Type", "Engine", "Min Time", "Median Time", "Throughput", "Jitter", "vs CPU (1T)", "vs CPU (Max T)")
+            Printf.@printf(
+                log_io,
+                "  %-10s | %-12s | %-12s | %-12s | %-14s | %-10s | %-14s | %-15s\n",
+                "Type",
+                "Engine",
+                "Min Time",
+                "Median Time",
+                "Throughput",
+                "Jitter",
+                "vs CPU (1T)",
+                "vs CPU (Max T)"
+            )
             println(log_io, "  " * "-"^104)
 
             for T in config.target_types
@@ -1234,8 +1773,12 @@ function run_gpu_benchmarks(gpu_info::GpuDeviceInfo, config::BenchmarkConfig,
                 matrix_bytes = N * N * sizeof(T)
 
                 if gpu_info.max_alloc_bytes > 0 && matrix_bytes > gpu_info.max_alloc_bytes
-                    Printf.@printf(log_io, "  %-10s | %-90s\n", string(T),
-                                   "EXCEEDS MAX DEVICE ALLOCATION ($(format_bytes(matrix_bytes)) > $(format_bytes(gpu_info.max_alloc_bytes)))")
+                    Printf.@printf(
+                        log_io,
+                        "  %-10s | %-90s\n",
+                        string(T),
+                        "EXCEEDS MAX DEVICE ALLOCATION ($(format_bytes(matrix_bytes)) > $(format_bytes(gpu_info.max_alloc_bytes)))"
+                    )
                     flush(log_io)
                     continue
                 end
@@ -1245,7 +1788,12 @@ function run_gpu_benchmarks(gpu_info::GpuDeviceInfo, config::BenchmarkConfig,
                 # --------------------------------------------------------------
                 if config.compute_engine in ["both", "ka"]
                     prog[] += 1
-                    render_progress(prog[], total_steps, start_time, "$(gpu_info.ka_backend_name) $(T) $(N)x$(N)")
+                    render_progress(
+                        prog[],
+                        total_steps,
+                        start_time,
+                        "$(gpu_info.ka_backend_name) $(T) $(N)x$(N)",
+                    )
 
                     try
                         h_A = create_matrix(T, N)
@@ -1263,13 +1811,13 @@ function run_gpu_benchmarks(gpu_info::GpuDeviceInfo, config::BenchmarkConfig,
 
                         ka_kernel! = gemm_accum_kernel!(ka_backend, (16, 16))
                         # Warmup & compile
-                        ka_kernel!(d_D, d_A, d_B, d_C, N; ndrange=(N, N))
+                        ka_kernel!(d_D, d_A, d_B, d_C, N; ndrange = (N, N))
                         KernelAbstractions.synchronize(ka_backend)
 
                         times = Float64[]
                         for _ in 1:config.trials
                             t_run = @elapsed begin
-                                ka_kernel!(d_D, d_A, d_B, d_C, N; ndrange=(N, N))
+                                ka_kernel!(d_D, d_A, d_B, d_C, N; ndrange = (N, N))
                                 KernelAbstractions.synchronize(ka_backend)
                             end
                             push!(times, t_run)
@@ -1279,34 +1827,91 @@ function run_gpu_benchmarks(gpu_info::GpuDeviceInfo, config::BenchmarkConfig,
                         med_t_ms = median(times) * 1000.0
                         mean_t_ms = mean(times) * 1000.0
                         std_t_ms = std(times) * 1000.0
-                        jitter = ((maximum(times) - minimum(times)) / minimum(times)) * 100.0
+                        jitter =
+                            ((maximum(times) - minimum(times)) / minimum(times)) * 100.0
                         gflops = total_ops / (minimum(times) * 1e9)
 
-                        cpu_1t_rec = filter(r -> r.device_type == "CPU" && r.data_type == string(T) &&
-                                                 r.matrix_dim == N && r.num_threads == 1, cpu_records)
-                        cpu_maxt_rec = filter(r -> r.device_type == "CPU" && r.data_type == string(T) &&
-                                                   r.matrix_dim == N && r.num_threads == max_t, cpu_records)
+                        cpu_1t_rec = filter(
+                            r ->
+                                r.device_type == "CPU" &&
+                                r.data_type == string(T) &&
+                                r.matrix_dim == N &&
+                                r.num_threads == 1,
+                            cpu_records,
+                        )
+                        cpu_maxt_rec = filter(
+                            r ->
+                                r.device_type == "CPU" &&
+                                r.data_type == string(T) &&
+                                r.matrix_dim == N &&
+                                r.num_threads == max_t,
+                            cpu_records,
+                        )
 
-                        speedup_1t = !isempty(cpu_1t_rec) ? (cpu_1t_rec[1].min_time_ms / min_t_ms) : 1.0
-                        speedup_maxt = !isempty(cpu_maxt_rec) ? (cpu_maxt_rec[1].min_time_ms / min_t_ms) : 1.0
-                        speedup_1t_str = !isempty(cpu_1t_rec) ? Printf.@sprintf("%.2fx", speedup_1t) : "N/A"
-                        speedup_maxt_str = !isempty(cpu_maxt_rec) ? Printf.@sprintf("%.2fx", speedup_maxt) : "N/A"
+                        speedup_1t =
+                            !isempty(cpu_1t_rec) ? (cpu_1t_rec[1].min_time_ms / min_t_ms) :
+                            1.0
+                        speedup_maxt =
+                            !isempty(cpu_maxt_rec) ?
+                            (cpu_maxt_rec[1].min_time_ms / min_t_ms) : 1.0
+                        speedup_1t_str =
+                            !isempty(cpu_1t_rec) ? Printf.@sprintf("%.2fx", speedup_1t) :
+                            "N/A"
+                        speedup_maxt_str =
+                            !isempty(cpu_maxt_rec) ?
+                            Printf.@sprintf("%.2fx", speedup_maxt) : "N/A"
 
                         tp_str = format_throughput(gflops, T)
-                        Printf.@printf(log_io, "  %-10s | %-12s | %9.3f ms | %9.3f ms | %-14s | %6.2f%%   | %-14s | %-15s\n",
-                                       string(T), "KernelAbstr", min_t_ms, med_t_ms, tp_str, jitter, speedup_1t_str, speedup_maxt_str)
+                        Printf.@printf(
+                            log_io,
+                            "  %-10s | %-12s | %9.3f ms | %9.3f ms | %-14s | %6.2f%%   | %-14s | %-15s\n",
+                            string(T),
+                            "KernelAbstr",
+                            min_t_ms,
+                            med_t_ms,
+                            tp_str,
+                            jitter,
+                            speedup_1t_str,
+                            speedup_maxt_str
+                        )
 
-                        push!(records, BenchmarkRecord(
-                            "GPU", String(gpu_info.pkg_symbol), "KernelAbstractions", gpu_info.device_name, string(T), N, 0, total_ops,
-                            min_t_ms, med_t_ms, mean_t_ms, std_t_ms, jitter, gflops,
-                            1.0, 100.0, speedup_1t, speedup_maxt
-                        ))
+                        push!(
+                            records,
+                            BenchmarkRecord(
+                                "GPU",
+                                String(gpu_info.pkg_symbol),
+                                "KernelAbstractions",
+                                gpu_info.device_name,
+                                string(T),
+                                N,
+                                0,
+                                total_ops,
+                                min_t_ms,
+                                med_t_ms,
+                                mean_t_ms,
+                                std_t_ms,
+                                jitter,
+                                gflops,
+                                1.0,
+                                100.0,
+                                speedup_1t,
+                                speedup_maxt,
+                            ),
+                        )
 
-                        d_A = nothing; d_B = nothing; d_C = nothing; d_D = nothing
+                        d_A = nothing
+                        d_B = nothing
+                        d_C = nothing
+                        d_D = nothing
                         reclaim_device_memory(mod)
                     catch err
-                        Printf.@printf(log_io, "  %-10s | %-12s | %-76s\n",
-                                       string(T), "KernelAbstr", "UNSUPPORTED ON KA BACKEND: $(typeof(err))")
+                        Printf.@printf(
+                            log_io,
+                            "  %-10s | %-12s | %-76s\n",
+                            string(T),
+                            "KernelAbstr",
+                            "UNSUPPORTED ON KA BACKEND: $(typeof(err))"
+                        )
                     end
                     flush(log_io)
                 end
@@ -1316,7 +1921,12 @@ function run_gpu_benchmarks(gpu_info::GpuDeviceInfo, config::BenchmarkConfig,
                 # --------------------------------------------------------------
                 if config.compute_engine in ["both", "blas"]
                     prog[] += 1
-                    render_progress(prog[], total_steps, start_time, "$(gpu_info.vendor_label) BLAS $(T) $(N)x$(N)")
+                    render_progress(
+                        prog[],
+                        total_steps,
+                        start_time,
+                        "$(gpu_info.vendor_label) BLAS $(T) $(N)x$(N)",
+                    )
 
                     try
                         ArrayType = getfield(mod, gpu_info.array_symbol)
@@ -1348,34 +1958,91 @@ function run_gpu_benchmarks(gpu_info::GpuDeviceInfo, config::BenchmarkConfig,
                         med_t_ms = median(times) * 1000.0
                         mean_t_ms = mean(times) * 1000.0
                         std_t_ms = std(times) * 1000.0
-                        jitter = ((maximum(times) - minimum(times)) / minimum(times)) * 100.0
+                        jitter =
+                            ((maximum(times) - minimum(times)) / minimum(times)) * 100.0
                         gflops = total_ops / (minimum(times) * 1e9)
 
-                        cpu_1t_rec = filter(r -> r.device_type == "CPU" && r.data_type == string(T) &&
-                                                 r.matrix_dim == N && r.num_threads == 1, cpu_records)
-                        cpu_maxt_rec = filter(r -> r.device_type == "CPU" && r.data_type == string(T) &&
-                                                   r.matrix_dim == N && r.num_threads == max_t, cpu_records)
+                        cpu_1t_rec = filter(
+                            r ->
+                                r.device_type == "CPU" &&
+                                r.data_type == string(T) &&
+                                r.matrix_dim == N &&
+                                r.num_threads == 1,
+                            cpu_records,
+                        )
+                        cpu_maxt_rec = filter(
+                            r ->
+                                r.device_type == "CPU" &&
+                                r.data_type == string(T) &&
+                                r.matrix_dim == N &&
+                                r.num_threads == max_t,
+                            cpu_records,
+                        )
 
-                        speedup_1t = !isempty(cpu_1t_rec) ? (cpu_1t_rec[1].min_time_ms / min_t_ms) : 1.0
-                        speedup_maxt = !isempty(cpu_maxt_rec) ? (cpu_maxt_rec[1].min_time_ms / min_t_ms) : 1.0
-                        speedup_1t_str = !isempty(cpu_1t_rec) ? Printf.@sprintf("%.2fx", speedup_1t) : "N/A"
-                        speedup_maxt_str = !isempty(cpu_maxt_rec) ? Printf.@sprintf("%.2fx", speedup_maxt) : "N/A"
+                        speedup_1t =
+                            !isempty(cpu_1t_rec) ? (cpu_1t_rec[1].min_time_ms / min_t_ms) :
+                            1.0
+                        speedup_maxt =
+                            !isempty(cpu_maxt_rec) ?
+                            (cpu_maxt_rec[1].min_time_ms / min_t_ms) : 1.0
+                        speedup_1t_str =
+                            !isempty(cpu_1t_rec) ? Printf.@sprintf("%.2fx", speedup_1t) :
+                            "N/A"
+                        speedup_maxt_str =
+                            !isempty(cpu_maxt_rec) ?
+                            Printf.@sprintf("%.2fx", speedup_maxt) : "N/A"
 
                         tp_str = format_throughput(gflops, T)
-                        Printf.@printf(log_io, "  %-10s | %-12s | %9.3f ms | %9.3f ms | %-14s | %6.2f%%   | %-14s | %-15s\n",
-                                       string(T), "VendorBLAS", min_t_ms, med_t_ms, tp_str, jitter, speedup_1t_str, speedup_maxt_str)
+                        Printf.@printf(
+                            log_io,
+                            "  %-10s | %-12s | %9.3f ms | %9.3f ms | %-14s | %6.2f%%   | %-14s | %-15s\n",
+                            string(T),
+                            "VendorBLAS",
+                            min_t_ms,
+                            med_t_ms,
+                            tp_str,
+                            jitter,
+                            speedup_1t_str,
+                            speedup_maxt_str
+                        )
 
-                        push!(records, BenchmarkRecord(
-                            "GPU", String(gpu_info.pkg_symbol), "VendorBLAS", gpu_info.device_name, string(T), N, 0, total_ops,
-                            min_t_ms, med_t_ms, mean_t_ms, std_t_ms, jitter, gflops,
-                            1.0, 100.0, speedup_1t, speedup_maxt
-                        ))
+                        push!(
+                            records,
+                            BenchmarkRecord(
+                                "GPU",
+                                String(gpu_info.pkg_symbol),
+                                "VendorBLAS",
+                                gpu_info.device_name,
+                                string(T),
+                                N,
+                                0,
+                                total_ops,
+                                min_t_ms,
+                                med_t_ms,
+                                mean_t_ms,
+                                std_t_ms,
+                                jitter,
+                                gflops,
+                                1.0,
+                                100.0,
+                                speedup_1t,
+                                speedup_maxt,
+                            ),
+                        )
 
-                        d_A = nothing; d_B = nothing; d_C = nothing; d_D = nothing
+                        d_A = nothing
+                        d_B = nothing
+                        d_C = nothing
+                        d_D = nothing
                         reclaim_device_memory(mod)
                     catch err
-                        Printf.@printf(log_io, "  %-10s | %-12s | %-76s\n",
-                                       string(T), "VendorBLAS", "UNSUPPORTED ON BACKEND BLAS: $(typeof(err))")
+                        Printf.@printf(
+                            log_io,
+                            "  %-10s | %-12s | %-76s\n",
+                            string(T),
+                            "VendorBLAS",
+                            "UNSUPPORTED ON BACKEND BLAS: $(typeof(err))"
+                        )
                     end
                     flush(log_io)
                 end
@@ -1397,14 +2064,33 @@ Writes benchmark records to a tidy CSV dataset for downstream analysis and plott
 """
 function export_records_to_csv(records::Vector{BenchmarkRecord}, filepath::String)
     open(filepath, "w") do f
-        println(f, "device_type,backend,kernel_engine,device_name,data_type,matrix_dim,num_threads,total_ops,min_time_ms,median_time_ms,mean_time_ms,std_time_ms,jitter_pct,throughput_gflops,speedup_vs_1t,parallel_efficiency_pct,speedup_vs_cpu_1t,speedup_vs_cpu_maxt")
+        println(
+            f,
+            "device_type,backend,kernel_engine,device_name,data_type,matrix_dim,num_threads,total_ops,min_time_ms,median_time_ms,mean_time_ms,std_time_ms,jitter_pct,throughput_gflops,speedup_vs_1t,parallel_efficiency_pct,speedup_vs_cpu_1t,speedup_vs_cpu_maxt",
+        )
         for r in records
-            Printf.@printf(f, "%s,%s,%s,\"%s\",%s,%d,%d,%.1f,%.4f,%.4f,%.4f,%.4f,%.2f,%.4f,%.4f,%.2f,%.4f,%.4f\n",
-                           r.device_type, r.backend, r.kernel_engine, r.device_name, r.data_type,
-                           r.matrix_dim, r.num_threads, r.total_ops,
-                           r.min_time_ms, r.median_time_ms, r.mean_time_ms, r.std_time_ms,
-                           r.jitter_pct, r.throughput_gflops, r.speedup_vs_1t,
-                           r.parallel_efficiency_pct, r.speedup_vs_cpu_1t, r.speedup_vs_cpu_maxt)
+            Printf.@printf(
+                f,
+                "%s,%s,%s,\"%s\",%s,%d,%d,%.1f,%.4f,%.4f,%.4f,%.4f,%.2f,%.4f,%.4f,%.2f,%.4f,%.4f\n",
+                r.device_type,
+                r.backend,
+                r.kernel_engine,
+                r.device_name,
+                r.data_type,
+                r.matrix_dim,
+                r.num_threads,
+                r.total_ops,
+                r.min_time_ms,
+                r.median_time_ms,
+                r.mean_time_ms,
+                r.std_time_ms,
+                r.jitter_pct,
+                r.throughput_gflops,
+                r.speedup_vs_1t,
+                r.parallel_efficiency_pct,
+                r.speedup_vs_cpu_1t,
+                r.speedup_vs_cpu_maxt
+            )
         end
     end
 end
@@ -1414,7 +2100,11 @@ end
 
 Exports platform fingerprint and runtime configuration parameters in structured TOML format.
 """
-function export_metadata_to_toml(config::BenchmarkConfig, gpus::Vector{GpuDeviceInfo}, filepath::String)
+function export_metadata_to_toml(
+    config::BenchmarkConfig,
+    gpus::Vector{GpuDeviceInfo},
+    filepath::String,
+)
     cpu_info = Sys.cpu_info()
     cpu_model = isempty(cpu_info) ? "Unknown" : cpu_info[1].model
 
@@ -1431,7 +2121,7 @@ function export_metadata_to_toml(config::BenchmarkConfig, gpus::Vector{GpuDevice
             "logical_threads" => Sys.CPU_THREADS,
             "system_ram_bytes" => Sys.total_memory(),
             "blas_vendor" => string(BLAS.get_config()),
-            "kernel_abstractions_version" => string(pkgversion(KernelAbstractions))
+            "kernel_abstractions_version" => string(pkgversion(KernelAbstractions)),
         ),
         "configuration" => Dict{String, Any}(
             "mode" => config.mode,
@@ -1442,7 +2132,7 @@ function export_metadata_to_toml(config::BenchmarkConfig, gpus::Vector{GpuDevice
             "run_cpu" => config.run_cpu,
             "run_gpu" => config.run_gpu,
             "gpu_backend" => config.gpu_backend,
-            "memory_safety_fraction" => config.memory_safety_fraction
+            "memory_safety_fraction" => config.memory_safety_fraction,
         ),
         "accelerators" => [
             Dict{String, Any}(
@@ -1454,9 +2144,9 @@ function export_metadata_to_toml(config::BenchmarkConfig, gpus::Vector{GpuDevice
                 "core_clock_mhz" => g.core_clock_mhz,
                 "total_memory_bytes" => g.total_memory_bytes,
                 "ka_backend" => g.ka_backend_name,
-                "extra_attributes" => g.extra_attributes
+                "extra_attributes" => g.extra_attributes,
             ) for g in gpus
-        ]
+        ],
     )
 
     open(filepath, "w") do f
@@ -1474,7 +2164,7 @@ end
 Top-level orchestration function executing hardware discovery, multi-stage benchmarks,
 progress visualization, and result serialization.
 """
-function main(args::Vector{String}=ARGS)
+function main(args::Vector{String} = ARGS)
     base_dir = @__DIR__
     config = parse_cli_args(args, base_dir)
 
@@ -1519,16 +2209,28 @@ function main(args::Vector{String}=ARGS)
         p2_threads = [2^i for i in 0:floor(Int, log2(max_threads))]
         num_thread_steps = length(unique(sort(vcat(p2_threads, max_threads))))
 
-        cpu_scaling_steps = config.run_cpu ? (length(config.problem_sizes) * num_thread_steps) : 0
-        
+        cpu_scaling_steps =
+            config.run_cpu ? (length(config.problem_sizes) * num_thread_steps) : 0
+
         # CPU multitype steps (BLAS: 2 thread counts per type; KA: 1 step per type)
-        blas_cpu_steps = config.compute_engine in ["both", "blas"] ? (length(config.problem_sizes) * length(config.target_types) * 2) : 0
-        ka_cpu_steps = config.compute_engine in ["both", "ka"] ? (length(config.problem_sizes) * length(config.target_types)) : 0
+        blas_cpu_steps =
+            config.compute_engine in ["both", "blas"] ?
+            (length(config.problem_sizes) * length(config.target_types) * 2) : 0
+        ka_cpu_steps =
+            config.compute_engine in ["both", "ka"] ?
+            (length(config.problem_sizes) * length(config.target_types)) : 0
         cpu_multitype_steps = config.run_cpu ? (blas_cpu_steps + ka_cpu_steps) : 0
 
         # GPU steps (KA + BLAS per functional GPU)
         gpu_engine_factor = (config.compute_engine == "both") ? 2 : 1
-        gpu_steps = config.run_gpu ? (length(functional_gpus) * length(config.problem_sizes) * length(config.target_types) * gpu_engine_factor) : 0
+        gpu_steps =
+            config.run_gpu ?
+            (
+                length(functional_gpus) *
+                length(config.problem_sizes) *
+                length(config.target_types) *
+                gpu_engine_factor
+            ) : 0
 
         total_steps = cpu_scaling_steps + cpu_multitype_steps + gpu_steps
         prog_counter = Ref(0)
@@ -1536,8 +2238,12 @@ function main(args::Vector{String}=ARGS)
         # Step 4: Run Benchmark Stages
         println("\n" * "="^80)
         println("  Executing Benchmark Suite")
-        println("  Mode: $(uppercase(config.mode)) | Engine: $(uppercase(config.compute_engine)) | Backend: $(uppercase(config.gpu_backend))")
-        println("  Problem Sizes: $(config.problem_sizes) | Measurement Trials: $(config.trials)")
+        println(
+            "  Mode: $(uppercase(config.mode)) | Engine: $(uppercase(config.compute_engine)) | Backend: $(uppercase(config.gpu_backend))",
+        )
+        println(
+            "  Problem Sizes: $(config.problem_sizes) | Measurement Trials: $(config.trials)",
+        )
         if config.log_to_file
             println("  Output Log File: $log_filename")
         end
@@ -1547,16 +2253,31 @@ function main(args::Vector{String}=ARGS)
         all_records = BenchmarkRecord[]
 
         if config.run_cpu
-            cpu_scale_records = run_cpu_thread_scaling(config, log_io, wall_start, prog_counter, total_steps)
+            cpu_scale_records = run_cpu_thread_scaling(
+                config,
+                log_io,
+                wall_start,
+                prog_counter,
+                total_steps,
+            )
             append!(all_records, cpu_scale_records)
 
-            cpu_multi_records = run_cpu_multitype(config, log_io, wall_start, prog_counter, total_steps)
+            cpu_multi_records =
+                run_cpu_multitype(config, log_io, wall_start, prog_counter, total_steps)
             append!(all_records, cpu_multi_records)
         end
 
         if config.run_gpu
             for gpu in functional_gpus
-                gpu_records = run_gpu_benchmarks(gpu, config, all_records, log_io, wall_start, prog_counter, total_steps)
+                gpu_records = run_gpu_benchmarks(
+                    gpu,
+                    config,
+                    all_records,
+                    log_io,
+                    wall_start,
+                    prog_counter,
+                    total_steps,
+                )
                 append!(all_records, gpu_records)
             end
         end
@@ -1578,7 +2299,13 @@ function main(args::Vector{String}=ARGS)
 
         # Step 6: Console Summary
         println("\n✓ Benchmarking Suite Completed Successfully!")
-        println("  • Total Elapsed Time : ", format_seconds(wall_elapsed), " (", Printf.@sprintf("%.2f s", wall_elapsed), ")")
+        println(
+            "  • Total Elapsed Time : ",
+            format_seconds(wall_elapsed),
+            " (",
+            Printf.@sprintf("%.2f s", wall_elapsed),
+            ")",
+        )
         if config.log_to_file
             println("  • Diagnostic Report  : ", abspath(log_filename))
         end

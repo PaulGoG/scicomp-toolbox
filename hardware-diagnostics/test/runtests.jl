@@ -12,7 +12,6 @@ using KernelAbstractions
 include(joinpath(@__DIR__, "..", "hardware-diag.jl"))
 
 @testset "Hardware Diagnostics & Benchmark Suite" begin
-
     @testset "Formatting Utilities" begin
         # IEC Byte conversions
         @test format_bytes(0) == "0.00 B"
@@ -47,17 +46,15 @@ include(joinpath(@__DIR__, "..", "hardware-diag.jl"))
                 "target_types" => ["Float32", "Float64"],
                 "run_cpu" => true,
                 "run_gpu" => false,
-                "gpu_backend" => "auto"
+                "gpu_backend" => "auto",
             ),
-            "safety" => Dict{String, Any}(
-                "memory_safety_fraction" => 0.75
-            ),
+            "safety" => Dict{String, Any}("memory_safety_fraction" => 0.75),
             "output" => Dict{String, Any}(
                 "export_csv" => true,
                 "export_metadata" => true,
                 "output_directory" => ".",
-                "log_to_file" => false
-            )
+                "log_to_file" => false,
+            ),
         )
 
         cfg = validate_config(valid_dict)
@@ -149,11 +146,11 @@ include(joinpath(@__DIR__, "..", "hardware-diag.jl"))
         D_f32 = similar(A_f32)
 
         k_f32! = gemm_accum_kernel!(cpu_b, (16, 16))
-        k_f32!(D_f32, A_f32, B_f32, C_f32, N; ndrange=(N, N))
+        k_f32!(D_f32, A_f32, B_f32, C_f32, N; ndrange = (N, N))
         KernelAbstractions.synchronize(cpu_b)
 
         expected_f32 = A_f32 * (B_f32 + C_f32)
-        @test isapprox(D_f32, expected_f32; rtol=1e-5, atol=1e-5)
+        @test isapprox(D_f32, expected_f32; rtol = 1e-5, atol = 1e-5)
 
         # 2. Float64 test
         A_f64 = create_matrix(Float64, N)
@@ -162,11 +159,11 @@ include(joinpath(@__DIR__, "..", "hardware-diag.jl"))
         D_f64 = similar(A_f64)
 
         k_f64! = gemm_accum_kernel!(cpu_b, (16, 16))
-        k_f64!(D_f64, A_f64, B_f64, C_f64, N; ndrange=(N, N))
+        k_f64!(D_f64, A_f64, B_f64, C_f64, N; ndrange = (N, N))
         KernelAbstractions.synchronize(cpu_b)
 
         expected_f64 = A_f64 * (B_f64 + C_f64)
-        @test isapprox(D_f64, expected_f64; rtol=1e-12, atol=1e-12)
+        @test isapprox(D_f64, expected_f64; rtol = 1e-12, atol = 1e-12)
 
         # 3. Integer test
         A_i32 = create_matrix(Int32, N)
@@ -175,7 +172,7 @@ include(joinpath(@__DIR__, "..", "hardware-diag.jl"))
         D_i32 = similar(A_i32)
 
         k_i32! = gemm_accum_kernel!(cpu_b, (16, 16))
-        k_i32!(D_i32, A_i32, B_i32, C_i32, N; ndrange=(N, N))
+        k_i32!(D_i32, A_i32, B_i32, C_i32, N; ndrange = (N, N))
         KernelAbstractions.synchronize(cpu_b)
 
         expected_i32 = A_i32 * (B_i32 + C_i32)
@@ -200,8 +197,24 @@ include(joinpath(@__DIR__, "..", "hardware-diag.jl"))
         mktempdir() do tmp_dir
             # Test record export
             rec = BenchmarkRecord(
-                "CPU", "OpenBLAS", "VendorBLAS", "Mock CPU", "Float32", 512, 4,
-                536870912.0, 4.5, 4.6, 4.65, 0.1, 2.5, 119.3, 1.0, 100.0, 1.0, 1.0
+                "CPU",
+                "OpenBLAS",
+                "VendorBLAS",
+                "Mock CPU",
+                "Float32",
+                512,
+                4,
+                536870912.0,
+                4.5,
+                4.6,
+                4.65,
+                0.1,
+                2.5,
+                119.3,
+                1.0,
+                100.0,
+                1.0,
+                1.0,
             )
             csv_path = joinpath(tmp_dir, "test_output.csv")
             export_records_to_csv([rec], csv_path)
@@ -228,5 +241,4 @@ include(joinpath(@__DIR__, "..", "hardware-diag.jl"))
             @test f2 == joinpath(tmp_dir, "test_file#1.log")
         end
     end
-
 end

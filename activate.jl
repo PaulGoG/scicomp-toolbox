@@ -10,14 +10,14 @@ using Pkg
 
 Silently activates and optionally instantiates an isolated sub-environment within this repository.
 """
-function activate_subenvironment(subdir::String; instantiate::Bool=true)
+function activate_subenvironment(subdir::String; instantiate::Bool = true)
     env_path = joinpath(@__DIR__, subdir)
     if !isdir(env_path) || !isfile(joinpath(env_path, "Project.toml"))
         error("Sub-environment directory not found or missing Project.toml: $subdir")
     end
-    Pkg.activate(env_path; io=devnull)
+    Pkg.activate(env_path; io = devnull)
     if instantiate
-        Pkg.instantiate(; io=devnull)
+        Pkg.instantiate(; io = devnull)
     end
     return nothing
 end
