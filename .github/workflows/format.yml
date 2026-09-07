@@ -7,34 +7,25 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 
 jobs:
   format:
-    name: JuliaFormatter Check
+    name: JuliaFormatter check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Set up Julia
-        uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
         with:
           version: '1'
-
-      - name: Run JuliaFormatter
-        run: |
-          julia -e '
-            using Pkg
-            Pkg.add("JuliaFormatter")
-            using JuliaFormatter
-            is_formatted = format(".", overwrite=false)
-            if !is_formatted
-                println("Code formatting check failed. Run JuliaFormatter.format(\".\") locally.")
-                exit(1)
-            else
-                println("Code formatting check passed.")
-            end
-          '
+      - uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
+      - name: Format with the pinned formatter environment
+        run: julia --color=yes --project=formatter -e 'using Pkg; Pkg.instantiate(); using JuliaFormatter; format(".")'
+      - name: Fail on differences
+        run: git diff --exit-code

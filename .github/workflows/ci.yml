@@ -7,47 +7,40 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 
 jobs:
   test:
     name: Julia ${{ matrix.version }} - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      actions: write # julia-actions/cache prunes the caches it created
+      contents: read
     strategy:
       fail-fast: false
       matrix:
-        version: ['1.12']
+        # current stable; the floor is the declared [compat] julia = "1.12"
+        version: ['1']
         os: [ubuntu-latest]
-
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Set up Julia
-        uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32 # v3.0.2
         with:
           version: ${{ matrix.version }}
-
-      - name: Cache Julia Artifacts
-        uses: julia-actions/cache@v2
-
-      - name: Instantiate Sub-Environments
-        run: |
-          julia --project=hardware-diagnostics -e '
-            using Pkg
-            Pkg.instantiate()
-          '
-
-      - name: Run Global Test Suite
-        run: |
-          julia test.jl
-
-      - name: Run Standalone Sysinfo Smoke Test
-        run: |
-          julia standalone/sysinfo.jl
-
-      - name: Run Executable Smoke Test via Dispatcher
-        run: |
-          julia run.jl hardware-diagnostics --quick --cpu-only --no-log
+      - uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
+      - name: Test suites of every sub-environment
+        run: julia --color=yes test.jl
+      - name: Standalone script smoke test
+        run: julia --color=yes run.jl sysinfo
+      - name: Dispatcher smoke test (CPU only, reduced sampling)
+        run: >
+          julia --color=yes run.jl hardware-diagnostics
+          --cpu-only --sizes 256 --types Float32,Int32
+          --min-time 0.05 --max-samples 3 --no-log
+          --out-dir "$RUNNER_TEMP/hardware-diagnostics"
