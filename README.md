@@ -1,7 +1,7 @@
-# Scientific Computing Tooling Repository
+# scicomp-toolbox
 
-[![CI](https://github.com/PaulGoG/scripts/actions/workflows/ci.yml/badge.svg)](https://github.com/PaulGoG/scripts/actions/workflows/ci.yml)
-[![Format](https://github.com/PaulGoG/scripts/actions/workflows/format.yml/badge.svg)](https://github.com/PaulGoG/scripts/actions/workflows/format.yml)
+[![CI](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/ci.yml/badge.svg)](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/ci.yml)
+[![Format](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/format.yml/badge.svg)](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/format.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A unified multi-environment repository for standalone diagnostics, computational benchmarks, data conversion utilities, and HPC cluster orchestration scripts in pure Julia.
@@ -9,7 +9,7 @@ A unified multi-environment repository for standalone diagnostics, computational
 ## Repository Structure
 
 ```
-scripts/
+scicomp-toolbox/
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml                  # Automated multi-version CI test matrix
