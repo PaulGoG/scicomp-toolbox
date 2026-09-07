@@ -21,8 +21,11 @@ export format_bytes, format_seconds, format_throughput
 include("Kernels.jl")
 using .Kernels
 export dual_gemm_kernel!,
+    dual_gemm_tiled_kernel!,
     launch_dual_gemm!,
+    launch_dual_gemm_tiled!,
     dual_gemm_blas!,
+    evaluate_engine!,
     nominal_ops,
     footprint_bytes,
     create_matrix,

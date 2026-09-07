@@ -6,7 +6,7 @@ module Config
 
 using TOML: TOML
 using ..Backends: BACKEND_NAMES
-using ..Kernels: integer_accumulation_bound, integer_range_safe
+using ..Kernels: ENGINES, integer_accumulation_bound, integer_range_safe
 using ..Sampling: SamplingPolicy
 
 export BenchmarkConfig,
@@ -38,12 +38,12 @@ const PRESET_SIZES = Dict{String, Vector{Int}}(
     "stress" => [1024, 2048, 4096],
 )
 
-const COMPUTE_ENGINES = ("both", "ka", "blas")
+const ENGINE_NAMES = string.(ENGINES)
 const SWEEP_CEILINGS = ("physical", "logical")
 
 const KNOWN_KEYS = Dict{String, Vector{String}}(
     "" => ["benchmark", "sampling", "hardware", "safety", "output"],
-    "benchmark" => ["compute_engine", "problem_sizes", "target_types", "seed"],
+    "benchmark" => ["engines", "problem_sizes", "target_types", "seed"],
     "sampling" =>
         ["min_sampling_time_s", "min_samples", "max_samples", "max_point_seconds"],
     "hardware" => [
@@ -71,7 +71,7 @@ Validated run configuration. `preset` records how the problem sizes were chosen
 """
 struct BenchmarkConfig
     preset::String
-    compute_engine::Symbol
+    engines::Vector{Symbol}
     problem_sizes::Vector{Int}
     target_types::Vector{DataType}
     seed::Int
@@ -199,6 +199,23 @@ function parse_problem_sizes(table::AbstractDict)
     return sizes
 end
 
+function parse_engines(table::AbstractDict)
+    raw = get(table, "engines", collect(ENGINE_NAMES))
+    (raw isa AbstractVector && !isempty(raw)) ||
+        throw(ArgumentError("[benchmark].engines must be a non-empty list of engine names"))
+    engines = Symbol[]
+    for value in raw
+        (value isa AbstractString && lowercase(strip(value)) in ENGINE_NAMES) || throw(
+            ArgumentError(
+                "[benchmark].engines entry $(repr(value)) is not one of: $(join(ENGINE_NAMES, " | "))",
+            ),
+        )
+        engine = Symbol(lowercase(strip(value)))
+        engine in engines || push!(engines, engine)
+    end
+    return engines
+end
+
 function parse_target_types(table::AbstractDict)
     raw = get(table, "target_types", DEFAULT_TYPES)
     (raw isa AbstractVector && !isempty(raw)) || throw(
@@ -230,9 +247,7 @@ function validate_config(raw::AbstractDict; preset::String = "config")
     safety = section(raw, "safety")
     output = section(raw, "output")
 
-    compute_engine = Symbol(
-        get_choice(benchmark, "compute_engine", "both", "benchmark", COMPUTE_ENGINES),
-    )
+    engines = parse_engines(benchmark)
     problem_sizes = parse_problem_sizes(benchmark)
     target_types = parse_target_types(benchmark)
     seed = get_integer(benchmark, "seed", 20260907, "benchmark"; low = 0)
@@ -310,7 +325,7 @@ function validate_config(raw::AbstractDict; preset::String = "config")
 
     return BenchmarkConfig(
         preset,
-        compute_engine,
+        engines,
         problem_sizes,
         target_types,
         seed,
@@ -353,8 +368,8 @@ function usage_text()
           --sizes N1,N2,...     explicit dimensions
 
     Engines and types:
-      -e, --engine E            both | ka | blas
-          --ka-only             KernelAbstractions kernel only
+          --engines E1,E2,...   subset of blas | ka | ka_tiled (default: all three)
+          --ka-only             KernelAbstractions kernels only (ka, ka_tiled)
           --blas-only           LinearAlgebra.mul! (vendor library) only
           --types T1,T2,...     Float16 Float32 Float64 ComplexF32 ComplexF64 Int8 Int16 Int32 Int64
 
@@ -429,12 +444,12 @@ function parse_cli_args(args::AbstractVector{<:AbstractString}, base_dir::Abstra
             tables["benchmark"]["problem_sizes"] =
                 parse.(Int, parse_list(value_of(argument)))
             preset = "custom"
-        elseif argument in ("-e", "--engine")
-            tables["benchmark"]["compute_engine"] = value_of(argument)
+        elseif argument == "--engines"
+            tables["benchmark"]["engines"] = parse_list(value_of(argument))
         elseif argument == "--ka-only"
-            tables["benchmark"]["compute_engine"] = "ka"
+            tables["benchmark"]["engines"] = ["ka", "ka_tiled"]
         elseif argument == "--blas-only"
-            tables["benchmark"]["compute_engine"] = "blas"
+            tables["benchmark"]["engines"] = ["blas"]
         elseif argument == "--types"
             tables["benchmark"]["target_types"] = parse_list(value_of(argument))
         elseif argument == "--seed"

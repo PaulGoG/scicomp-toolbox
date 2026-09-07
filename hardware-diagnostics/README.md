@@ -1,12 +1,13 @@
 # hardware-diagnostics
 
 Host and accelerator introspection with a dual-GEMM throughput benchmark. One operation,
-D = A·B + A·C on dense N × N operands, is executed through two engines on every
-available device: a portable KernelAbstractions kernel and `LinearAlgebra.mul!`, which
-reaches the BLAS-class library of the device (OpenBLAS or MKL on the host; oneMKL,
-cuBLAS, rocBLAS or Metal Performance Shaders on accelerators). The package
-`HardwareDiagnostics` implements the tool; GPU backends attach through package
-extensions.
+D = A·B + A·C on dense N × N operands, is executed through three engines on every
+available device: `LinearAlgebra.mul!`, which reaches the BLAS-class library of the
+device (OpenBLAS or MKL on the host; oneMKL, cuBLAS, rocBLAS or Metal Performance Shaders
+on accelerators), a naive KernelAbstractions kernel, and a tiled KernelAbstractions
+kernel with local-memory staging. The package `HardwareDiagnostics` implements the tool;
+GPU backends attach through package extensions. Figures are produced by the
+`plot-benchmarks` tool.
 
 ```
 hardware-diagnostics/
@@ -25,7 +26,7 @@ hardware-diagnostics/
 │   ├── HardwareDiagnostics.jl         # module, exports
 │   ├── Backends.jl                    # backend registry, accelerator loading and labels
 │   ├── Formatting.jl                  # bytes, durations, throughputs
-│   ├── Kernels.jl                     # the operation on both engines, operands, verification
+│   ├── Kernels.jl                     # the operation on every engine, operands, verification
 │   ├── Sampling.jl                    # time-budgeted sampling, min/median/MAD
 │   ├── Config.jl                      # TOML schema, constraints, command line
 │   ├── Host.jl                        # CPU topology, thread sweep, host report
@@ -40,20 +41,23 @@ hardware-diagnostics/
 
 ## Measurement
 
-**Operation and operation count.** Both engines perform the same arithmetic: two
-accumulating products, `D = A·B` then `D += A·C`. The kernel accumulates
-`A[i,k]·B[k,j]` and `A[i,k]·C[k,j]` separately in its inner loop; the library path
-issues two `mul!` calls. Every point is credited with the nominal count 4N³ (16N³ for
-complex element types), so the throughput ratio between engines compares equal work.
-The kernel is a plain triple loop without tiling or local memory, so its ratio to the
-vendor library measures the gap between a portable naive kernel and a tuned library,
-not compiler quality.
+**Operation and operation count.** All engines perform the same arithmetic: two
+accumulating products, `D = A·B` then `D += A·C`. The library path issues two `mul!`
+calls; both kernels accumulate `A[i,k]·B[k,j]` and `A[i,k]·C[k,j]` separately in their
+inner loop. Every point is credited with the nominal count 4N³ (16N³ for complex element
+types), so throughput ratios between engines compare equal work. The naive kernel (`ka`)
+is a plain triple loop reading global memory; the tiled kernel (`ka_tiled`) lets each
+16 × 16 work-group stage 16 × 16 tiles of A, B and C in local memory and accumulate tile
+by tile, with zero padding for dimensions that are not multiples of 16. The ratio of
+either kernel to the vendor library measures the gap between a portable kernel of that
+algorithmic class and a tuned library, not compiler quality.
 
-**Verification.** Before benchmarking, both engines run on the same operands of size
-`verification_size` for every element type on every device, and the results are
-compared: relative deviation at most 8·√eps(T) for floating-point types, exact equality
-for integers. A deviation above tolerance aborts the run. Element types the library
-cannot multiply on a device are reported as unverifiable and fail as individual points.
+**Verification.** Before benchmarking, every configured kernel engine and the `mul!`
+reference run on the same operands of size `verification_size` for every element type on
+every device, and each kernel result is compared with the reference: relative deviation
+at most 8·√eps(T) for floating-point types, exact equality for integers. A deviation
+above tolerance aborts the run. Element types the library cannot multiply on a device are
+reported as unverifiable and fail as individual points.
 
 **Sampling.** Each point is evaluated once for compilation and first touch, then
 repeatedly until at least `min_samples` evaluations have consumed `min_sampling_time_s`
@@ -82,10 +86,10 @@ points through `mul!` run on the generic fallback of LinearAlgebra (host) or GPU
    Speedup S(t) = t₁/t_t and parallel efficiency E(t) = S(t)/t refer to the one-thread
    point of the same size.
 2. *CPU element types*: every configured type, the library engine at one thread and at
-   the sweep ceiling, the kernel engine on the Julia thread pool. The pool size is fixed
+   the sweep ceiling, the kernel engines on the Julia thread pool. The pool size is fixed
    at process start (`julia run.jl --threads N ...`) and recorded in `julia_threads`.
-3. *Accelerators*: every functional device, both engines, with speedups against the CPU
-   library points at one thread and at the sweep ceiling.
+3. *Accelerators*: every functional device, every configured engine, with speedups
+   against the CPU library points at one thread and at the sweep ceiling.
 
 ## Accelerator backends
 
@@ -118,7 +122,7 @@ julia run.jl hardware-diagnostics --help
 julia run.jl hardware-diagnostics                              # sizes of config.toml, all engines, auto backend
 julia run.jl hardware-diagnostics --quick --cpu-only           # N = 512, 1024 on the host
 julia run.jl hardware-diagnostics --stress --gpu-backend oneapi
-julia run.jl hardware-diagnostics --sizes 512,1024,2048 --types Float32,Float64 --engine ka
+julia run.jl hardware-diagnostics --sizes 512,1024,2048 --types Float32,Float64 --engines ka,ka_tiled
 julia run.jl hardware-diagnostics --threads-ceiling logical    # expose hyper-thread oversubscription
 julia run.jl hardware-diagnostics --min-time 2 --max-samples 100 --seed 1
 julia run.jl hardware-diagnostics --config other.toml --out-dir /scratch/runs --no-hostname
@@ -136,7 +140,7 @@ the command-line options apply on top. Unknown keys are rejected.
 
 ```toml
 [benchmark]
-compute_engine = "both"  # one of: "both" | "ka" | "blas"
+engines = ["blas", "ka", "ka_tiled"]  # non-empty subset of: "blas" | "ka" | "ka_tiled"
 problem_sizes = [1024, 2048]  # positive integers, N of the N × N operands; CLI presets replace this list
 target_types = ["Float16", "Float32", "Float64", "Int32", "Int64"]  # subset of: Float16 | Float32 | Float64 | ComplexF32 | ComplexF64 | Int8 | Int16 | Int32 | Int64
 seed = 20260907  # integer >= 0; seeds the operand generator
@@ -177,8 +181,11 @@ directory; an existing file is never overwritten (`#1`, `#2`, ... suffixes).
   exceeds_physical_cores, nominal_ops, samples, min_time_ms, median_time_ms,
   mad_time_ms, dispersion_pct, throughput_gops, throughput_median_gops, speedup_vs_1t,
   parallel_efficiency_pct, speedup_vs_cpu_1t, speedup_vs_cpu_maxt, status`. Undefined
-  quantities and inapplicable thread counts are empty cells; `status` is `ok`,
-  `skipped: <reason>` or `failed: <error>`.
+  quantities and inapplicable thread counts are empty cells; `engine` is `blas`, `ka`
+  or `ka_tiled`; `library` names what executed the point (the BLAS library and its
+  integer interface, `LinearAlgebra generic`, `GPUArrays generic`, `KernelAbstractions
+  naive` or `KernelAbstractions tiled`); `status` is `ok`, `skipped: <reason>` or
+  `failed: <error>`.
 - `.toml`: provenance sidecar with the host fingerprint (CPU model, physical and logical
   counts, thread pools, BLAS library, memory, ISA flags, Julia and KernelAbstractions
   versions, toolbox commit), the effective configuration and the accelerator inventory
@@ -191,7 +198,8 @@ julia test.jl hardware-diagnostics
 julia --project=hardware-diagnostics -e 'using Pkg; Pkg.test()'
 ```
 
-The suite runs Aqua, ExplicitImports and JET on the package, then unit tests of the
-kernels (against `A*B + A*C`), the sampling rule, the configuration constraints, the
-command line, the host topology, the backend registry, the three stages at N = 32 and an
-end-to-end run into a temporary directory.
+The suite runs Aqua, ExplicitImports and JET on the package, then unit tests of both
+kernels (against `A*B + A*C`, including sizes that are not multiples of the tile), the
+sampling rule, the configuration constraints, the command line, the host topology, the
+backend registry, the three stages at N = 32 and an end-to-end run into a temporary
+directory.

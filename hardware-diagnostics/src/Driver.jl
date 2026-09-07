@@ -11,7 +11,6 @@ using Random: Xoshiro
 using ..Backends: backend_label, discover_accelerators
 using ..Benchmark:
     BenchmarkRecord,
-    engines_of,
     plan_total_steps,
     run_accelerator_benchmarks,
     run_cpu_multitype,
@@ -21,7 +20,7 @@ using ..Export:
     export_metadata_to_toml, export_records_to_csv, repository_commit, safe_filepath
 using ..Formatting: format_bytes, format_seconds
 using ..Host: host_info, print_host_report
-using ..Kernels: verify_engines
+using ..Kernels: KERNEL_ENGINES, verify_engines
 using ..Reporting: Reporter, emit, finish!
 
 export configure, run_diagnostics, print_accelerator_report, run_verification
@@ -99,9 +98,10 @@ first_line(text::AbstractString) = String(first(split(text, '\n')))
 """
     run_verification(config, backends, rng, reporter)
 
-Compare both engines on every backend and element type at `verification_size`. Element
-types the library cannot multiply on a backend are reported as unverifiable; a
-deviation above tolerance aborts the run with an error.
+Compare every configured kernel engine with the `mul!` reference on every backend and
+element type at `verification_size`. Element types the library cannot multiply on a
+backend are reported as unverifiable; a deviation above tolerance aborts the run with
+an error.
 """
 function run_verification(
     config::BenchmarkConfig,
@@ -109,11 +109,19 @@ function run_verification(
     rng::Xoshiro,
     reporter::Reporter,
 )
+    engines = filter(in(KERNEL_ENGINES), config.engines)
     emit(reporter, "")
-    emit(reporter, "Cross-engine verification (N = $(config.verification_size))")
+    emit(
+        reporter,
+        "Cross-engine verification (N = $(config.verification_size), reference: mul!)",
+    )
+    if isempty(engines)
+        emit(reporter, "  no kernel engine configured")
+        return nothing
+    end
     for backend in backends, T in config.target_types
-        result = try
-            verify_engines(backend, T, config.verification_size, rng)
+        results = try
+            verify_engines(backend, T, config.verification_size, rng; engines)
         catch err
             err isa InterruptException && rethrow()
             emit(
@@ -127,22 +135,25 @@ function run_verification(
             )
             continue
         end
-        emit(
-            reporter,
-            @sprintf(
-                "  %-8s %-10s max relative deviation %.3e (tolerance %.3e) %s",
-                backend_label(backend),
-                string(T),
-                result.max_relative_deviation,
-                result.tolerance,
-                result.passed ? "passed" : "FAILED"
+        for result in results
+            emit(
+                reporter,
+                @sprintf(
+                    "  %-8s %-10s %-9s max relative deviation %.3e (tolerance %.3e) %s",
+                    backend_label(backend),
+                    string(T),
+                    result.engine,
+                    result.max_relative_deviation,
+                    result.tolerance,
+                    result.passed ? "passed" : "FAILED"
+                )
             )
-        )
-        result.passed || begin
-            finish!(reporter)
-            error(
-                "cross-engine verification failed for $T on $(backend_label(backend)): deviation $(result.max_relative_deviation) exceeds tolerance $(result.tolerance)",
-            )
+            result.passed || begin
+                finish!(reporter)
+                error(
+                    "cross-engine verification failed for $T with $(result.engine) on $(backend_label(backend)): deviation $(result.max_relative_deviation) exceeds tolerance $(result.tolerance)",
+                )
+            end
         end
     end
     return nothing
@@ -205,10 +216,7 @@ function run_diagnostics(
             reporter,
             "  Element types         : $(join(string.(config.target_types), ", "))",
         )
-        emit(
-            reporter,
-            "  Engines               : $(join(engines_of(config.compute_engine), ", "))",
-        )
+        emit(reporter, "  Engines               : $(join(config.engines, ", "))")
         emit(
             reporter,
             @sprintf(

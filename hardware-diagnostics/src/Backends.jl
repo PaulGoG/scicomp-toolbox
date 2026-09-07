@@ -229,7 +229,8 @@ function library_label(
     backend::KernelAbstractions.Backend,
     ::Type{T},
 ) where {T}
-    engine === :ka && return "KernelAbstractions"
+    engine === :ka && return "KernelAbstractions naive"
+    engine === :ka_tiled && return "KernelAbstractions tiled"
     T in BLAS_ELEMENT_TYPES && return vendor_blas_label(backend)
     return backend isa CPU ? "LinearAlgebra generic" : "GPUArrays generic"
 end

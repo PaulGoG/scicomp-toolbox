@@ -15,7 +15,7 @@ const TOOL_DIR = normpath(joinpath(@__DIR__, ".."))
 function base_config_dict()
     return Dict{String, Any}(
         "benchmark" => Dict{String, Any}(
-            "compute_engine" => "both",
+            "engines" => ["blas", "ka", "ka_tiled"],
             "problem_sizes" => [32],
             "target_types" => ["Float32", "Int32"],
             "seed" => 7,
@@ -104,7 +104,7 @@ end
         # GPU package is loaded (the backend packages define it), so JET reports the GPU
         # branch of the `Kernel{<:Backend}` union split in `launch_dual_gemm!` as a missing
         # method. That branch is unreachable without a loaded backend and is the one
-        # accepted artifact.
+        # accepted artifact per kernel engine.
         reports = filter(JET.get_reports(report)) do r
             !(
                 r isa JET.MethodErrorReport &&
@@ -113,7 +113,7 @@ end
         end
         isempty(reports) || show(stdout, MIME"text/plain"(), report)
         @test isempty(reports)
-        @test length(JET.get_reports(report)) <= 1
+        @test length(JET.get_reports(report)) <= length(HD.Kernels.KERNEL_ENGINES)
     end
 
     @testset "Formatting" begin
@@ -155,20 +155,42 @@ end
             A, B, C = (create_matrix(rng, T, N) for _ in 1:3)
             reference = A * B + A * C
             @test isapprox(launch_dual_gemm!(cpu, similar(A), A, B, C), reference; rtol)
+            @test isapprox(
+                launch_dual_gemm_tiled!(cpu, similar(A), A, B, C),
+                reference;
+                rtol,
+            )
             @test isapprox(dual_gemm_blas!(cpu, similar(A), A, B, C), reference; rtol)
         end
-        for (T, N) in ((Int32, 64), (Int64, 40))
+        for (T, N) in ((Int32, 64), (Int64, 40), (Int32, 17), (Int64, 100))
             A, B, C = (create_matrix(rng, T, N) for _ in 1:3)
             reference = A * B + A * C
             @test launch_dual_gemm!(cpu, similar(A), A, B, C) == reference
+            @test launch_dual_gemm_tiled!(cpu, similar(A), A, B, C) == reference
+            @test evaluate_engine!(:ka_tiled, cpu, similar(A), A, B, C) == reference
             @test dual_gemm_blas!(cpu, similar(A), A, B, C) == reference
         end
         for T in (Float16, Float32, Float64, ComplexF32, ComplexF64, Int32, Int64)
-            result = verify_engines(cpu, T, 64, rng)
-            @test result.passed
-            @test result.max_relative_deviation <= result.tolerance
+            results = verify_engines(cpu, T, 64, rng)
+
+            @test length(results) == 2
+
+            @test [r.engine for r in results] == [:ka, :ka_tiled]
+
+            @test all(r -> r.passed && r.max_relative_deviation <= r.tolerance, results)
         end
         @test HD.Kernels.verification_tolerance(Int32) == 0.0
+        @test HD.Kernels.TILE == 16
+        @test_throws ArgumentError verify_engines(cpu, Float32, 32, rng; engines = (:blas,))
+        @test_throws ArgumentError evaluate_engine!(
+            :cublas,
+            cpu,
+            zeros(2, 2),
+            zeros(2, 2),
+            zeros(2, 2),
+            zeros(2, 2),
+        )
+        @test length(verify_engines(cpu, Float64, 40, rng; engines = (:ka_tiled,))) == 1
         @test HD.Kernels.verification_tolerance(Float64) ≈ 8 * sqrt(eps(Float64))
         @test HD.Kernels.verification_tolerance(ComplexF32) ≈ 8 * sqrt(eps(Float32))
         @test all(1 .<= create_matrix(rng, Int8, 16) .<= 4)
@@ -223,7 +245,7 @@ end
         @test config isa BenchmarkConfig
         @test config.problem_sizes == [32]
         @test config.preset == "config"
-        @test config.compute_engine === :both
+        @test config.engines == [:blas, :ka, :ka_tiled]
         @test config.target_types == [Float32, Int32]
         @test config.gpu_backend === :none
         @test config.sampling.max_samples == 4
@@ -231,8 +253,13 @@ end
         @test !config.record_hostname
 
         @test_throws ArgumentError validate_config(
-            altered(d -> d["benchmark"]["compute_engine"] = "cuda"),
+            altered(d -> d["benchmark"]["engines"] = ["cuda"]),
         )
+        @test_throws ArgumentError validate_config(
+            altered(d -> d["benchmark"]["engines"] = String[]),
+        )
+        @test validate_config(altered(d -> d["benchmark"]["engines"] = ["ka", "KA"])).engines ==
+              [:ka]
         @test_throws ArgumentError validate_config(
             altered(d -> d["hardware"]["gpu_backend"] = "all"),
         )
@@ -335,9 +362,11 @@ end
         @test custom.sampling.min_sampling_time_s == 0.25
         @test custom.sampling.max_point_seconds == 5.0
         @test custom.seed == 3
-        @test parse_cli_args(["--ka-only"], TOOL_DIR).compute_engine === :ka
-        @test parse_cli_args(["--blas-only"], TOOL_DIR).compute_engine === :blas
-        @test parse_cli_args(["--engine", "blas"], TOOL_DIR).compute_engine === :blas
+        @test parse_cli_args(["--ka-only"], TOOL_DIR).engines == [:ka, :ka_tiled]
+        @test parse_cli_args(["--blas-only"], TOOL_DIR).engines == [:blas]
+        @test parse_cli_args(["--engines", "blas, ka_tiled"], TOOL_DIR).engines ==
+              [:blas, :ka_tiled]
+        @test_throws ArgumentError parse_cli_args(["--engines", "cublas"], TOOL_DIR)
         @test parse_cli_args(["--gpu-backend", "oneapi"], TOOL_DIR).gpu_backend === :oneapi
         cpu_only = parse_cli_args(["--cpu-only"], TOOL_DIR)
         @test cpu_only.run_cpu && cpu_only.gpu_backend === :none
@@ -428,7 +457,9 @@ end
         end
         @test HD.Backends.backend_label(CPU()) == "CPU"
         @test occursin("(", HD.Backends.blas_library_label())
-        @test HD.Backends.library_label(:ka, CPU(), Float32) == "KernelAbstractions"
+        @test HD.Backends.library_label(:ka, CPU(), Float32) == "KernelAbstractions naive"
+        @test HD.Backends.library_label(:ka_tiled, CPU(), Float32) ==
+              "KernelAbstractions tiled"
         @test HD.Backends.library_label(:blas, CPU(), Float32) ==
               HD.Backends.vendor_blas_label(CPU())
         @test HD.Backends.library_label(:blas, CPU(), Int32) == "LinearAlgebra generic"
@@ -452,7 +483,7 @@ end
         reporter = Reporter(IO[devnull]; total, console = devnull)
         counts = thread_sweep(host.physical_cores, host.logical_threads, :physical)
         reference = unique([1, last(counts)])
-        @test total == length(counts) + 2 * (length(reference) + 1)
+        @test total == length(counts) + 2 * (length(reference) + 2)
 
         sweep = run_cpu_thread_sweep(config, host, rng, reporter)
         @test length(sweep) == length(counts)
@@ -470,11 +501,12 @@ end
         @test BLAS.get_num_threads() == host.blas_threads
 
         multitype = run_cpu_multitype(config, host, rng, reporter)
-        @test length(multitype) == 2 * (length(reference) + 1)
-        ka = filter(r -> r.engine == "ka", multitype)
-        @test length(ka) == 2
+        @test length(multitype) == 2 * (length(reference) + 2)
+        ka = filter(r -> r.engine in ("ka", "ka_tiled"), multitype)
+        @test length(ka) == 4
         @test all(r -> r.blas_threads == 0 && r.julia_threads == Threads.nthreads(), ka)
-        @test all(r -> r.library == "KernelAbstractions", ka)
+        @test all(r -> startswith(r.library, "KernelAbstractions"), ka)
+        @test count(r -> r.library == "KernelAbstractions tiled", ka) == 2
         @test any(
             r -> r.library == "LinearAlgebra generic" && r.data_type == "Int32",
             multitype,
@@ -502,8 +534,6 @@ end
         @test HD.Benchmark.prediction_reason(nothing, 64, 10.0) === nothing
         @test HD.Benchmark.memory_reason(32, Float32, 1.0) !== nothing
         @test HD.Benchmark.memory_reason(32, Float32, Inf) === nothing
-        @test HD.Benchmark.engines_of(:both) == (:blas, :ka)
-        @test HD.Benchmark.engines_of(:ka) == (:ka,)
         summary, status =
             HD.Benchmark.try_measure(:ka, CPU(), Float32, 16, rng, config.sampling)
         @test summary isa TimingSummary && status == "ok"
@@ -628,7 +658,7 @@ end
             raw["output"]["export_csv"] = false
             raw["output"]["export_metadata"] = false
             raw["hardware"]["verify_kernels"] = false
-            raw["benchmark"]["compute_engine"] = "ka"
+            raw["benchmark"]["engines"] = ["ka"]
             records, console = capture_stdout(
                 () -> run_diagnostics(validate_config(raw); base_dir = TOOL_DIR),
             )

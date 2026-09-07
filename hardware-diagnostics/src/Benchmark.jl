@@ -14,17 +14,17 @@ using ..Config: BenchmarkConfig, SUPPORTED_TYPES
 using ..Formatting: format_bytes, format_throughput
 using ..Host: HostInfo, thread_sweep
 using ..Kernels:
+    ENGINES,
+    KERNEL_ENGINES,
     create_matrix,
-    dual_gemm_blas!,
+    evaluate_engine!,
     footprint_bytes,
-    launch_dual_gemm!,
     matrix_bytes,
     nominal_ops
 using ..Reporting: Reporter, advance!, emit
 using ..Sampling: SamplingPolicy, TimingSummary, sample_timings, summarize_timings
 
 export BenchmarkRecord,
-    engines_of,
     reference_thread_counts,
     plan_total_steps,
     measure_point,
@@ -139,14 +139,6 @@ end
 element_type(record::BenchmarkRecord) = SUPPORTED_TYPES[record.data_type]
 
 """
-    engines_of(compute_engine::Symbol) -> Tuple
-
-Engines executed for a `compute_engine` setting: `(:blas, :ka)` for `:both`.
-"""
-engines_of(compute_engine::Symbol) =
-    compute_engine === :both ? (:blas, :ka) : (compute_engine,)
-
-"""
     reference_thread_counts(host::HostInfo, config::BenchmarkConfig) -> Vector{Int}
 
 BLAS thread counts of the element-type suite and of the accelerator comparisons: one
@@ -167,7 +159,7 @@ skipped points included.
 function plan_total_steps(config::BenchmarkConfig, host::HostInfo, n_devices::Int)
     n_sizes = length(config.problem_sizes)
     n_types = length(config.target_types)
-    engines = engines_of(config.compute_engine)
+    engines = config.engines
     sweep =
         config.run_cpu ?
         n_sizes * length(
@@ -179,7 +171,7 @@ function plan_total_steps(config::BenchmarkConfig, host::HostInfo, n_devices::In
         ) : 0
     per_type =
         (:blas in engines ? length(reference_thread_counts(host, config)) : 0) +
-        (:ka in engines ? 1 : 0)
+        count(in(KERNEL_ENGINES), engines)
     multitype = config.run_cpu ? n_sizes * n_types * per_type : 0
     accelerators = n_devices * n_sizes * n_types * length(engines)
     return sweep + multitype + accelerators
@@ -203,13 +195,10 @@ function measure_point(
     B = to_device(create_matrix(rng, T, N), backend)
     C = to_device(create_matrix(rng, T, N), backend)
     D = similar(A)
-    evaluate = if engine === :ka
-        () -> launch_dual_gemm!(backend, D, A, B, C)
-    elseif engine === :blas
-        () -> dual_gemm_blas!(backend, D, A, B, C)
-    else
-        throw(ArgumentError("unknown engine :$engine; expected :ka or :blas"))
-    end
+    engine in ENGINES || throw(
+        ArgumentError("unknown engine :$engine; expected one of $(join(ENGINES, ", "))"),
+    )
+    evaluate = () -> evaluate_engine!(engine, backend, D, A, B, C)
     evaluate()
     GC.gc(false)
     times = sample_timings(evaluate, policy)
@@ -288,7 +277,7 @@ const SWEEP_HEADER = @sprintf(
     "efficiency"
 )
 const TYPE_HEADER = @sprintf(
-    "  %-10s %-6s %-22s %8s %10s %8s %12s %12s %8s %-14s",
+    "  %-10s %-8s %-24s %8s %10s %8s %12s %12s %8s %-14s",
     "type",
     "engine",
     "library",
@@ -301,7 +290,7 @@ const TYPE_HEADER = @sprintf(
     "throughput"
 )
 const DEVICE_HEADER = @sprintf(
-    "  %-10s %-6s %-22s %8s %12s %12s %8s %-14s %11s %11s",
+    "  %-10s %-8s %-24s %8s %12s %12s %8s %-14s %11s %11s",
     "type",
     "engine",
     "library",
@@ -337,7 +326,7 @@ function type_row(record::BenchmarkRecord)
     threads = record.engine == "blas" ? thread_label(record) : string(record.julia_threads)
     footprint = format_bytes(footprint_bytes(record.matrix_dim, element_type(record)))
     record.status == "ok" || return @sprintf(
-        "  %-10s %-6s %-22s %8s %10s %s",
+        "  %-10s %-8s %-24s %8s %10s %s",
         record.data_type,
         record.engine,
         record.library,
@@ -346,7 +335,7 @@ function type_row(record::BenchmarkRecord)
         record.status
     )
     return @sprintf(
-        "  %-10s %-6s %-22s %8s %10s %8d %12.3f %12.3f %8.2f %-14s",
+        "  %-10s %-8s %-24s %8s %10s %8d %12.3f %12.3f %8.2f %-14s",
         record.data_type,
         record.engine,
         record.library,
@@ -364,14 +353,14 @@ ratio_label(value::Real) = isnan(value) ? "n/a" : @sprintf("%.2fx", value)
 
 function device_row(record::BenchmarkRecord)
     record.status == "ok" || return @sprintf(
-        "  %-10s %-6s %-22s %s",
+        "  %-10s %-8s %-24s %s",
         record.data_type,
         record.engine,
         record.library,
         record.status
     )
     return @sprintf(
-        "  %-10s %-6s %-22s %8d %12.3f %12.3f %8.2f %-14s %11s %11s",
+        "  %-10s %-8s %-24s %8d %12.3f %12.3f %8.2f %-14s %11s %11s",
         record.data_type,
         record.engine,
         record.library,
@@ -502,16 +491,17 @@ function run_cpu_multitype(
     reporter::Reporter,
 )
     cpu = CPU()
-    engines = engines_of(config.compute_engine)
+    engines = config.engines
     blas_counts = reference_thread_counts(host, config)
-    steps_per_type = (:blas in engines ? length(blas_counts) : 0) + (:ka in engines ? 1 : 0)
+    steps_per_type =
+        (:blas in engines ? length(blas_counts) : 0) + count(in(KERNEL_ENGINES), engines)
     budget = config.memory_safety_fraction * Sys.free_memory()
     previous = Dict{Tuple{Symbol, DataType, Int}, Tuple{Int, Float64}}()
     records = BenchmarkRecord[]
     emit(reporter, "")
     emit(
         reporter,
-        "CPU element types: engines $(join(engines, ", ")); blas threads $(join(blas_counts, ", ")); ka on the $(host.julia_threads)-thread Julia pool",
+        "CPU element types: engines $(join(engines, ", ")); blas threads $(join(blas_counts, ", ")); kernels on the $(host.julia_threads)-thread Julia pool",
     )
     original_threads = BLAS.get_num_threads()
     try
@@ -629,7 +619,7 @@ function run_accelerator_benchmarks(
 )
     backend = device.backend
     label = backend_label(backend)
-    engines = engines_of(config.compute_engine)
+    engines = config.engines
     max_threads = last(reference_thread_counts(host, config))
     budget =
         device.total_memory_bytes > 0 ?

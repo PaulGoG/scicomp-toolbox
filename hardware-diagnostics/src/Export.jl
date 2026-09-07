@@ -94,7 +94,7 @@ function export_metadata_to_toml(
     sampling = config.sampling
     configuration = Dict{String, Any}(
         "preset" => config.preset,
-        "compute_engine" => string(config.compute_engine),
+        "engines" => string.(config.engines),
         "problem_sizes" => config.problem_sizes,
         "target_types" => string.(config.target_types),
         "seed" => config.seed,

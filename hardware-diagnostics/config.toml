@@ -1,7 +1,7 @@
 # Configuration of the hardware-diagnostics tool
 
 [benchmark]
-compute_engine = "both"  # one of: "both" | "ka" | "blas"
+engines = ["blas", "ka", "ka_tiled"]  # non-empty subset of: "blas" | "ka" | "ka_tiled"
 problem_sizes = [1024, 2048]  # positive integers, N of the N × N operands; CLI presets replace this list
 target_types = ["Float16", "Float32", "Float64", "Int32", "Int64"]  # subset of: Float16 | Float32 | Float64 | ComplexF32 | ComplexF64 | Int8 | Int16 | Int32 | Int64
 seed = 20260907  # integer >= 0; seeds the operand generator
