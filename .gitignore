@@ -1,17 +1,29 @@
-# Logs and runtime generated outputs
+# run outputs (never version-controlled)
+data/
+plots/
 *.log
 hardware_benchmark_*
-*.csv
-*.toml.bak
 
-# Editor and OS metadata
+# generated data and figure formats, except committed test fixtures
+*.csv
+*.h5
+*.jld2
+*.pdf
+*.png
+!**/test/fixtures/**
+
+# test environments regenerate their manifests; tool and formatter manifests
+# are version-controlled
+*/test/Manifest.toml
+
+# editor and OS metadata
 *.swp
 *~
 .DS_Store
 .vscode/
 .idea/
 
-# Julia test/coverage artifacts
+# coverage artifacts
 *.jl.cov
 *.jl.*.cov
 *.jl.mem
