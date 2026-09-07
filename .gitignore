@@ -1,0 +1,17 @@
+# Logs and runtime generated outputs
+*.log
+hardware_benchmark_*
+*.csv
+*.toml.bak
+
+# Editor and OS metadata
+*.swp
+*~
+.DS_Store
+.vscode/
+.idea/
+
+# Julia test/coverage artifacts
+*.jl.cov
+*.jl.*.cov
+*.jl.mem

@@ -1,0 +1,20 @@
+# Configuration for Julia Hardware Diagnostics & High-Intensity Benchmark Suite
+
+[benchmark]
+mode = "standard"  # one of: "quick" | "standard" | "stress" | "custom"
+compute_engine = "both"  # one of: "both" | "ka" | "blas"
+problem_sizes = [1024, 2048]  # list of positive integers (N × N matrix dimension)
+trials = 3  # integer in [1, 50] (measurement repetitions per test point)
+target_types = ["Float16", "Float32", "Float64", "Int8", "Int16", "Int32", "Int64"]  # subset of supported Julia numeric types
+run_cpu = true  # boolean
+run_gpu = true  # boolean
+gpu_backend = "auto"  # one of: "auto" | "all" | "oneapi" | "cuda" | "amdgpu" | "metal"
+
+[safety]
+memory_safety_fraction = 0.75  # float in (0.0, 0.95] (fraction of available memory ceiling)
+
+[output]
+export_csv = true  # boolean
+export_metadata = true  # boolean
+output_directory = "."  # destination path string
+log_to_file = true  # boolean
