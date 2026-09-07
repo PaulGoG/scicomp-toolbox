@@ -5,10 +5,15 @@ Platform introspection, hardware capability profiling, and heterogeneous compute
 ## Directory Structure
 
 ```
-scripts/
+hardware-diagnostics/
+├── activate.jl         # Pure-Julia silent environment activator
 ├── config.toml         # TOML runtime configuration and safety parameters
 ├── hardware-diag.jl    # Self-contained diagnostic and benchmarking executable
-└── README.md           # Documentation and operational manual
+├── Manifest.toml       # Pinned dependency lockfile
+├── Project.toml        # Isolated package dependencies & compat bounds
+├── README.md           # Documentation and operational manual
+└── test/
+    └── runtests.jl     # Unit test suite (61 assertions across utilities, config, and CPU kernels)
 ```
 
 ## Overview
@@ -66,41 +71,47 @@ This single kernel definition is compiled natively across all supported hardware
 
 ```bash
 # Display help and options
-julia hardware-diag.jl --help
+julia --project=. hardware-diag.jl --help
 
 # Fast diagnostic run (dimensions: 512, 1024 | 2 trials)
-julia hardware-diag.jl --quick
+julia --project=. hardware-diag.jl --quick
 
 # Standard benchmark (dimensions: 1024, 2048 | 3 trials) [default]
-julia hardware-diag.jl
+julia --project=. hardware-diag.jl
 
 # Exhaustive stress test (dimensions: 1024, 2048, 4096 | 5 trials)
-julia hardware-diag.jl --stress
+julia --project=. hardware-diag.jl --stress
 
 # Select compute engine
-julia hardware-diag.jl --engine ka         # Pure KernelAbstractions.jl native kernels
-julia hardware-diag.jl --engine blas       # Vendor-optimized BLAS libraries
-julia hardware-diag.jl --engine both       # Benchmark both side-by-side [default]
+julia --project=. hardware-diag.jl --engine ka         # Pure KernelAbstractions.jl native kernels
+julia --project=. hardware-diag.jl --engine blas       # Vendor-optimized BLAS libraries
+julia --project=. hardware-diag.jl --engine both       # Benchmark both side-by-side [default]
 
 # Select specific GPU accelerator backend
-julia hardware-diag.jl --gpu-backend oneapi
-julia hardware-diag.jl --gpu-backend cuda
-julia hardware-diag.jl --gpu-backend amdgpu
-julia hardware-diag.jl --gpu-backend metal
-julia hardware-diag.jl --gpu-backend all
+julia --project=. hardware-diag.jl --gpu-backend oneapi
+julia --project=. hardware-diag.jl --gpu-backend cuda
+julia --project=. hardware-diag.jl --gpu-backend amdgpu
+julia --project=. hardware-diag.jl --gpu-backend metal
+julia --project=. hardware-diag.jl --gpu-backend all
 
 # Custom problem dimensions and repetitions
-julia hardware-diag.jl --sizes 512,1024,2048 --trials 3
+julia --project=. hardware-diag.jl --sizes 512,1024,2048 --trials 3
 
 # Target specific numeric data types
-julia hardware-diag.jl --types Float32,Float64
+julia --project=. hardware-diag.jl --types Float32,Float64
 
 # Isolate execution target
-julia hardware-diag.jl --cpu-only
-julia hardware-diag.jl --gpu-only
+julia --project=. hardware-diag.jl --cpu-only
+julia --project=. hardware-diag.jl --gpu-only
 
 # Specify external configuration file
-julia hardware-diag.jl --config config.toml
+julia --project=. hardware-diag.jl --config config.toml
+```
+
+## Running the Unit Test Suite
+
+```bash
+julia --project=. test/runtests.jl
 ```
 
 ## Configuration (`config.toml`)

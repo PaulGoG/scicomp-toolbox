@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Julia ${{ matrix.version }} - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['1.10', '1.11', '1.12']
+        os: [ubuntu-latest]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.version }}
+
+      - name: Cache Julia Artifacts
+        uses: julia-actions/cache@v2
+
+      - name: Instantiate Sub-Environment
+        run: |
+          julia --project=hardware-diagnostics -e '
+            using Pkg
+            Pkg.instantiate()
+          '
+
+      - name: Run Unit Test Suite
+        run: |
+          julia --project=hardware-diagnostics hardware-diagnostics/test/runtests.jl
+
+      - name: Run Executable Smoke Test (CPU Fallback)
+        run: |
+          julia --project=hardware-diagnostics hardware-diagnostics/hardware-diag.jl --quick --cpu-only --no-log

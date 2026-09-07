@@ -1,0 +1,40 @@
+name: Code Formatting
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: JuliaFormatter Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+
+      - name: Run JuliaFormatter
+        run: |
+          julia -e '
+            using Pkg
+            Pkg.add("JuliaFormatter")
+            using JuliaFormatter
+            is_formatted = format(".", overwrite=false)
+            if !is_formatted
+                println("Code formatting check failed. Run JuliaFormatter.format(\".\") locally.")
+                exit(1)
+            else
+                println("Code formatting check passed.")
+            end
+          '
