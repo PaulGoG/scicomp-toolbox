@@ -4,119 +4,105 @@
 [![Format](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/format.yml/badge.svg)](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/format.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A personal scientific computing scripting workbench in pure Julia. Designed to host, orchestrate, and maintain standalone computational utilities, hardware diagnostics, numerical experiments, data processing scripts, and HPC automation workflows that do not warrant individual full-blown packages.
-
-## Repository Layout
+Scientific scripting workbench in Julia. It hosts standalone utilities and self-contained
+tools that do not warrant a package of their own, behind one dispatcher, one test runner
+and one formatting gate.
 
 ```
 scicomp-toolbox/
 ├── .github/
+│   ├── dependabot.yml             # weekly updates of actions and Julia environments
 │   └── workflows/
-│       ├── ci.yml                  # Automated CI test matrix & smoke tests
-│       └── format.yml              # JuliaFormatter code quality gate
-├── .gitignore                      # Git exclusion rules
-├── .JuliaFormatter.toml            # Project-wide code formatting specification
-├── LICENSE                         # MIT License
-├── README.md                       # Master tooling index and orchestration manual
-├── run.jl                          # Universal CLI dispatcher & tool scaffolding
-├── test.jl                         # Global test runner discovering all sub-environments
-├── check.jl                        # Pre-commit QA runner (formatting + test verification)
-├── activate.jl                     # Pure-Julia interactive environment activator
-├── standalone/                     # Tier 2: Single-file lightweight utilities
-│   └── sysinfo.jl                  # Fast host platform & runtime topology inspector
-└── hardware-diagnostics/           # Tier 1: Heterogeneous hardware profiling & benchmarks
-    ├── activate.jl                 # Dedicated silent sub-environment activator
-    ├── config.toml                 # Benchmark parameters and memory safety thresholds
-    ├── hardware-diag.jl            # Architecture-agnostic benchmarking executable
-    ├── Manifest.toml               # Pinned dependency lockfile
-    ├── Project.toml                # Isolated package dependencies & compat bounds
-    ├── README.md                   # Tool-specific manual and operational guide
+│       ├── ci.yml                 # test suites, standalone and dispatcher smoke runs
+│       └── format.yml             # JuliaFormatter gate using formatter/
+├── .JuliaFormatter.toml           # formatting rules
+├── LICENSE                        # MIT
+├── README.md
+├── check.jl                       # pre-commit: format with formatter/, then test.jl
+├── run.jl                         # dispatcher: list, run and scaffold tools
+├── test.jl                        # global test runner
+├── formatter/                     # pinned JuliaFormatter environment (Project + Manifest)
+│   └── activate.jl
+├── standalone/                    # tier 2: single-file scripts on the standard library
+│   └── sysinfo.jl                 # host and runtime introspection
+└── hardware-diagnostics/          # tier 1: HardwareDiagnostics package with GPU extensions
+    ├── activate.jl
+    ├── config.toml
+    ├── hardware-diagnostics.jl    # entry point
+    ├── Manifest.toml
+    ├── Project.toml
+    ├── README.md
+    ├── ext/                       # HardwareDiagnostics{CUDA,AMDGPU,Metal,oneAPI}Ext
+    ├── src/
     └── test/
-        └── runtests.jl             # Unit test suite (61 test assertions)
 ```
 
-## Architecture: Dual-Tier Scripting
+## Two tiers
 
-To maximize convenience while eliminating dependency conflicts, the workbench supports two tiers of scripts:
+A **tier 1 tool** is a directory with its own `Project.toml` and committed `Manifest.toml`,
+an `activate.jl`, a validated `config.toml`, the entry point `<name>/<name>.jl`, a test
+suite under `test/` and a README. A tool that outgrows a script becomes a package inside
+that directory (`name` and `uuid` in `Project.toml`, `src/<Name>.jl`); the dispatcher and
+the test runner handle both forms. Tools never share an environment, so their
+dependencies cannot conflict.
 
-### Tier 1: Isolated Sub-Environments
-For complex scripts with specialized external dependencies (GPU backends, Makie visualization, HDF5, tabular I/O).
-* Each tool has its own directory with dedicated `Project.toml` and `Manifest.toml`.
-* Guaranteed zero dependency cross-contamination across tools.
-* Pinned lockfiles and relative path resolution guarantee exact reproducibility across nodes.
+A **tier 2 script** in `standalone/` relies on the standard library only and runs without
+instantiation.
 
-### Tier 2: Standalone Lightweight Scripts (`standalone/`)
-For self-contained utilities and one-off tasks relying on Julia standard libraries (`LinearAlgebra`, `Statistics`, `Printf`, `TOML`, `DelimitedFiles`).
-* Stored directly in `standalone/`.
-* Instant execution without package instantiation or dependency management.
+## Requirements
 
----
+Julia 1.12 through [juliaup](https://github.com/JuliaLang/juliaup); the declared floor of
+every environment is `julia = "1.12"`. Linux is the primary platform. GPU packages
+(`CUDA`, `AMDGPU`, `Metal`, `oneAPI`) are not dependencies of any tool: install the one
+matching the hardware into the default environment and the tool resolves it through the
+load path (see `hardware-diagnostics/README.md`).
 
-## Universal CLI Dispatcher (`run.jl`)
+## Entry points
 
-The root `run.jl` script provides a unified interface to list, execute, and scaffold scripts across the entire repository.
-
-### 1. View Catalog
-List all registered sub-environments and standalone scripts:
 ```bash
-julia run.jl --list
+julia run.jl --list                                     # catalog
+julia run.jl sysinfo                                    # standalone script
+julia run.jl hardware-diagnostics --quick --cpu-only    # tool; arguments are forwarded
+julia run.jl --threads 8 hardware-diagnostics           # Julia threads of the child process
+julia run.jl --new <name>                               # scaffold a tier 1 tool
+julia test.jl                                           # every test suite
+julia test.jl hardware-diagnostics                      # one suite
+julia check.jl                                          # format in place, then test
+julia check.jl --check                                  # fail on formatting differences
 ```
 
-### 2. Execute a Script or Sub-Environment
-Run any utility directly by name; all additional arguments are forwarded to the script:
+The dispatcher instantiates a tool's environment before launching it, so a fresh clone
+needs no manual setup. Child processes receive `--threads` from `JULIA_NUM_THREADS`, or
+`auto` when the variable is unset; `--threads N` before the tool name overrides both.
+
+Working inside one environment:
+
 ```bash
-# Execute standalone utility (Tier 2)
-julia run.jl sysinfo
-
-# Execute isolated sub-environment tool (Tier 1)
-julia run.jl hardware-diagnostics --quick
-julia run.jl hardware-diagnostics --gpu-backend oneapi --engine both
+julia --project=hardware-diagnostics                    # REPL in the tool's environment
+julia --project=hardware-diagnostics -e 'using Pkg; Pkg.test()'
+julia -i -e 'include("hardware-diagnostics/activate.jl")'
 ```
 
-### 3. Scaffold a New Sub-Environment Tool
-Generate a standardized, committable sub-environment in one command:
-```bash
-julia run.jl --new my-tool
-```
-This generates:
-* `my-tool/Project.toml` (with fresh UUID and compat bounds)
-* `my-tool/activate.jl` (silent Pkg activator)
-* `my-tool/config.toml` (parameter configuration)
-* `my-tool/my-tool.jl` (executable entry point with CLI handling)
-* `my-tool/test/runtests.jl` (unit test suite)
-* `my-tool/README.md` (documentation template)
+## Catalog
 
----
+| Tool | Tier | Purpose | Entry point |
+| :--- | :--- | :--- | :--- |
+| [`sysinfo`](standalone/sysinfo.jl) | 2 | CPU topology (physical and logical), memory, thread pools, BLAS library, repository revision | `standalone/sysinfo.jl` |
+| [`hardware-diagnostics`](hardware-diagnostics/) | 1 | Host and accelerator introspection; dual-GEMM throughput through a KernelAbstractions kernel and the vendor library, with thread scaling and cross-engine verification | `hardware-diagnostics/hardware-diagnostics.jl` |
 
-## Testing & Quality Assurance
+## Status
 
-### Run Global Test Suite
-Executes unit tests across all discovered sub-environments in isolated subprocesses:
-```bash
-julia test.jl
+| Component | State |
+| :--- | :--- |
+| Dispatcher, test runner, formatting gate | in use; exercised by CI on Julia 1 (current stable), Ubuntu |
+| `sysinfo` | in use |
+| `hardware-diagnostics`, CPU path | tested (unit tests, static QA with Aqua, JET and ExplicitImports, end-to-end run) |
+| `hardware-diagnostics`, oneAPI extension | run on an Intel Arc integrated GPU (Meteor Lake) |
+| `hardware-diagnostics`, CUDA, AMDGPU and Metal extensions | written against the documented package APIs, not run on hardware |
 
-# Or target a single sub-environment:
-julia test.jl hardware-diagnostics
-```
+## Conventions
 
-### Run Pre-Commit Verification
-Formats all code against `.JuliaFormatter.toml` and executes the full test suite:
-```bash
-julia check.jl
-```
-
----
-
-## Script Catalog
-
-### System & Hardware Diagnostics
-| Tool | Tier | Purpose | Entry Point | Test Suite |
-| :--- | :--- | :--- | :--- | :--- |
-| [`sysinfo`](standalone/sysinfo.jl) | Tier 2 | Rapid host architecture, memory, and BLAS inspection | `standalone/sysinfo.jl` | Smoke tested |
-| [`hardware-diagnostics`](hardware-diagnostics/) | Tier 1 | Heterogeneous accelerator profiling, multi-threaded CPU scaling, unified `KernelAbstractions.jl` GEMM benchmarks | `hardware-diagnostics/hardware-diag.jl` | `hardware-diagnostics/test/runtests.jl` |
-
----
-
-## License
-
-This repository is licensed under the [MIT License](LICENSE).
+Run outputs go to `<tool>/data/` and are ignored by git, as are `plots/`, logs, CSV and
+binary data files. Tool and formatter manifests are committed; test manifests are not.
+Commits follow Conventional Commits. Formatting is enforced with the JuliaFormatter
+version pinned in `formatter/Manifest.toml`.

@@ -1,171 +1,185 @@
 #!/usr/bin/env julia
-# ==============================================================================
-# run.jl — Universal CLI Dispatcher for Scientific Computing Workbench
-# ==============================================================================
-# Dispatches execution to isolated sub-environments or standalone scripts.
-# Supports listing available tools and scaffolding new isolated sub-environments.
-# ==============================================================================
+# run.jl — workbench dispatcher: lists, executes and scaffolds tools.
+#
+#   julia run.jl <tool> [args...]              run a sub-environment tool or a standalone script
+#   julia run.jl --threads N <tool> [args...]  Julia thread count of the child process
+#                                              (default: JULIA_NUM_THREADS, else auto)
+#   julia run.jl --list                        catalog of tools and standalone scripts
+#   julia run.jl --new <name>                  scaffold a sub-environment tool
+#   julia run.jl --help
 
-using UUIDs
-using Printf
+using Printf: @printf
 
 const REPO_ROOT = @__DIR__
-const EXCLUDED_DIRS =
-    Set(["test", ".git", ".github", "paper", "notes", "context", "standalone"])
+const STANDALONE_DIR = joinpath(REPO_ROOT, "standalone")
+# directories holding a Project.toml that are environments but not tools
+const NON_TOOL_ENVIRONMENTS = Set(["formatter"])
 
 """
     find_subenvironments() -> Vector{Pair{String, String}}
 
-Discovers all sub-environments (directories containing a Project.toml).
-Returns pairs of (subdir_name => entry_script_path).
+Tool directories: immediate subdirectories holding a `Project.toml`, excluding the
+auxiliary environments. Each name is paired with its entry script `<name>/<name>.jl`,
+or `""` when that file is absent.
 """
 function find_subenvironments()
-    subenvs = Pair{String, String}[]
-    for item in readdir(REPO_ROOT)
-        item in EXCLUDED_DIRS && continue
-        full_path = joinpath(REPO_ROOT, item)
-        if isdir(full_path) && isfile(joinpath(full_path, "Project.toml"))
-            # Locate primary entry script
-            entry_script = joinpath(full_path, "$item.jl")
-            if !isfile(entry_script)
-                # Search for any .jl file excluding activate.jl
-                jl_candidates = filter(
-                    f -> endswith(f, ".jl") && f != "activate.jl",
-                    readdir(full_path),
-                )
-                entry_script =
-                    isempty(jl_candidates) ? "" : joinpath(full_path, first(jl_candidates))
-            end
-            push!(subenvs, item => entry_script)
-        end
+    tools = Pair{String, String}[]
+    for item in sort(readdir(REPO_ROOT))
+        startswith(item, ".") && continue
+        item in NON_TOOL_ENVIRONMENTS && continue
+        dir = joinpath(REPO_ROOT, item)
+        (isdir(dir) && isfile(joinpath(dir, "Project.toml"))) || continue
+        entry = joinpath(dir, "$item.jl")
+        push!(tools, item => (isfile(entry) ? entry : ""))
     end
-    return subenvs
+    return tools
 end
 
 """
     find_standalone_scripts() -> Vector{String}
 
-Discovers all standalone scripts in the `standalone/` directory.
+File names of the scripts in `standalone/`.
 """
 function find_standalone_scripts()
-    standalone_dir = joinpath(REPO_ROOT, "standalone")
-    !isdir(standalone_dir) && return String[]
-    return filter(f -> endswith(f, ".jl"), readdir(standalone_dir))
+    isdir(STANDALONE_DIR) || return String[]
+    return filter(f -> endswith(f, ".jl"), sort(readdir(STANDALONE_DIR)))
 end
 
 """
-    extract_description(path::String) -> String
+    extract_description(dir::String) -> String
 
-Extracts a brief summary from a README or top-level file comments.
+First paragraph line of `dir/README.md` that is neither a heading nor a badge, truncated
+to 80 characters.
 """
-function extract_description(dir_path::String)
-    readme = joinpath(dir_path, "README.md")
-    if isfile(readme)
-        lines = readlines(readme)
-        for line in lines
-            trimmed = strip(line)
-            if !startswith(trimmed, "#") && !startswith(trimmed, "[![") && !isempty(trimmed)
-                return length(trimmed) > 80 ? first(trimmed, 77) * "..." : trimmed
-            end
-        end
+function extract_description(dir::String)
+    readme = joinpath(dir, "README.md")
+    isfile(readme) || return "No description available."
+    for line in eachline(readme)
+        text = strip(line)
+        (isempty(text) || startswith(text, "#") || startswith(text, "[![")) && continue
+        return length(text) > 80 ? first(text, 77) * "..." : String(text)
     end
     return "No description available."
 end
 
-"""
-    print_help()
-
-Displays CLI usage guidance.
-"""
 function print_help()
-    println("""
-Scientific Computing Scripting Workbench Dispatcher
+    println(
+        """
+Workbench dispatcher
 
 Usage:
-  julia run.jl <tool-or-script> [args...]    Execute an isolated tool or standalone script
-  julia run.jl --list                       List all cataloged tools and scripts
-  julia run.jl --new <tool-name>            Scaffold a new sub-environment tool
-  julia run.jl --help                       Show this help message
+  julia run.jl <tool> [args...]              run a tool or a standalone script
+  julia run.jl --threads N <tool> [args...]  Julia thread count of the child (default: auto)
+  julia run.jl --list                        catalog of tools and standalone scripts
+  julia run.jl --new <name>                  scaffold a sub-environment tool
+  julia run.jl --help                        this message
 
 Examples:
-  julia run.jl hardware-diagnostics --quick
+  julia run.jl hardware-diagnostics --quick --cpu-only
+  julia run.jl --threads 8 hardware-diagnostics --gpu-backend oneapi
   julia run.jl sysinfo
-  julia run.jl --new data-converter
-""")
+""",
+    )
+end
+
+function list_tools()
+    println("Sub-environment tools")
+    tools = find_subenvironments()
+    if isempty(tools)
+        println("  (none)")
+    else
+        for (name, entry) in tools
+            @printf("  %-24s %s\n", name, extract_description(joinpath(REPO_ROOT, name)))
+            @printf(
+                "  %-24s entry: %s\n",
+                "",
+                isempty(entry) ? "missing $name/$name.jl" : relpath(entry, REPO_ROOT)
+            )
+        end
+    end
+    println("\nStandalone scripts (standalone/)")
+    scripts = find_standalone_scripts()
+    if isempty(scripts)
+        println("  (none)")
+    else
+        for script in scripts
+            name = replace(script, r"\.jl$" => "")
+            @printf("  %-24s julia run.jl %s\n", name, name)
+        end
+    end
 end
 
 """
-    list_tools()
+    instantiate_environment(dir::String)
 
-Prints a structured overview of all tools and standalone scripts in the repository.
+Resolve and install the environment in `dir` in a child process, so that a fresh clone
+runs without manual setup. Raises an error when instantiation fails.
 """
-function list_tools()
-    println("="^80)
-    println(" Scientific Computing Scripting Catalog")
-    println("="^80)
+function instantiate_environment(dir::String)
+    cmd = `$(Base.julia_cmd()) --startup-file=no --project=$dir -e 'using Pkg; Pkg.instantiate(; io = devnull)'`
+    process = run(ignorestatus(cmd))
+    process.exitcode == 0 || error(
+        "instantiation of environment '$(basename(dir))' failed (exit $(process.exitcode))",
+    )
+    return nothing
+end
 
-    subenvs = find_subenvironments()
-    println("\n[Isolated Sub-Environments]")
-    if isempty(subenvs)
-        println("  (None found)")
-    else
-        for (name, entry) in subenvs
-            desc = extract_description(joinpath(REPO_ROOT, name))
-            @printf("  • %-24s : %s\n", name, desc)
-            entry_rel = isempty(entry) ? "N/A" : relpath(entry, REPO_ROOT)
-            @printf("    └─ Entry: %s\n", entry_rel)
-        end
+"""
+    dispatch(target::String, args::Vector{String}, threads::String)
+
+Run a tool (`<name>/<name>.jl` with its own project) or a standalone script, forwarding
+`args`; the child's exit status becomes this process's exit status.
+"""
+function dispatch(target::String, args::Vector{String}, threads::String)
+    tools = Dict(find_subenvironments())
+    if haskey(tools, target)
+        entry = tools[target]
+        isempty(entry) && error("tool '$target' has no entry script $target/$target.jl")
+        dir = joinpath(REPO_ROOT, target)
+        instantiate_environment(dir)
+        cmd = `$(Base.julia_cmd()) --threads=$threads --project=$dir $entry $args`
+        exit(run(ignorestatus(cmd)).exitcode)
     end
-
-    scripts = find_standalone_scripts()
-    println("\n[Standalone Scripts (standalone/)]")
-    if isempty(scripts)
-        println("  (None found)")
-    else
-        for s in scripts
-            script_name = replace(s, r"\.jl$" => "")
-            @printf("  • %-24s : julia run.jl %s\n", script_name, script_name)
-        end
+    script = joinpath(STANDALONE_DIR, endswith(target, ".jl") ? target : "$target.jl")
+    if isfile(script)
+        cmd = `$(Base.julia_cmd()) --threads=$threads $script $args`
+        exit(run(ignorestatus(cmd)).exitcode)
     end
-
-    println("\n" * "="^80)
+    println(stderr, "Unknown tool or script '$target'. Run `julia run.jl --list`.")
+    exit(1)
 end
 
 """
     scaffold_tool(name::String)
 
-Creates a new isolated sub-environment directory with standard boilerplate.
+Create `<name>/` as a plain project environment with an activation script, a validated
+configuration, an entry script `<name>.jl`, a test suite and a README.
 """
 function scaffold_tool(name::String)
-    tool_dir = joinpath(REPO_ROOT, name)
-    if isdir(tool_dir)
-        error("Directory already exists: $tool_dir")
+    if !occursin(r"^[a-z][a-z0-9-]*$", name)
+        println(stderr, "Tool names are lowercase kebab-case identifiers, got '$name'.")
+        exit(1)
     end
+    dir = joinpath(REPO_ROOT, name)
+    if isdir(dir)
+        println(stderr, "Directory already exists: $dir")
+        exit(1)
+    end
+    mkdir(dir)
+    mkdir(joinpath(dir, "test"))
 
-    println("Scaffolding new sub-environment: $name")
-    mkdir(tool_dir)
-    mkdir(joinpath(tool_dir, "test"))
-
-    # 1. Project.toml
-    project_toml = joinpath(tool_dir, "Project.toml")
     write(
-        project_toml,
+        joinpath(dir, "Project.toml"),
         """
-name = "$name"
-uuid = "$(UUIDs.uuid4())"
-version = "0.1.0"
-
 [deps]
 
 [compat]
-julia = "1.10, 1.11, 1.12"
+julia = "1.12"
 """,
     )
 
-    # 2. activate.jl
-    activate_jl = joinpath(tool_dir, "activate.jl")
     write(
-        activate_jl,
+        joinpath(dir, "activate.jl"),
         """
 using Pkg
 Pkg.activate(@__DIR__; io = devnull)
@@ -173,38 +187,60 @@ Pkg.instantiate(; io = devnull)
 """,
     )
 
-    # 3. config.toml
-    config_toml = joinpath(tool_dir, "config.toml")
     write(
-        config_toml,
+        joinpath(dir, "config.toml"),
         """
-# Configuration for $name
+# Configuration of $name
 
 [parameters]
-# Add domain-specific parameters here
-verbose = true
+verbose = true  # boolean
 """,
     )
 
-    # 4. Primary executable script
-    script_jl = joinpath(tool_dir, "$name.jl")
     write(
-        script_jl,
+        joinpath(dir, "$name.jl"),
         """
 #!/usr/bin/env julia
-# ==============================================================================
-# $name — Computational Script
-# ==============================================================================
+# $name — entry point.
+#
+#   julia run.jl $name [--config PATH]
 
-using TOML
+using Pkg
+Pkg.activate(@__DIR__; io = devnull)
+Pkg.instantiate(; io = devnull)
 
-function main(args::Vector{String} = String[])
-    println("Executing $name with arguments: ", args)
-    config_file = joinpath(@__DIR__, "config.toml")
-    if isfile(config_file)
-        cfg = TOML.parsefile(config_file)
-        println("Loaded configuration: ", cfg)
+using TOML: TOML
+
+\"\"\"
+    load_config(path::AbstractString) -> Dict{String, Any}
+
+Parse the TOML configuration and enforce its constraints, raising an `ArgumentError`
+that names the offending key.
+\"\"\"
+function load_config(path::AbstractString)
+    isfile(path) || throw(ArgumentError("configuration file not found: \$path"))
+    config = TOML.parsefile(path)
+    parameters = get(config, "parameters", Dict{String, Any}())
+    verbose = get(parameters, "verbose", true)
+    verbose isa Bool ||
+        throw(ArgumentError("[parameters].verbose must be a boolean, got \$(repr(verbose))"))
+    return config
+end
+
+function main(args::Vector{String} = ARGS)
+    config_path = joinpath(@__DIR__, "config.toml")
+    i = 1
+    while i <= length(args)
+        if args[i] == "--config" && i < length(args)
+            config_path = args[i + 1]
+            i += 2
+        else
+            throw(ArgumentError("unknown argument '\$(args[i])'"))
+        end
     end
+    config = load_config(config_path)
+    println("$name: configuration loaded from ", config_path)
+    return config
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
@@ -213,119 +249,76 @@ end
 """,
     )
 
-    # 5. test/runtests.jl
-    test_jl = joinpath(tool_dir, "test", "runtests.jl")
     write(
-        test_jl,
+        joinpath(dir, "test", "runtests.jl"),
         """
-#!/usr/bin/env julia
 using Test
 
-@testset "$name Tests" begin
-    @test 1 + 1 == 2
-    @test isfile(joinpath(@__DIR__, "..", "config.toml"))
+include(joinpath(@__DIR__, "..", "$name.jl"))
+
+@testset "$name" begin
+    config = load_config(joinpath(@__DIR__, "..", "config.toml"))
+    @test haskey(config, "parameters")
+    @test_throws ArgumentError load_config(joinpath(@__DIR__, "missing.toml"))
 end
 """,
     )
 
-    # 6. README.md
-    readme_md = joinpath(tool_dir, "README.md")
     write(
-        readme_md,
+        joinpath(dir, "README.md"),
         """
 # $name
 
-Domain-specific computational script.
+One-sentence statement of what the tool computes.
+
+```
+$name/
+├── activate.jl      # environment activation
+├── config.toml      # parameters (validated on load)
+├── $name.jl         # entry point
+├── Project.toml     # dependencies and compat bounds
+├── README.md
+└── test/
+    └── runtests.jl
+```
 
 ## Usage
 
 ```bash
-# Execute via workbench dispatcher
-julia run.jl $name
-
-# Or directly with dedicated project
-julia --project=$name $name/$name.jl
+julia run.jl $name                       # through the dispatcher
+julia --project=$name $name/$name.jl     # directly
+julia test.jl $name                      # tests
 ```
 """,
     )
 
-    println("✓ Successfully created sub-environment: $name/")
-    println("  • Project.toml      : Isolated package environment")
-    println("  • activate.jl       : Silent Pkg environment activator")
-    println("  • config.toml       : Parameter configuration")
-    println("  • $name.jl       : Primary execution script")
-    println("  • test/runtests.jl  : Unit test suite")
-    println("  • README.md         : Documentation\n")
-    println("Next steps:")
     println(
-        "  1. Add dependencies: julia --project=$name -e 'using Pkg; Pkg.add(\"PackageName\")'",
+        "Created $name/ (Project.toml, activate.jl, config.toml, $name.jl, test/runtests.jl, README.md).",
     )
-    println("  2. Run tool        : julia run.jl $name")
-end
-
-"""
-    dispatch(target::String, args::Vector{String})
-
-Dispatches execution to the specified tool or script.
-"""
-function dispatch(target::String, args::Vector{String})
-    # Check if target is a sub-environment directory
-    tool_dir = joinpath(REPO_ROOT, target)
-    if isdir(tool_dir) && isfile(joinpath(tool_dir, "Project.toml"))
-        subenvs = Dict(find_subenvironments())
-        entry = get(subenvs, target, "")
-        if isempty(entry) || !isfile(entry)
-            error(
-                "Sub-environment '$target' does not contain a primary execution script (.jl).",
-            )
-        end
-        cmd = `$(Base.julia_cmd()) --project=$tool_dir $entry $args`
-        exit(Base.run(cmd).exitcode)
-    end
-
-    # Check if target is a standalone script
-    standalone_dir = joinpath(REPO_ROOT, "standalone")
-    standalone_candidates = [
-        joinpath(standalone_dir, target),
-        joinpath(standalone_dir, "$target.jl"),
-        joinpath(REPO_ROOT, target),
-        joinpath(REPO_ROOT, "$target.jl"),
-    ]
-
-    for candidate in standalone_candidates
-        if isfile(candidate)
-            cmd = `$(Base.julia_cmd()) $candidate $args`
-            exit(Base.run(cmd).exitcode)
-        end
-    end
-
-    println(stderr, "Error: Unknown tool or script '$target'.")
-    println(stderr, "Run 'julia run.jl --list' to view available catalog entries.")
-    exit(1)
+    println(
+        "Add dependencies with: julia --project=$name -e 'using Pkg; Pkg.add(\"PackageName\")'",
+    )
+    println("Run with:              julia run.jl $name")
 end
 
 function main(args::Vector{String} = ARGS)
+    threads = get(ENV, "JULIA_NUM_THREADS", "auto")
+    if length(args) >= 2 && args[1] == "--threads"
+        threads = args[2]
+        args = args[3:end]
+    end
     if isempty(args) || args[1] in ("-h", "--help", "help")
         print_help()
         return
     end
-
     action = args[1]
     if action in ("-l", "--list", "list")
         list_tools()
-        return
     elseif action in ("-n", "--new", "new")
-        if length(args) < 2
-            println(
-                stderr,
-                "Error: Missing tool name. Usage: julia run.jl --new <tool-name>",
-            )
-            exit(1)
-        end
+        length(args) >= 2 || (println(stderr, "Usage: julia run.jl --new <name>"); exit(1))
         scaffold_tool(args[2])
-        return
     else
-        dispatch(action, args[2:end])
+        dispatch(action, args[2:end], threads)
     end
 end
 

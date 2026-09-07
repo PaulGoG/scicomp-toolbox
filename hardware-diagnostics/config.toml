@@ -1,20 +1,30 @@
-# Configuration for Julia Hardware Diagnostics & High-Intensity Benchmark Suite
+# Configuration of the hardware-diagnostics tool
 
 [benchmark]
-mode = "standard"  # one of: "quick" | "standard" | "stress" | "custom"
 compute_engine = "both"  # one of: "both" | "ka" | "blas"
-problem_sizes = [1024, 2048]  # list of positive integers (N × N matrix dimension)
-trials = 3  # integer in [1, 50] (measurement repetitions per test point)
-target_types = ["Float16", "Float32", "Float64", "Int8", "Int16", "Int32", "Int64"]  # subset of supported Julia numeric types
+problem_sizes = [1024, 2048]  # positive integers, N of the N × N operands; CLI presets replace this list
+target_types = ["Float16", "Float32", "Float64", "Int32", "Int64"]  # subset of: Float16 | Float32 | Float64 | ComplexF32 | ComplexF64 | Int8 | Int16 | Int32 | Int64
+seed = 20260907  # integer >= 0; seeds the operand generator
+
+[sampling]
+min_sampling_time_s = 0.5  # float > 0 [s]; sampling continues until this budget and min_samples are both met
+min_samples = 3  # integer >= 1
+max_samples = 30  # integer in [min_samples, 10000]
+max_point_seconds = 60.0  # float > 0 [s]; a point whose predicted single evaluation exceeds this is skipped
+
+[hardware]
 run_cpu = true  # boolean
-run_gpu = true  # boolean
-gpu_backend = "auto"  # one of: "auto" | "all" | "oneapi" | "cuda" | "amdgpu" | "metal"
+gpu_backend = "auto"  # one of: "none" | "auto" | "oneapi" | "cuda" | "amdgpu" | "metal"
+thread_sweep_ceiling = "physical"  # one of: "physical" | "logical"
+verify_kernels = true  # boolean; cross-engine equality check before benchmarking
+verification_size = 64  # integer in [8, 1024]
 
 [safety]
-memory_safety_fraction = 0.75  # float in (0.0, 0.95] (fraction of available memory ceiling)
+memory_safety_fraction = 0.75  # float in (0.0, 0.95]; usable fraction of free host memory or of device memory
 
 [output]
 export_csv = true  # boolean
 export_metadata = true  # boolean
-output_directory = "."  # destination path string
+output_directory = "data"  # path; a relative path resolves against the tool directory
 log_to_file = true  # boolean
+record_hostname = true  # boolean

@@ -1,147 +1,197 @@
-# Hardware Diagnostics & High-Intensity Benchmark Suite
+# hardware-diagnostics
 
-Platform introspection, hardware capability profiling, and heterogeneous compute benchmarking suite for Julia.
-
-## Directory Structure
+Host and accelerator introspection with a dual-GEMM throughput benchmark. One operation,
+D = A·B + A·C on dense N × N operands, is executed through two engines on every
+available device: a portable KernelAbstractions kernel and `LinearAlgebra.mul!`, which
+reaches the BLAS-class library of the device (OpenBLAS or MKL on the host; oneMKL,
+cuBLAS, rocBLAS or Metal Performance Shaders on accelerators). The package
+`HardwareDiagnostics` implements the tool; GPU backends attach through package
+extensions.
 
 ```
 hardware-diagnostics/
-├── activate.jl         # Pure-Julia silent environment activator
-├── config.toml         # TOML runtime configuration and safety parameters
-├── hardware-diag.jl    # Self-contained diagnostic and benchmarking executable
-├── Manifest.toml       # Pinned dependency lockfile
-├── Project.toml        # Isolated package dependencies & compat bounds
-├── README.md           # Documentation and operational manual
+├── activate.jl                        # environment activation
+├── config.toml                        # parameters, validated on load
+├── hardware-diagnostics.jl            # entry point
+├── Manifest.toml                      # pinned dependencies (KernelAbstractions and stdlib)
+├── Project.toml                       # package, weak dependencies and extensions
+├── README.md
+├── ext/
+│   ├── HardwareDiagnosticsAMDGPUExt.jl
+│   ├── HardwareDiagnosticsCUDAExt.jl
+│   ├── HardwareDiagnosticsMetalExt.jl
+│   └── HardwareDiagnosticsoneAPIExt.jl
+├── src/
+│   ├── HardwareDiagnostics.jl         # module, exports
+│   ├── Backends.jl                    # backend registry, accelerator loading and labels
+│   ├── Formatting.jl                  # bytes, durations, throughputs
+│   ├── Kernels.jl                     # the operation on both engines, operands, verification
+│   ├── Sampling.jl                    # time-budgeted sampling, min/median/MAD
+│   ├── Config.jl                      # TOML schema, constraints, command line
+│   ├── Host.jl                        # CPU topology, thread sweep, host report
+│   ├── Reporting.jl                   # console and log sinks, progress line
+│   ├── Benchmark.jl                   # the three benchmark stages
+│   ├── Export.jl                      # CSV dataset, TOML sidecar, collision-free paths
+│   └── Driver.jl                      # orchestration
 └── test/
-    └── runtests.jl     # Unit test suite (61 assertions across utilities, config, and CPU kernels)
+    ├── Project.toml                   # Aqua, ExplicitImports, JET, Test
+    └── runtests.jl
 ```
 
-## Overview
+## Measurement
 
-The suite profiles host system hardware and benchmarks dual General Matrix Multiply-Accumulate (GEMM) operations across host CPU threads and attached GPU accelerators:
+**Operation and operation count.** Both engines perform the same arithmetic: two
+accumulating products, `D = A·B` then `D += A·C`. The kernel accumulates
+`A[i,k]·B[k,j]` and `A[i,k]·C[k,j]` separately in its inner loop; the library path
+issues two `mul!` calls. Every point is credited with the nominal count 4N³ (16N³ for
+complex element types), so the throughput ratio between engines compares equal work.
+The kernel is a plain triple loop without tiling or local memory, so its ratio to the
+vendor library measures the gap between a portable naive kernel and a tuned library,
+not compiler quality.
 
-$$\mathbf{D} \leftarrow \mathbf{A}\mathbf{B} + \mathbf{A}\mathbf{C} = \mathbf{A}(\mathbf{B} + \mathbf{C})$$
+**Verification.** Before benchmarking, both engines run on the same operands of size
+`verification_size` for every element type on every device, and the results are
+compared: relative deviation at most 8·√eps(T) for floating-point types, exact equality
+for integers. A deviation above tolerance aborts the run. Element types the library
+cannot multiply on a device are reported as unverifiable and fail as individual points.
 
-Each test evaluation executes $4N^3$ arithmetic operations ($2N^3$ floating-point or integer operations per matrix product) using pre-allocated buffers to achieve zero runtime heap allocations in benchmark loops.
+**Sampling.** Each point is evaluated once for compilation and first touch, then
+repeatedly until at least `min_samples` evaluations have consumed `min_sampling_time_s`
+seconds, at most `max_samples` times. The dataset records the minimum, the median and
+the median absolute deviation; throughput is reported from the minimum (peak) and from
+the median. Before a point runs, its single-evaluation time is predicted from the
+previous problem size of the same series by cubic extrapolation and the point is skipped
+when the prediction exceeds `max_point_seconds`. Points whose four operands exceed
+`memory_safety_fraction` of the free host memory (or of the device memory, or one operand
+above the device's maximum allocation) are skipped.
 
-### Architecture-Agnostic Computing with `KernelAbstractions.jl`
+**Integer operands.** Integer entries are drawn from 1:4, so an entry of D is bounded by
+32N. The configuration is rejected when this bound exceeds `typemax(T)` for any
+configured size: `Int8` is therefore unusable and `Int16` requires N ≤ 1023. Integer
+points through `mul!` run on the generic fallback of LinearAlgebra (host) or GPUArrays
+(device), as the `library` column states; `Float16` on the host likewise.
 
-The benchmark suite implements a completely backend-agnostic computational kernel using `KernelAbstractions.jl`:
+**Stages.**
 
-```julia
-@kernel function gemm_accum_kernel!(D, @Const(A), @Const(B), @Const(C), N)
-    i, j = @index(Global, NTuple)
-    acc = zero(eltype(D))
-    for k in 1:N
-        @inbounds acc += A[i, k] * (B[k, j] + C[k, j])
-    end
-    @inbounds D[i, j] = acc
-end
-```
+1. *CPU thread scaling*: Float32 through the library engine over the thread counts of
+   the sweep, powers of two up to the ceiling plus the ceiling itself. The default
+   ceiling is the physical core count read from `/proc/cpuinfo` (Linux; the logical count
+   elsewhere). With `thread_sweep_ceiling = "logical"` the sweep continues to the logical
+   thread count, and points above the physical count are marked (`*` in the report,
+   `exceeds_physical_cores` in the dataset) because they oversubscribe hyper-threads.
+   Speedup S(t) = t₁/t_t and parallel efficiency E(t) = S(t)/t refer to the one-thread
+   point of the same size.
+2. *CPU element types*: every configured type, the library engine at one thread and at
+   the sweep ceiling, the kernel engine on the Julia thread pool. The pool size is fixed
+   at process start (`julia run.jl --threads N ...`) and recorded in `julia_threads`.
+3. *Accelerators*: every functional device, both engines, with speedups against the CPU
+   library points at one thread and at the sweep ceiling.
 
-This single kernel definition is compiled natively across all supported hardware backends without any architecture-specific branching:
+## Accelerator backends
 
-| Target Platform | Accelerator Package | KernelAbstractions Backend | Vendor BLAS Engine |
-| :--- | :--- | :--- | :--- |
-| **Host CPU** | `Base.Threads` | `KernelAbstractions.CPU()` | OpenBLAS / MKL (`LinearAlgebra.mul!`) |
-| **Intel Arc / Data Center** | `oneAPI.jl` | `oneAPI.oneAPIBackend()` | Intel oneMKL (`oneArray`) |
-| **NVIDIA CUDA** | `CUDA.jl` | `CUDA.CUDABackend()` | NVIDIA cuBLAS (`CuArray`) |
-| **AMD ROCm / HIP** | `AMDGPU.jl` | `AMDGPU.ROCBackend()` | AMD rocBLAS (`ROCArray`) |
-| **Apple Silicon Metal** | `Metal.jl` | `Metal.MetalBackend()` | Metal Performance Shaders (`MtlArray`) |
-
-### Dual Compute Engines (`--engine both | ka | blas`)
-
-1. **`KernelAbstractions` (`ka`)**: Pure portable Julia kernels compiled via LLVM/SPIR-V/PTX/MetalIR across CPU and GPU backends. Particularly effective for integer arithmetic (`Int8`, `Int16`) and custom mathematical structures.
-2. **`VendorBLAS` (`blas`)**: Hardware vendor assembly-tuned libraries (`oneMKL`, `cuBLAS`, `rocBLAS`, `MPS`, `OpenBLAS`).
-3. **`both` (default)**: Evaluates both engines side-by-side, providing compiler efficiency ratios ($\eta = \text{GFLOPS}_{\text{KA}} / \text{GFLOPS}_{\text{BLAS}} \times 100\%$) and cross-device speedup metrics.
-
-### Key Capabilities
-
-- **Deep Hardware Discovery**:
-  - **CPU**: Topology, physical cores, logical threads, instantaneous clock rates, Linux vector instruction sets (`fma`, `avx`, `avx2`, `sse4_2`), threadpool distribution, system RAM, and linear algebra engine (`LBTConfig`, ILP64/LP64).
-  - **GPU**: Device identification, compute units (EUs, SMs, or CUs), concurrent hardware thread capacity, clock frequency, VRAM / unified memory capacity, maximum buffer allocation limits, timer resolution, and driver/toolkit versions.
-  - **KernelAbstractions.jl**: Active abstraction backend mappings (`oneAPIBackend`, `CUDABackend`, `ROCBackend`, `MetalBackend`).
-- **In-Place GEMM Kernels**: Pre-allocated device and host buffers eliminate garbage collector latency and memory reallocation overhead.
-- **CPU Parallel Scaling**: Evaluates scaling across powers of 2 up to maximum logical threads, computing speedup factor $S(t) = t_1 / t_t$ and parallel efficiency $E(t) = S(t) / t$.
-- **Multi-Precision & Multi-Type Evaluation**: Evaluates `Float16`, `Float32`, `Float64`, `Int8`, `Int16`, `Int32`, and `Int64` on CPU and GPU.
-- **Memory Safety Guard**: Pre-flight memory footprint check prevents out-of-memory terminations by skipping configurations that exceed a specified fraction of available RAM or GPU buffer limits.
-- **Structured Multi-Format Exports**: Emits formatted human-readable `.log` reports, tidy `.csv` datasets for downstream analysis, and structured `.toml` metadata recording platform provenance.
-
-## Command-Line Usage
+`Project.toml` lists `CUDA`, `AMDGPU`, `Metal` and `oneAPI` as weak dependencies. Install
+the package matching the hardware into the default environment, for example
 
 ```bash
-# Display help and options
-julia --project=. hardware-diag.jl --help
-
-# Fast diagnostic run (dimensions: 512, 1024 | 2 trials)
-julia --project=. hardware-diag.jl --quick
-
-# Standard benchmark (dimensions: 1024, 2048 | 3 trials) [default]
-julia --project=. hardware-diag.jl
-
-# Exhaustive stress test (dimensions: 1024, 2048, 4096 | 5 trials)
-julia --project=. hardware-diag.jl --stress
-
-# Select compute engine
-julia --project=. hardware-diag.jl --engine ka         # Pure KernelAbstractions.jl native kernels
-julia --project=. hardware-diag.jl --engine blas       # Vendor-optimized BLAS libraries
-julia --project=. hardware-diag.jl --engine both       # Benchmark both side-by-side [default]
-
-# Select specific GPU accelerator backend
-julia --project=. hardware-diag.jl --gpu-backend oneapi
-julia --project=. hardware-diag.jl --gpu-backend cuda
-julia --project=. hardware-diag.jl --gpu-backend amdgpu
-julia --project=. hardware-diag.jl --gpu-backend metal
-julia --project=. hardware-diag.jl --gpu-backend all
-
-# Custom problem dimensions and repetitions
-julia --project=. hardware-diag.jl --sizes 512,1024,2048 --trials 3
-
-# Target specific numeric data types
-julia --project=. hardware-diag.jl --types Float32,Float64
-
-# Isolate execution target
-julia --project=. hardware-diag.jl --cpu-only
-julia --project=. hardware-diag.jl --gpu-only
-
-# Specify external configuration file
-julia --project=. hardware-diag.jl --config config.toml
+julia -e 'using Pkg; Pkg.add("oneAPI")'
 ```
 
-## Running the Unit Test Suite
+The entry point loads the packages selected by `gpu_backend` when they are present in
+the load path (`auto` tries every backend applicable to the operating system), the
+corresponding extension registers a device probe, and functional devices enter the run.
+A backend requested by name that is missing or not functional produces a warning and
+the run continues on the remaining devices. Because the GPU package comes from the
+default environment, its version is not pinned by this tool's manifest; the provenance
+sidecar records the package's `versioninfo` output for that reason.
+
+| Backend | Package | Status |
+| :--- | :--- | :--- |
+| Intel oneAPI (Level Zero) | `oneAPI` | run on an Intel Arc integrated GPU (Core Ultra 7 155H) |
+| NVIDIA CUDA | `CUDA` | written against the documented API, not run on hardware |
+| AMD ROCm (HIP) | `AMDGPU` | written against the documented API, not run on hardware |
+| Apple Metal | `Metal` | written against the documented API, not run on hardware |
+
+## Usage
 
 ```bash
-julia --project=. test/runtests.jl
+julia run.jl hardware-diagnostics --help
+julia run.jl hardware-diagnostics                              # sizes of config.toml, all engines, auto backend
+julia run.jl hardware-diagnostics --quick --cpu-only           # N = 512, 1024 on the host
+julia run.jl hardware-diagnostics --stress --gpu-backend oneapi
+julia run.jl hardware-diagnostics --sizes 512,1024,2048 --types Float32,Float64 --engine ka
+julia run.jl hardware-diagnostics --threads-ceiling logical    # expose hyper-thread oversubscription
+julia run.jl hardware-diagnostics --min-time 2 --max-samples 100 --seed 1
+julia run.jl hardware-diagnostics --config other.toml --out-dir /scratch/runs --no-hostname
+julia --project=hardware-diagnostics hardware-diagnostics/hardware-diagnostics.jl --quick   # without the dispatcher
 ```
 
-## Configuration (`config.toml`)
+Presets set the problem sizes only (`--quick`: 512, 1024; `--standard`: 1024, 2048;
+`--stress`: 1024, 2048, 4096); every other parameter comes from the configuration file
+and the remaining options.
 
-Parameters can be specified via `config.toml` in the script directory or passed via `--config`:
+## Configuration
+
+`config.toml` next to the entry point is read by default; `--config FILE` replaces it and
+the command-line options apply on top. Unknown keys are rejected.
 
 ```toml
 [benchmark]
-mode = "standard"  # one of: "quick" | "standard" | "stress" | "custom"
 compute_engine = "both"  # one of: "both" | "ka" | "blas"
-problem_sizes = [1024, 2048]  # list of positive integers (N × N matrix dimension)
-trials = 3  # integer in [1, 50] (measurement repetitions per test point)
-target_types = ["Float16", "Float32", "Float64", "Int8", "Int16", "Int32", "Int64"]  # subset of supported Julia numeric types
+problem_sizes = [1024, 2048]  # positive integers, N of the N × N operands; CLI presets replace this list
+target_types = ["Float16", "Float32", "Float64", "Int32", "Int64"]  # subset of: Float16 | Float32 | Float64 | ComplexF32 | ComplexF64 | Int8 | Int16 | Int32 | Int64
+seed = 20260907  # integer >= 0; seeds the operand generator
+
+[sampling]
+min_sampling_time_s = 0.5  # float > 0 [s]; sampling continues until this budget and min_samples are both met
+min_samples = 3  # integer >= 1
+max_samples = 30  # integer in [min_samples, 10000]
+max_point_seconds = 60.0  # float > 0 [s]; a point whose predicted single evaluation exceeds this is skipped
+
+[hardware]
 run_cpu = true  # boolean
-run_gpu = true  # boolean
-gpu_backend = "auto"  # one of: "auto" | "all" | "oneapi" | "cuda" | "amdgpu" | "metal"
+gpu_backend = "auto"  # one of: "none" | "auto" | "oneapi" | "cuda" | "amdgpu" | "metal"
+thread_sweep_ceiling = "physical"  # one of: "physical" | "logical"
+verify_kernels = true  # boolean; cross-engine equality check before benchmarking
+verification_size = 64  # integer in [8, 1024]
 
 [safety]
-memory_safety_fraction = 0.75  # float in (0.0, 0.95] (fraction of available memory ceiling)
+memory_safety_fraction = 0.75  # float in (0.0, 0.95]; usable fraction of free host memory or of device memory
 
 [output]
 export_csv = true  # boolean
 export_metadata = true  # boolean
-output_directory = "."  # destination path string
+output_directory = "data"  # path; a relative path resolves against the tool directory
 log_to_file = true  # boolean
+record_hostname = true  # boolean
 ```
 
-## Output Files
+## Outputs
 
-Each execution creates timestamped provenance-backed artifacts:
-- `hardware_benchmark_<timestamp>.log`: Detailed formatted text report containing system topology, GPU discovery details, thread scaling tables, side-by-side engine metrics, and speedup ratios.
-- `hardware_benchmark_<timestamp>.csv`: Tidy tabular dataset with columns: `device_type,backend,kernel_engine,device_name,data_type,matrix_dim,num_threads,total_ops,min_time_ms,median_time_ms,mean_time_ms,std_time_ms,jitter_pct,throughput_gflops,speedup_vs_1t,parallel_efficiency_pct,speedup_vs_cpu_1t,speedup_vs_cpu_maxt`.
-- `hardware_benchmark_<timestamp>.toml`: Structured machine-readable provenance metadata (Julia version, commit, BLAS engine, KernelAbstractions version, hardware topology, GPU driver/hardware specs, and run configuration).
+Each run writes three files named `hardware_benchmark_<timestamp>.*` into the output
+directory; an existing file is never overwritten (`#1`, `#2`, ... suffixes).
+
+- `.log`: the report as printed to the console, without progress line or escape
+  sequences: host and accelerator sections, verification, the three stages, summary.
+- `.csv`: one row per point with the columns `device_type, backend, engine, library,
+  device_name, data_type, matrix_dim, julia_threads, blas_threads,
+  exceeds_physical_cores, nominal_ops, samples, min_time_ms, median_time_ms,
+  mad_time_ms, dispersion_pct, throughput_gops, throughput_median_gops, speedup_vs_1t,
+  parallel_efficiency_pct, speedup_vs_cpu_1t, speedup_vs_cpu_maxt, status`. Undefined
+  quantities and inapplicable thread counts are empty cells; `status` is `ok`,
+  `skipped: <reason>` or `failed: <error>`.
+- `.toml`: provenance sidecar with the host fingerprint (CPU model, physical and logical
+  counts, thread pools, BLAS library, memory, ISA flags, Julia and KernelAbstractions
+  versions, toolbox commit), the effective configuration and the accelerator inventory
+  including the GPU package's `versioninfo` report.
+
+## Tests
+
+```bash
+julia test.jl hardware-diagnostics
+julia --project=hardware-diagnostics -e 'using Pkg; Pkg.test()'
+```
+
+The suite runs Aqua, ExplicitImports and JET on the package, then unit tests of the
+kernels (against `A*B + A*C`), the sampling rule, the configuration constraints, the
+command line, the host topology, the backend registry, the three stages at N = 32 and an
+end-to-end run into a temporary directory.

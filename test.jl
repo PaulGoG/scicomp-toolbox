@@ -1,105 +1,115 @@
 #!/usr/bin/env julia
-# ==============================================================================
-# test.jl — Global Test Runner for Scientific Computing Workbench
-# ==============================================================================
-# Dynamically discovers and runs unit test suites across all sub-environments.
-# Ensures each sub-environment is tested in isolation with its own Project.toml.
-# ==============================================================================
+# test.jl — global test runner. Discovers every sub-environment with test/runtests.jl,
+# instantiates it, and runs its suite in an isolated child process. Package
+# environments (Project.toml with name and uuid plus src/<Name>.jl) run through
+# Pkg.test, which honors test/Project.toml; plain environments run the script directly.
+#
+#   julia test.jl            all suites
+#   julia test.jl <tool>     one suite
 
-using Printf
+using Printf: @printf
+using TOML: TOML
 
 const REPO_ROOT = @__DIR__
-const EXCLUDED_DIRS =
-    Set(["test", ".git", ".github", "paper", "notes", "context", "standalone"])
+const NON_TOOL_ENVIRONMENTS = Set(["formatter"])
 
-struct TestResult
+struct SuiteResult
     name::String
     passed::Bool
     duration_s::Float64
     exit_code::Int
 end
 
-function discover_test_suites(target_filter::Union{String, Nothing} = nothing)
-    suites = Pair{String, String}[]
-    for item in readdir(REPO_ROOT)
-        item in EXCLUDED_DIRS && continue
-        if target_filter !== nothing && item != target_filter
-            continue
-        end
-        test_file = joinpath(REPO_ROOT, item, "test", "runtests.jl")
-        if isfile(test_file)
-            push!(suites, item => test_file)
-        end
+"""
+    is_package(dir::String) -> Bool
+
+Whether the environment in `dir` is a package (named project with a source module).
+"""
+function is_package(dir::String)
+    project = TOML.parsefile(joinpath(dir, "Project.toml"))
+    (haskey(project, "name") && haskey(project, "uuid")) || return false
+    return isfile(joinpath(dir, "src", project["name"] * ".jl"))
+end
+
+"""
+    discover_test_suites(target::Union{String, Nothing}) -> Vector{String}
+
+Names of the sub-environments that ship `test/runtests.jl`, optionally restricted to
+`target`.
+"""
+function discover_test_suites(target::Union{String, Nothing} = nothing)
+    suites = String[]
+    for item in sort(readdir(REPO_ROOT))
+        startswith(item, ".") && continue
+        item in NON_TOOL_ENVIRONMENTS && continue
+        target !== nothing && item != target && continue
+        dir = joinpath(REPO_ROOT, item)
+        isfile(joinpath(dir, "Project.toml")) || continue
+        isfile(joinpath(dir, "test", "runtests.jl")) || continue
+        push!(suites, item)
     end
     return suites
 end
 
-function run_all_tests(args::Vector{String} = ARGS)
+"""
+    run_suite(name::String) -> SuiteResult
+
+Instantiate the environment `name` and run its tests in a child process.
+"""
+function run_suite(name::String)
+    dir = joinpath(REPO_ROOT, name)
+    julia = `$(Base.julia_cmd()) --startup-file=no --project=$dir`
+    println("\n>>> $name")
+    t_start = time()
+    instantiate =
+        run(ignorestatus(`$julia -e 'using Pkg; Pkg.instantiate(; io = devnull)'`))
+    if instantiate.exitcode != 0
+        println(stderr, "<<< $name: instantiation failed (exit $(instantiate.exitcode))")
+        return SuiteResult(name, false, time() - t_start, instantiate.exitcode)
+    end
+    cmd =
+        is_package(dir) ? `$julia -e 'using Pkg; Pkg.test()'` :
+        `$julia $(joinpath(dir, "test", "runtests.jl"))`
+    process = run(ignorestatus(cmd))
+    elapsed = time() - t_start
+    passed = process.exitcode == 0
+    @printf(
+        "<<< %s: %s (%.1f s)\n",
+        name,
+        passed ? "passed" : "FAILED (exit $(process.exitcode))",
+        elapsed
+    )
+    return SuiteResult(name, passed, elapsed, process.exitcode)
+end
+
+function main(args::Vector{String} = ARGS)
     target = isempty(args) ? nothing : args[1]
     suites = discover_test_suites(target)
-
     if isempty(suites)
         if target !== nothing
-            println(stderr, "Error: No test suite found for target '$target'.")
+            println(stderr, "No test suite found for '$target'.")
             exit(1)
-        else
-            println("No test suites discovered in repository.")
-            exit(0)
         end
+        println("No test suites discovered.")
+        return
     end
+    println("Discovered $(length(suites)) test suite(s): ", join(suites, ", "))
+    results = [run_suite(name) for name in suites]
 
-    println("="^80)
-    println(" Scientific Computing Workbench — Global Test Suite")
-    println(" Discovered $(length(suites)) test suite(s)")
-    println("="^80)
-
-    results = TestResult[]
-
-    for (name, test_path) in suites
-        env_dir = joinpath(REPO_ROOT, name)
-        println("\n>>> Running Test Suite: [$name]")
-        println("    Environment: ", relpath(env_dir, REPO_ROOT))
-        println("    Test Script: ", relpath(test_path, REPO_ROOT))
-        println("-"^80)
-
-        t_start = time()
-        cmd = `$(Base.julia_cmd()) --project=$env_dir $test_path`
-        process = Base.run(ignorestatus(cmd))
-        t_elapsed = time() - t_start
-        passed = (process.exitcode == 0)
-
-        push!(results, TestResult(name, passed, t_elapsed, process.exitcode))
-        status_str = passed ? "PASSED" : "FAILED (exit $(process.exitcode))"
-        println("-"^80)
-        @printf("<<< Finished [%s]: %s (%.2f s)\n", name, status_str, t_elapsed)
-    end
-
-    # Summary table
-    println("\n" * "="^80)
-    println(" Global Test Summary")
-    println("="^80)
-    @printf(" %-28s │ %-10s │ %-12s\n", "Sub-Environment", "Status", "Duration")
-    println("─"^30 * "┼" * "─"^12 * "┼" * "─"^14)
-
-    all_passed = true
+    println("\nSummary")
+    @printf("  %-28s %-8s %10s\n", "suite", "status", "duration")
     for r in results
-        status_display = r.passed ? "✓ PASS" : "✗ FAIL"
-        @printf(" %-28s │ %-10s │ %8.2f s\n", r.name, status_display, r.duration_s)
-        if !r.passed
-            all_passed = false
-        end
+        @printf(
+            "  %-28s %-8s %8.1f s\n",
+            r.name,
+            r.passed ? "passed" : "FAILED",
+            r.duration_s
+        )
     end
-    println("="^80)
-
-    if all_passed
-        println("✓ All $(length(results)) test suite(s) passed successfully.")
-        exit(0)
-    else
-        println(stderr, "✖ Some test suites failed.")
-        exit(1)
-    end
+    all(r -> r.passed, results) || exit(1)
+    return nothing
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    run_all_tests(ARGS)
+    main(ARGS)
 end
