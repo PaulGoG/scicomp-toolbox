@@ -1,50 +1,45 @@
 #!/usr/bin/env julia
-# ==============================================================================
-# check.jl — Pre-Commit Code Quality & Verification Runner
-# ==============================================================================
-# 1. Formats all repository source code against .JuliaFormatter.toml.
-# 2. Executes global test runner across all isolated sub-environments.
-# ==============================================================================
-
-using Printf
+# check.jl — pre-commit verification. Formats the repository with the pinned
+# formatter environment (formatter/), then runs the global test runner.
+#
+#   julia check.jl            format in place, then test
+#   julia check.jl --check    fail on formatting differences instead of applying them
 
 const REPO_ROOT = @__DIR__
 
-function main()
-    println("="^80)
-    println(" Scientific Computing Workbench — Quality Assurance Check")
-    println("="^80)
+function run_step(label::String, cmd::Cmd)
+    println("\n[$label]")
+    process = run(ignorestatus(cmd))
+    if process.exitcode != 0
+        println(stderr, "$label failed (exit $(process.exitcode)).")
+        exit(process.exitcode)
+    end
+    return nothing
+end
 
-    # 1. Code Formatting
-    println("\n[Step 1/2] Verifying & Applying Code Formatting (JuliaFormatter.jl)...")
-    format_cmd = `$(Base.julia_cmd()) --startup-file=no -e '
+function main(args::Vector{String} = ARGS)
+    check_only = "--check" in args
+    formatter_dir = joinpath(REPO_ROOT, "formatter")
+    format_program = """
         using Pkg
-        Pkg.activate(temp=true; io=devnull)
-        Pkg.add("JuliaFormatter"; io=devnull)
+        Pkg.activate(raw"$formatter_dir"; io = devnull)
+        Pkg.instantiate(; io = devnull)
         using JuliaFormatter
-        is_formatted = format(".", overwrite=true)
-        println("  • JuliaFormatter applied successfully.")
-    '`
-    fmt_proc = Base.run(ignorestatus(format_cmd))
-    if fmt_proc.exitcode != 0
-        println(stderr, "✖ Code formatting failed.")
-        exit(fmt_proc.exitcode)
-    end
-
-    # 2. Test Execution
-    println("\n[Step 2/2] Running Global Test Suite across Sub-Environments...")
-    test_script = joinpath(REPO_ROOT, "test.jl")
-    test_proc = Base.run(ignorestatus(`$(Base.julia_cmd()) $test_script`))
-    if test_proc.exitcode != 0
-        println(stderr, "✖ Global tests failed.")
-        exit(test_proc.exitcode)
-    end
-
-    println("\n" * "="^80)
-    println("✓ All Quality Assurance Checks Passed Cleanly.")
-    println("="^80)
+        formatted = format(raw"$REPO_ROOT"; overwrite = $(!check_only))
+        if $(check_only) && !formatted
+            println(stderr, "Formatting differences found; run `julia check.jl` to apply them.")
+            exit(1)
+        end
+        println(formatted ? "Formatting clean." : "Formatting applied.")
+        """
+    run_step("Formatting", `$(Base.julia_cmd()) --startup-file=no -e $format_program`)
+    run_step(
+        "Tests",
+        `$(Base.julia_cmd()) --startup-file=no $(joinpath(REPO_ROOT, "test.jl"))`,
+    )
+    println("\nAll checks passed.")
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    main()
+    main(ARGS)
 end
