@@ -16,6 +16,7 @@ scicomp-toolbox/
 │       ├── ci.yml                 # test suites, standalone and dispatcher smoke runs
 │       └── format.yml             # JuliaFormatter gate using formatter/
 ├── .JuliaFormatter.toml           # formatting rules
+├── CHANGELOG.md
 ├── LICENSE                        # MIT
 ├── README.md
 ├── check.jl                       # pre-commit: format with formatter/, then test.jl
@@ -25,15 +26,23 @@ scicomp-toolbox/
 │   └── activate.jl
 ├── standalone/                    # tier 2: single-file scripts on the standard library
 │   └── sysinfo.jl                 # host and runtime introspection
-└── hardware-diagnostics/          # tier 1: HardwareDiagnostics package with GPU extensions
+├── hardware-diagnostics/          # tier 1: HardwareDiagnostics package with GPU extensions
+│   ├── activate.jl
+│   ├── config.toml
+│   ├── hardware-diagnostics.jl    # entry point
+│   ├── Manifest.toml
+│   ├── Project.toml
+│   ├── README.md
+│   ├── ext/                       # HardwareDiagnostics{CUDA,AMDGPU,Metal,oneAPI}Ext
+│   ├── src/
+│   └── test/
+└── plot-benchmarks/               # tier 1: figures from hardware-diagnostics datasets
     ├── activate.jl
     ├── config.toml
-    ├── hardware-diagnostics.jl    # entry point
+    ├── plot-benchmarks.jl         # entry point
     ├── Manifest.toml
     ├── Project.toml
     ├── README.md
-    ├── ext/                       # HardwareDiagnostics{CUDA,AMDGPU,Metal,oneAPI}Ext
-    ├── src/
     └── test/
 ```
 
@@ -63,6 +72,7 @@ load path (see `hardware-diagnostics/README.md`).
 julia run.jl --list                                     # catalog
 julia run.jl sysinfo                                    # standalone script
 julia run.jl hardware-diagnostics --quick --cpu-only    # tool; arguments are forwarded
+julia run.jl plot-benchmarks --format png               # figures from the newest dataset
 julia run.jl --threads 8 hardware-diagnostics           # Julia threads of the child process
 julia run.jl --new <name>                               # scaffold a tier 1 tool
 julia test.jl                                           # every test suite
@@ -88,7 +98,8 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 | Tool | Tier | Purpose | Entry point |
 | :--- | :--- | :--- | :--- |
 | [`sysinfo`](standalone/sysinfo.jl) | 2 | CPU topology (physical and logical), memory, thread pools, BLAS library, repository revision | `standalone/sysinfo.jl` |
-| [`hardware-diagnostics`](hardware-diagnostics/) | 1 | Host and accelerator introspection; dual-GEMM throughput through a KernelAbstractions kernel and the vendor library, with thread scaling and cross-engine verification | `hardware-diagnostics/hardware-diagnostics.jl` |
+| [`hardware-diagnostics`](hardware-diagnostics/) | 1 | Host and accelerator introspection; dual-GEMM throughput through the vendor library and two KernelAbstractions kernels (naive, tiled), with thread scaling and cross-engine verification | `hardware-diagnostics/hardware-diagnostics.jl` |
+| [`plot-benchmarks`](plot-benchmarks/) | 1 | Thread-scaling and throughput figures (CairoMakie) from hardware-diagnostics datasets | `plot-benchmarks/plot-benchmarks.jl` |
 
 ## Status
 
@@ -97,12 +108,14 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 | Dispatcher, test runner, formatting gate | in use; exercised by CI on Julia 1 (current stable), Ubuntu |
 | `sysinfo` | in use |
 | `hardware-diagnostics`, CPU path | tested (unit tests, static QA with Aqua, JET and ExplicitImports, end-to-end run) |
-| `hardware-diagnostics`, oneAPI extension | run on an Intel Arc integrated GPU (Meteor Lake) |
+| `hardware-diagnostics`, oneAPI extension | run on an Intel Arc integrated GPU (Meteor Lake) with all three engines |
 | `hardware-diagnostics`, CUDA, AMDGPU and Metal extensions | written against the documented package APIs, not run on hardware |
+| `plot-benchmarks` | tested on a synthetic dataset; figures inspected on a CPU + oneAPI dataset |
 
 ## Conventions
 
-Run outputs go to `<tool>/data/` and are ignored by git, as are `plots/`, logs, CSV and
-binary data files. Tool and formatter manifests are committed; test manifests are not.
-Commits follow Conventional Commits. Formatting is enforced with the JuliaFormatter
-version pinned in `formatter/Manifest.toml`.
+Run outputs go to `<tool>/data/` and figures to `<tool>/plots/`; both are ignored by git,
+as are logs, CSV and binary data files. Tool and formatter manifests are committed; test
+manifests are not. Commits follow Conventional Commits and `CHANGELOG.md` records
+notable changes. Formatting is enforced with the JuliaFormatter version pinned in
+`formatter/Manifest.toml`.
