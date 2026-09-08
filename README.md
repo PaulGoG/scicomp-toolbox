@@ -2,11 +2,27 @@
 
 [![CI](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/ci.yml/badge.svg)](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/ci.yml)
 [![Format](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/format.yml/badge.svg)](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/format.yml)
+[![Aqua QA](https://raw.githubusercontent.com/JuliaTesting/Aqua.jl/master/badge.svg)](https://github.com/JuliaTesting/Aqua.jl)
+[![JET](https://img.shields.io/badge/%F0%9F%9B%A9%EF%B8%8F_tested_with-JET.jl-233f9a)](https://github.com/aviatesk/JET.jl)
+[![Code style: JuliaFormatter](https://img.shields.io/badge/code%20style-JuliaFormatter-informational)](https://github.com/domluna/JuliaFormatter.jl)
+[![Julia](https://img.shields.io/badge/Julia-1.12-9558B2?logo=julia&logoColor=white)](https://julialang.org)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey?logo=linux&logoColor=white)](https://www.kernel.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Scientific scripting workbench in Julia. It hosts standalone utilities and self-contained
 tools that do not warrant a package of their own, behind one dispatcher, one test runner
 and one formatting gate.
+
+![Dual-GEMM throughput per element type on a CPU and an integrated GPU, by engine](assets/throughput.png)
+
+Output of `hardware-diagnostics` drawn by `plot-benchmarks`: the same operation,
+D = A·B + A·C at N = 512, executed by the vendor library and by two portable kernels on
+the host and on an integrated GPU. Reproduce it with
+
+```bash
+julia run.jl hardware-diagnostics --sizes 512 --types Float32,Float64,Int32
+julia run.jl plot-benchmarks
+```
 
 ```
 scicomp-toolbox/
@@ -20,6 +36,7 @@ scicomp-toolbox/
 ├── LICENSE                        # MIT
 ├── README.md
 ├── check.jl                       # pre-commit: format with formatter/, then test.jl
+├── assets/                        # figures used by this README
 ├── run.jl                         # dispatcher: list, run and scaffold tools
 ├── test.jl                        # global test runner
 ├── formatter/                     # pinned JuliaFormatter environment (Project + Manifest)
