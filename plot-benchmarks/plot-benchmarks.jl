@@ -197,23 +197,25 @@ darker(color) = RGBAf(0.65 * color.r, 0.65 * color.g, 0.65 * color.b, color.alph
 """
     value_label(x::Real) -> String
 
-Three significant digits without exponent notation (`1130`, `212`, `94.3`, `3.46`).
+Three significant digits without exponent notation (`1130`, `212`, `94.3`, `3.46`,
+`0.42`, `0.0042`).
 """
 function value_label(x::Real)
     x >= 100 && return @sprintf("%.0f", round(x; sigdigits = 3))
     x >= 10 && return @sprintf("%.1f", x)
-    return @sprintf("%.2f", x)
+    x >= 1 && return @sprintf("%.2f", x)
+    return @sprintf("%.3g", x)
 end
 
 """
     decade_ticks(low::Real, high::Real) -> Tuple{Vector{Float64}, Vector}
 
-Tick positions at the powers of ten inside `[low, high]`, labelled as plain decimals up
-to 10⁴ and as powers of ten beyond.
+Tick positions at the powers of ten inside `[low, high]`, labelled as plain decimals
+from 10⁻³ to 10⁴ and as powers of ten beyond.
 """
 function decade_ticks(low::Real, high::Real)
     exponents = ceil(Int, log10(low)):floor(Int, log10(high))
-    labels = Any[k <= 4 ? @sprintf("%d", 10^k) : L"10^{%$k}" for k in exponents]
+    labels = Any[-3 <= k <= 4 ? @sprintf("%g", 10.0^k) : L"10^{%$k}" for k in exponents]
     return (Float64[10.0^k for k in exponents], labels)
 end
 

@@ -148,6 +148,16 @@ end
         @test value_label(212.4) == "212"
         @test value_label(45.67) == "45.7"
         @test value_label(3.456) == "3.46"
+        @test value_label(0.42) == "0.42"
+        @test value_label(0.0042) == "0.0042"
+        positions, labels = decade_ticks(0.05, 2000.0)
+        @test positions ≈ [0.1, 1.0, 10.0, 100.0, 1000.0]
+        @test labels == ["0.1", "1", "10", "100", "1000"]
+        @test string(last(decade_ticks(1.0, 1e6)[2])) == "\$10^{6}\$"
+        slow = synthetic_dataset()
+        slow[(slow.device_type .== "CPU") .& (slow.engine .== "ka"), :throughput_gops] .=
+            0.4
+        @test throughput_figure(slow, settings) isa Figure
         @test throughput_figure(df[df.device_type .== "GPU", :], settings) isa Figure
     end
 
