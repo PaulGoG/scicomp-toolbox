@@ -111,9 +111,9 @@ sidecar records the package's `versioninfo` output for that reason.
 | Backend | Package | Status |
 | :--- | :--- | :--- |
 | Intel oneAPI (Level Zero) | `oneAPI` | run on an Intel Arc integrated GPU (Core Ultra 7 155H) |
-| NVIDIA CUDA | `CUDA` | written against the documented API, not run on hardware |
-| AMD ROCm (HIP) | `AMDGPU` | written against the documented API, not run on hardware |
-| Apple Metal | `Metal` | written against the documented API, not run on hardware |
+| NVIDIA CUDA | `CUDA` | names checked against the CUDA.jl 6.3 sources, not run on hardware |
+| AMD ROCm (HIP) | `AMDGPU` | names checked against the AMDGPU.jl 2.8 sources, not run on hardware |
+| Apple Metal | `Metal` | names checked against the Metal.jl 1.11 sources, not run on hardware |
 
 ## Usage
 
@@ -176,8 +176,9 @@ directory; an existing file is never overwritten (`#1`, `#2`, ... suffixes).
 
 - `.log`: the report as printed to the console, without progress line or escape
   sequences: host and accelerator sections, verification, the three stages, summary.
-- `.csv`: one row per point with the columns `device_type, backend, engine, library,
-  device_name, data_type, matrix_dim, julia_threads, blas_threads,
+- `.csv`: one row per planned point, skipped and failed points included, with the
+  columns `device_type, backend, engine, library, device_name, data_type, matrix_dim,
+  julia_threads, blas_threads,
   exceeds_physical_cores, nominal_ops, samples, min_time_ms, median_time_ms,
   mad_time_ms, dispersion_pct, throughput_gops, throughput_median_gops, speedup_vs_1t,
   parallel_efficiency_pct, speedup_vs_cpu_1t, speedup_vs_cpu_maxt, status`. Undefined

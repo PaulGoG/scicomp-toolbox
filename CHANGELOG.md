@@ -25,6 +25,11 @@ a change belongs to it.
   remains unexecuted on hardware).
 - Manifests resolved with Julia 1.13.0, the current stable release; the compat floor
   stays at 1.12.
+- `hardware-diagnostics` datasets: a CPU problem size or element type skipped for memory
+  or predicted time is recorded at every engine and thread count of its stage, so every
+  planned point has a row and the CSV is a complete grid.
+- `plot-benchmarks`: the headroom above the throughput bars grows with the axis span, so
+  value labels stay clear of the panel caption on wide ranges.
 
 ## 2026-09-07
 

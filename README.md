@@ -127,7 +127,7 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 | `sysinfo` | in use |
 | `hardware-diagnostics`, CPU path | tested (unit tests, static QA with Aqua, JET and ExplicitImports, end-to-end run) |
 | `hardware-diagnostics`, oneAPI extension | run on an Intel Arc integrated GPU (Meteor Lake) with all three engines |
-| `hardware-diagnostics`, CUDA, AMDGPU and Metal extensions | written against the documented package APIs, not run on hardware |
+| `hardware-diagnostics`, CUDA, AMDGPU and Metal extensions | names checked against the current package sources (CUDA.jl 6.3, AMDGPU.jl 2.8, Metal.jl 1.11), not run on hardware |
 | `plot-benchmarks` | tested on a synthetic dataset; figures inspected on a CPU + oneAPI dataset |
 
 ## Conventions
