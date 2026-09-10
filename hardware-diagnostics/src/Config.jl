@@ -419,6 +419,9 @@ function parse_cli_args(args::AbstractVector{<:AbstractString}, base_dir::Abstra
         name => get!(raw, name, Dict{String, Any}()) for
         name in ("benchmark", "sampling", "hardware", "safety", "output")
     )
+    for (name, table) in tables
+        table isa AbstractDict || throw(ArgumentError("[$name] must be a table"))
+    end
     preset = "config"
 
     i = 1

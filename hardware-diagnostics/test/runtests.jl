@@ -172,11 +172,8 @@ end
         end
         for T in (Float16, Float32, Float64, ComplexF32, ComplexF64, Int32, Int64)
             results = verify_engines(cpu, T, 64, rng)
-
             @test length(results) == 2
-
             @test [r.engine for r in results] == [:ka, :ka_tiled]
-
             @test all(r -> r.passed && r.max_relative_deviation <= r.tolerance, results)
         end
         @test HD.Kernels.verification_tolerance(Int32) == 0.0
@@ -410,6 +407,12 @@ end
             @test alternative.output_directory == "data"
             @test parse_cli_args(["--config", path, "--quick"], TOOL_DIR).problem_sizes ==
                   [512, 1024]
+            write(path, "benchmark = 3\n")
+            @test_throws ArgumentError parse_cli_args(["--config", path], TOOL_DIR)
+            @test_throws ArgumentError parse_cli_args(
+                ["--config", path, "--quick"],
+                TOOL_DIR,
+            )
         end
         @test occursin("--gpu-backend", usage_text())
         result, text = capture_stdout(() -> configure(["--help"], TOOL_DIR))
