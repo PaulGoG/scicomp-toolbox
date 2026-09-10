@@ -380,7 +380,8 @@ end
 Float32 dual GEMM through the BLAS engine over the thread counts of
 [`thread_sweep`](@ref); speedup and parallel efficiency refer to the one-thread point of
 the same problem size. Sizes beyond the memory budget, or predicted to exceed
-`max_point_seconds` from the previous size's one-thread time, are skipped.
+`max_point_seconds` from the previous size's one-thread time, are skipped and recorded
+as such at every thread count.
 """
 function run_cpu_thread_sweep(
     config::BenchmarkConfig,
@@ -413,21 +414,25 @@ function run_cpu_thread_sweep(
             if reason !== nothing
                 advance!(reporter, "CPU sweep N = $N", length(counts))
                 emit(reporter, "  N = $N: $reason")
-                push!(
-                    records,
-                    BenchmarkRecord(;
-                        device_type = "CPU",
-                        backend = "CPU",
-                        engine = "blas",
-                        library,
-                        device_name = host.cpu_model,
-                        data_type = string(T),
-                        matrix_dim = N,
-                        julia_threads = host.julia_threads,
-                        nominal_ops = nominal_ops(T, N),
-                        status = reason,
-                    ),
-                )
+                for t in counts
+                    push!(
+                        records,
+                        BenchmarkRecord(;
+                            device_type = "CPU",
+                            backend = "CPU",
+                            engine = "blas",
+                            library,
+                            device_name = host.cpu_model,
+                            data_type = string(T),
+                            matrix_dim = N,
+                            julia_threads = host.julia_threads,
+                            blas_threads = t,
+                            exceeds_physical_cores = t > host.physical_cores,
+                            nominal_ops = nominal_ops(T, N),
+                            status = reason,
+                        ),
+                    )
+                end
                 continue
             end
             emit(reporter, "")
@@ -482,7 +487,9 @@ end
     run_cpu_multitype(config, host, rng, reporter) -> Vector{BenchmarkRecord}
 
 Every configured element type on the host: the BLAS engine at the reference thread
-counts and the KernelAbstractions engine on the Julia thread pool.
+counts and the KernelAbstractions engines on the Julia thread pool. A type whose
+operands exceed the memory budget is recorded as skipped at every engine and thread
+count of the stage.
 """
 function run_cpu_multitype(
     config::BenchmarkConfig,
@@ -514,20 +521,26 @@ function run_cpu_multitype(
                 if reason !== nothing
                     advance!(reporter, "CPU $T N = $N", steps_per_type)
                     for engine in engines
-                        record = BenchmarkRecord(;
-                            device_type = "CPU",
-                            backend = "CPU",
-                            engine = string(engine),
-                            library = library_label(engine, cpu, T),
-                            device_name = host.cpu_model,
-                            data_type = string(T),
-                            matrix_dim = N,
-                            julia_threads = host.julia_threads,
-                            nominal_ops = nominal_ops(T, N),
-                            status = reason,
-                        )
-                        push!(records, record)
-                        emit(reporter, type_row(record))
+                        threads = engine === :blas ? blas_counts : [host.julia_threads]
+                        for t in threads
+                            record = BenchmarkRecord(;
+                                device_type = "CPU",
+                                backend = "CPU",
+                                engine = string(engine),
+                                library = library_label(engine, cpu, T),
+                                device_name = host.cpu_model,
+                                data_type = string(T),
+                                matrix_dim = N,
+                                julia_threads = host.julia_threads,
+                                blas_threads = engine === :blas ? t : 0,
+                                exceeds_physical_cores = engine === :blas &&
+                                                         t > host.physical_cores,
+                                nominal_ops = nominal_ops(T, N),
+                                status = reason,
+                            )
+                            push!(records, record)
+                            emit(reporter, type_row(record))
+                        end
                     end
                     continue
                 end

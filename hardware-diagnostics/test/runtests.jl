@@ -523,15 +523,24 @@ end
         @test reporter.progress.current == total
 
         tight = validate_config(altered(d -> d["safety"]["memory_safety_fraction"] = 1e-12))
-        skipped = run_cpu_thread_sweep(
-            tight,
-            host,
-            rng,
-            Reporter(IO[devnull]; total = 1, console = devnull),
+        tight_reporter = Reporter(
+            IO[devnull];
+            total = HD.Benchmark.plan_total_steps(tight, host, 0),
+            console = devnull,
         )
-        @test length(skipped) == 1
-        @test startswith(skipped[1].status, "skipped")
-        @test skipped[1].samples == 0 && isnan(skipped[1].min_time_ms)
+        skipped = run_cpu_thread_sweep(tight, host, rng, tight_reporter)
+        @test length(skipped) == length(counts)
+        @test [r.blas_threads for r in skipped] == counts
+        @test all(
+            r -> startswith(r.status, "skipped") && r.samples == 0 && isnan(r.min_time_ms),
+            skipped,
+        )
+        skipped_types = run_cpu_multitype(tight, host, rng, tight_reporter)
+        @test length(skipped_types) == 2 * (length(reference) + 2)
+        @test all(r -> startswith(r.status, "skipped"), skipped_types)
+        @test [r.blas_threads for r in skipped_types if r.engine == "blas"] == vcat(reference, reference)
+        @test all(r -> r.blas_threads == 0, filter(r -> r.engine != "blas", skipped_types))
+        @test tight_reporter.progress.current == tight_reporter.progress.total
         @test HD.Benchmark.prediction_reason((32, 2.0), 64, 10.0) !== nothing
         @test HD.Benchmark.prediction_reason((32, 1.0), 64, 10.0) === nothing
         @test HD.Benchmark.prediction_reason(nothing, 64, 10.0) === nothing
