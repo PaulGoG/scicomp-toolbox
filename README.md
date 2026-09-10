@@ -5,7 +5,7 @@
 [![Aqua QA](https://raw.githubusercontent.com/JuliaTesting/Aqua.jl/master/badge.svg)](https://github.com/JuliaTesting/Aqua.jl)
 [![JET](https://img.shields.io/badge/%F0%9F%9B%A9%EF%B8%8F_tested_with-JET.jl-233f9a)](https://github.com/aviatesk/JET.jl)
 [![Code style: JuliaFormatter](https://img.shields.io/badge/code%20style-JuliaFormatter-informational)](https://github.com/domluna/JuliaFormatter.jl)
-[![Julia](https://img.shields.io/badge/Julia-1.12-9558B2?logo=julia&logoColor=white)](https://julialang.org)
+[![Julia](https://img.shields.io/badge/Julia-1.12%2B-9558B2?logo=julia&logoColor=white)](https://julialang.org)
 [![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey?logo=linux&logoColor=white)](https://www.kernel.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -77,8 +77,9 @@ instantiation.
 
 ## Requirements
 
-Julia 1.12 through [juliaup](https://github.com/JuliaLang/juliaup); the declared floor of
-every environment is `julia = "1.12"`. Linux is the primary platform. GPU packages
+Julia 1.12 or later through [juliaup](https://github.com/JuliaLang/juliaup); the declared
+floor of every environment is `julia = "1.12"` and the committed manifests are resolved
+with the current stable release (1.13). Linux is the primary platform. GPU packages
 (`CUDA`, `AMDGPU`, `Metal`, `oneAPI`) are not dependencies of any tool: install the one
 matching the hardware into the default environment and the tool resolves it through the
 load path (see `hardware-diagnostics/README.md`).

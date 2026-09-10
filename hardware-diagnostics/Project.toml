@@ -1,6 +1,6 @@
 name = "HardwareDiagnostics"
 uuid = "8fc1e2c1-14a9-422c-9178-779f4911c2d9"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Paul-Adrian Gogîță <gogitapaul@yahoo.ro>"]
 
 [deps]
@@ -26,7 +26,7 @@ HardwareDiagnosticsoneAPIExt = "oneAPI"
 
 [compat]
 AMDGPU = "1, 2"
-CUDA = "5"
+CUDA = "5, 6"
 Dates = "1"
 KernelAbstractions = "0.9"
 LinearAlgebra = "1"

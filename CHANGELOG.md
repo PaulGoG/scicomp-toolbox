@@ -4,6 +4,28 @@ Notable changes to the workbench. The repository itself carries no version; the
 `HardwareDiagnostics` package follows semantic versioning and its version is given where
 a change belongs to it.
 
+## 2026-09-10
+
+### Fixed
+
+- `plot-benchmarks`: the throughput axis raised a `DomainError` when a measured point fell
+  below 1 GOP/s, because decade tick labels were built from an integer power of ten; ticks
+  below unity now read `0.1`, `0.01`, `0.001`, and bar labels keep three significant
+  digits below 1.
+- `hardware-diagnostics`: a configuration file whose section is not a table
+  (`benchmark = 3`) combined with a command-line override is rejected with an
+  `ArgumentError` naming the section instead of a `MethodError`.
+- The tool scaffold (`run.jl --new`) declares `TOML`, which the generated entry point
+  uses, in the generated `Project.toml`.
+
+### Changed
+
+- `HardwareDiagnostics` 0.3.1: the `CUDA` weak dependency admits the 6.x series; every
+  name the extension uses was checked against the CUDA.jl 6.3 sources (the extension
+  remains unexecuted on hardware).
+- Manifests resolved with Julia 1.13.0, the current stable release; the compat floor
+  stays at 1.12.
+
 ## 2026-09-07
 
 ### Added
