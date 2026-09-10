@@ -402,7 +402,10 @@ function throughput_figure(
     y_low = minimum(rows.throughput_gops)
     y_high = maximum(rows.throughput_gops)
     fill_to = 10.0^(floor(log10(y_low)) - 0.3)
-    y_top = y_high * 8
+    # headroom for the value labels and the panel caption, at least 0.9 decades and
+    # growing with the axis span so that wide ranges keep the caption clear
+    span = log10(y_high) - log10(fill_to)
+    y_top = y_high * 10.0^max(log10(8), 0.18 * span)
     ticks = decade_ticks(fill_to, y_top)
 
     fig = Figure(size = figure_size(settings.width_mm, 0.22 + 0.3 * length(devices)))
