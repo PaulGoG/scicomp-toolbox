@@ -172,8 +172,10 @@ function scaffold_tool(name::String)
         joinpath(dir, "Project.toml"),
         """
 [deps]
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 
 [compat]
+TOML = "1"
 julia = "1.12"
 """,
     )
@@ -276,6 +278,7 @@ $name/
 ├── activate.jl      # environment activation
 ├── config.toml      # parameters (validated on load)
 ├── $name.jl         # entry point
+├── Manifest.toml    # pinned dependencies, written by the first run
 ├── Project.toml     # dependencies and compat bounds
 ├── README.md
 └── test/
@@ -299,6 +302,7 @@ julia test.jl $name                      # tests
         "Add dependencies with: julia --project=$name -e 'using Pkg; Pkg.add(\"PackageName\")'",
     )
     println("Run with:              julia run.jl $name")
+    println("The first run writes $name/Manifest.toml; commit it together with the tool.")
 end
 
 function main(args::Vector{String} = ARGS)
