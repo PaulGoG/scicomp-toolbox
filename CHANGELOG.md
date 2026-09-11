@@ -4,6 +4,43 @@ Notable changes to the workbench. The repository itself carries no version; the
 `HardwareDiagnostics` package follows semantic versioning and its version is given where
 a change belongs to it.
 
+## 2026-09-11
+
+### Added
+
+- `reference-runs/`: the datasets of six `--stress` runs on six accelerators of three
+  vendors, one directory per device, with a README recording the hardware, the shared
+  configuration and the outcome of each run. They are the provenance of the README
+  figures and the evidence behind the backend status table.
+- `plot-benchmarks --compare [DIR]`: two cross-host figures from every dataset under a
+  directory. The accelerator figure stacks the throughput of the library engine, the
+  throughput of the tiled KernelAbstractions kernel and their ratio on one element-type
+  axis, marking the types served by the generic fallback; the host figure draws the
+  speedup and the parallel efficiency of every host processor on one thread axis. Devices
+  are pooled across datasets and the size is the largest one measured in all of them.
+- `plot-benchmarks --px-per-unit N`, overriding `[figures].px_per_unit` for one export,
+  and `[input].comparison_directory` in the configuration.
+
+### Changed
+
+- The CUDA, AMDGPU and oneAPI extensions of `HardwareDiagnostics` have now run on
+  hardware: four NVIDIA devices, one AMD device and one Intel integrated GPU, all three
+  engines each, cross-engine verification passed (120 comparisons). Only the Metal
+  extension remains unexecuted.
+- The README figures are the two cross-host figures; the single-host throughput figure
+  they replace is no longer shipped, the per-dataset figures being the tool's default
+  output.
+- `plot-benchmarks`: decade tick labels keep one style per axis — plain decimals while
+  the axis stays between 10⁻³ and 10⁴, powers of ten otherwise, with 10⁰ and 10¹ always
+  written `1` and `10`; ranges narrower than three decades add the 2× and 5×
+  intermediates.
+
+### Fixed
+
+- `plot-benchmarks`: the ideal reference S = t of the thread-scaling figure was drawn as
+  a two-point segment on a logarithmic thread axis, on which it is a chord and not the
+  reference; it is now sampled along the axis.
+
 ## 2026-09-10
 
 ### Fixed

@@ -110,10 +110,15 @@ sidecar records the package's `versioninfo` output for that reason.
 
 | Backend | Package | Status |
 | :--- | :--- | :--- |
+| NVIDIA CUDA | `CUDA` | run on an RTX 5090, an RTX 5070 Ti, an RTX 2080 Super Max-Q and a Tesla T4 |
+| AMD ROCm (HIP) | `AMDGPU` | run on a Radeon Pro W7900 |
 | Intel oneAPI (Level Zero) | `oneAPI` | run on an Intel Arc integrated GPU (Core Ultra 7 155H) |
-| NVIDIA CUDA | `CUDA` | names checked against the CUDA.jl 6.3 sources, not run on hardware |
-| AMD ROCm (HIP) | `AMDGPU` | names checked against the AMDGPU.jl 2.8 sources, not run on hardware |
 | Apple Metal | `Metal` | names checked against the Metal.jl 1.11 sources, not run on hardware |
+
+The three exercised backends ran `--stress` with all three engines and the five element
+types, and the cross-engine verification passed on every device. The datasets are in
+`reference-runs/`, whose README records the hardware, the configuration and the outcome
+of each run.
 
 ## Usage
 

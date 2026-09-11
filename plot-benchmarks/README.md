@@ -1,8 +1,9 @@
 # plot-benchmarks
 
-Publication figures from `hardware-diagnostics` datasets: the CPU thread-scaling sweep
-(speedup and parallel efficiency against BLAS thread count) and the throughput of every
-engine per element type and device.
+Publication figures from `hardware-diagnostics` datasets. From one dataset: the CPU
+thread-scaling sweep (speedup and parallel efficiency against BLAS thread count) and the
+throughput of every engine per element type and device. From several (`--compare`): the
+accelerators and the host processors of all of them, side by side.
 
 ```
 plot-benchmarks/
@@ -13,7 +14,7 @@ plot-benchmarks/
 ├── Project.toml
 ├── README.md
 └── test/
-    └── runtests.jl          # settings, discovery, figures on a synthetic dataset, rendering
+    └── runtests.jl          # settings, discovery, figures on synthetic datasets, rendering
 ```
 
 ## Usage
@@ -23,12 +24,15 @@ julia run.jl plot-benchmarks                                  # newest dataset o
 julia run.jl plot-benchmarks --input path/to/hardware_benchmark_<stamp>.csv
 julia run.jl plot-benchmarks --format png --out-dir /tmp/figures
 julia run.jl plot-benchmarks --size 1024                      # throughput figure at N = 1024
+julia run.jl plot-benchmarks --compare                        # every dataset under ../reference-runs
+julia run.jl plot-benchmarks --compare /scratch/runs --px-per-unit 3
 ```
 
 Figures are written to `plots/` (ignored by git) as `<dataset stem>_thread_scaling.<fmt>`
 and `<dataset stem>_throughput_N<N>.<fmt>`; the dataset stem carries the run timestamp,
-so each figure traces back to the dataset and its provenance sidecar. Existing files are
-never overwritten (`#1`, `#2`, ... suffixes).
+so each figure traces back to the dataset and its provenance sidecar. With `--compare`
+the names are `cross_host_accelerators_N<N>.<fmt>` and `cross_host_hosts_N<N>.<fmt>`.
+Existing files are never overwritten (`#1`, `#2`, ... suffixes).
 
 ## Figures
 
@@ -45,14 +49,34 @@ flop for floating-point types) on a logarithmic axis. On the CPU the library eng
 shown at its largest thread count within the physical cores; failed and skipped points
 are absent.
 
+**Accelerators across machines** (`--compare`). Three stacked panels sharing the
+element-type axis: the throughput of the library engine, the throughput of the tiled
+KernelAbstractions kernel, and their ratio against a parity line, one series per
+accelerator of the compared datasets. The two throughput panels share their limits, so
+the vertical distance between them is the gap the portable kernel has to close. Hollow
+markers in the library panel mark the element types the device has no vendor GEMM for,
+which `mul!` serves from the generic GPUArrays path.
+
+**Host processors across machines** (`--compare`). Speedup and parallel efficiency of the
+library engine against the BLAS thread count, one series per host processor, with the
+ideal references. Each series ends at the physical core count of its host.
+
+Both comparison figures are drawn at the largest problem size measured in every compared
+dataset, unless `--size` is given. Datasets are pooled by device: a processor or
+accelerator that appears in several of them contributes one series, taken from the first
+dataset that carries it.
+
 Exports are sized at the configured printed width (178 mm double column by default), at
-one point per unit for PDF and SVG and at `px_per_unit` pixels per point for PNG.
+one point per unit for PDF and SVG and at `px_per_unit` pixels per point for PNG
+(`--px-per-unit` overrides the configured value; the README figures of the repository are
+rendered at 3).
 
 ## Configuration
 
 ```toml
 [input]
 dataset_directory = "../hardware-diagnostics/data"  # path; relative to this tool; the newest hardware_benchmark_*.csv is used unless --input is given
+comparison_directory = "../reference-runs"  # path; relative to this tool; searched recursively for the datasets of --compare
 
 [figures]
 format = "pdf"  # one of: "pdf" | "png" | "svg"

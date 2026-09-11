@@ -12,6 +12,7 @@ hardware_benchmark_*
 *.png
 !**/test/fixtures/**
 !assets/**
+!reference-runs/**
 
 # test environments regenerate their manifests; tool and formatter manifests
 # are version-controlled
