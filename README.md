@@ -20,9 +20,10 @@ Output of `hardware-diagnostics` drawn by `plot-benchmarks`, pooled over the six
 six accelerators of three vendors, through the library path of each device and through
 one tiled KernelAbstractions kernel compiled for all of them from the same source. Where
 a tuned vendor GEMM exists the library keeps its lead — 4.6 to 5.5× at `Float32` on the
-five discrete cards, parity on the Intel integrated GPU — and at `Float64`, whose rate is
-capped by the hardware, the portable kernel comes within 15 % of it and passes it on both
-consumer NVIDIA cards. Where `mul!` has no vendor GEMM and falls back to the generic
+five discrete cards, parity on the Intel integrated GPU. At `Float64`, whose rate the
+hardware caps, the portable kernel comes within 15 % of the library on five of the six
+devices and passes it on both consumer NVIDIA cards; only rocBLAS on the W7900 keeps a
+factor two. Where `mul!` has no vendor GEMM and falls back to the generic
 GPUArrays path, which is every integer type and `Float16`, the portable kernel leads by
 1.05 to 8.1×.
 
