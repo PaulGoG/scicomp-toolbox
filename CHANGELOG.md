@@ -8,10 +8,13 @@ a change belongs to it.
 
 ### Added
 
-- `reference-runs/`: the datasets of six `--stress` runs on six accelerators of three
+- `reference-runs/`: the datasets of eight `--stress` runs on eight accelerators of four
   vendors, one directory per device, with a README recording the hardware, the shared
   configuration and the outcome of each run. They are the provenance of the README
-  figures and the evidence behind the backend status table.
+  figures and the evidence behind the backend status table. The Apple M4 is the first
+  arm64 host of the set and the only run produced off Linux.
+- `Backends.vendor_blas_types(backend)`: the element types whose `mul!` reaches the vendor
+  library, asked of the backend instead of read from one fixed set.
 - `plot-benchmarks --compare [DIR]`: two cross-host figures from every dataset under a
   directory. The accelerator figure stacks the throughput of the library engine, the
   throughput of the tiled KernelAbstractions kernel and their ratio on one element-type
@@ -23,10 +26,11 @@ a change belongs to it.
 
 ### Changed
 
-- The CUDA, AMDGPU and oneAPI extensions of `HardwareDiagnostics` have now run on
-  hardware: four NVIDIA devices, one AMD device and one Intel integrated GPU, all three
-  engines each, cross-engine verification passed (120 comparisons). Only the Metal
-  extension remains unexecuted.
+- Every GPU extension of `HardwareDiagnostics` has now run on hardware: four NVIDIA
+  devices, two AMD devices, one Intel integrated GPU and one Apple M4, all three engines
+  each. The cross-engine verification passed 158 comparisons with none failed; `Float64`
+  is absent on Metal, so the M4 contributes 18 of them rather than 20. No unexecuted
+  backend code remains.
 - The README figures are the two cross-host figures; the single-host throughput figure
   they replace is no longer shipped, the per-dataset figures being the tool's default
   output.
@@ -37,6 +41,17 @@ a change belongs to it.
 
 ### Fixed
 
+- `HardwareDiagnostics` 0.3.2: the library label of a benchmark point assumed that every
+  backend serves the BLAS element types and only those, which mislabels Metal twice over —
+  it dispatches `Float16` to an Apple GEMM and supports no `Float64` at all. Vendor
+  coverage is now a method on the backend, which the Metal extension overrides. The
+  `apple-m4` dataset predates the fix and still reads `GPUArrays generic` on its `Float16`
+  rows.
+- `plot-benchmarks`: an element type a device could not measure was joined by a straight
+  segment drawn across it, which reads as a measured point at the gap; lines now break
+  there. Beyond the seven hues of the palette an eighth device repeated the first one's
+  colour, so the marker and the line style vary once the palette wraps, and the grouped
+  legend takes one column per backend instead of overflowing the figure width.
 - `plot-benchmarks`: the ideal reference S = t of the thread-scaling figure was drawn as
   a two-point segment on a logarithmic thread axis, on which it is a chord and not the
   reference; it is now sampled along the axis.

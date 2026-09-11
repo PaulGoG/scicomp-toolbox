@@ -13,27 +13,34 @@ Scientific scripting workbench in Julia. It hosts standalone utilities and self-
 tools that do not warrant a package of their own, behind one dispatcher, one test runner
 and one formatting gate.
 
-![Dual-GEMM throughput per element type on six accelerators, by engine, with the ratio of the portable kernel to the library](assets/cross_host_accelerators_N4096.png)
+![Dual-GEMM throughput per element type on eight accelerators, by engine, with the ratio of the portable kernel to the library](assets/cross_host_accelerators_N4096.png)
 
-Output of `hardware-diagnostics` drawn by `plot-benchmarks`, pooled over the six runs in
+Output of `hardware-diagnostics` drawn by `plot-benchmarks`, pooled over the eight runs in
 [`reference-runs/`](reference-runs/): the same operation, D = A·B + A·C at N = 4096, on
-six accelerators of three vendors, through the library path of each device and through
-one tiled KernelAbstractions kernel compiled for all of them from the same source. Where
-a tuned vendor GEMM exists the library keeps its lead — 4.6 to 5.5× at `Float32` on the
-five discrete cards, parity on the Intel integrated GPU. At `Float64`, whose rate the
-hardware caps, the portable kernel comes within 15 % of the library on five of the six
-devices and passes it on both consumer NVIDIA cards; only rocBLAS on the W7900 keeps a
-factor two. Where `mul!` has no vendor GEMM and falls back to the generic
-GPUArrays path, which is every integer type and `Float16`, the portable kernel leads by
-1.05 to 8.1×.
+eight accelerators of four vendors, through the library path of each device and through
+one tiled KernelAbstractions kernel compiled for all of them from the same source. Where a
+tuned vendor GEMM exists the library keeps its lead — 3.9 to 5.6× at `Float32` on the six
+discrete cards. The two integrated GPUs bracket that range from both sides: Apple's MPS is
+9.9× ahead of the portable kernel, while on the Intel Arc oneMKL is 6 % *behind* it. At
+`Float64` the portable kernel comes within 15 % of the library on five of the seven
+devices that have it and passes it on both consumer NVIDIA cards, whose rate is fused off
+at 1/64; rocBLAS keeps a factor two on both AMD cards, and Metal carries no double
+precision at all, which is the gap in the M4 line. Where `mul!` has no vendor GEMM and
+falls back to the generic GPUArrays path, the portable kernel leads by 1.06 to 8.1× on the
+seven devices whose fallback is genuinely generic. The M4 departs from that on both
+counts: its `Float16` point is no fallback at all — Metal routes half precision to an
+Apple GEMM, and the marker is open only because the dataset predates the label fix — while
+at `Int32` the GPUArrays path is the faster of the two.
 
-![Speedup and parallel efficiency of five host processors against the BLAS thread count](assets/cross_host_hosts_N4096.png)
+![Speedup and parallel efficiency of seven host processors against the BLAS thread count](assets/cross_host_hosts_N4096.png)
 
-The host side of the same six runs: five processors from six to 32 physical cores. Each
-series ends at the physical core count of its host, and the shape of its tail is the
-topology — the EPYC regresses past 16 threads across its four dies, while both hybrid
-Intel parts lose efficiency as soon as the sweep spreads past their performance cores
-(30 % at 16 threads for the i9-13900KS, 17 % at 16 for the Core Ultra 7 155H).
+The host side of the same eight runs: seven processors from six to 32 physical cores,
+x86_64 and arm64. Each series ends at the physical core count of its host, and the shape
+of its tail is the topology — the EPYC regresses past 16 threads across its four dies,
+while both hybrid Intel parts lose efficiency as soon as the sweep spreads past their
+performance cores (30 % at 16 threads for the i9-13900KS, 17 % at 16 for the Core Ultra 7
+155H). The M4 shows the same knee at its four performance cores, flattening to 45 % at 10
+threads as the sweep reaches the efficiency ones.
 
 ```bash
 julia run.jl hardware-diagnostics --stress                   # one machine
@@ -53,7 +60,7 @@ scicomp-toolbox/
 ├── README.md
 ├── check.jl                       # pre-commit: format with formatter/, then test.jl
 ├── assets/                        # figures used by this README
-├── reference-runs/                # datasets of the six validation runs, one per accelerator
+├── reference-runs/                # datasets of the eight validation runs, one per accelerator
 │   └── README.md                  # hardware, configuration and outcome of each run
 ├── run.jl                         # dispatcher: list, run and scaffold tools
 ├── test.jl                        # global test runner
@@ -97,7 +104,9 @@ instantiation.
 
 Julia 1.12 or later through [juliaup](https://github.com/JuliaLang/juliaup); the declared
 floor of every environment is `julia = "1.12"` and the committed manifests are resolved
-with the current stable release (1.13). Linux is the primary platform. GPU packages
+with the current stable release (1.13). Linux is the primary platform and the one CI
+covers; `hardware-diagnostics` has also been run on macOS/arm64, which is where the Metal
+backend was exercised. GPU packages
 (`CUDA`, `AMDGPU`, `Metal`, `oneAPI`) are not dependencies of any tool: install the one
 matching the hardware into the default environment and the tool resolves it through the
 load path (see `hardware-diagnostics/README.md`).
@@ -144,12 +153,12 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 | :--- | :--- |
 | Dispatcher, test runner, formatting gate | in use; exercised by CI on Julia 1 (current stable), Ubuntu |
 | `sysinfo` | in use |
-| `hardware-diagnostics`, CPU path | tested (unit tests, static QA with Aqua, JET and ExplicitImports, end-to-end run); five host processors in [`reference-runs/`](reference-runs/) |
+| `hardware-diagnostics`, CPU path | tested (unit tests, static QA with Aqua, JET and ExplicitImports, end-to-end run); seven host processors in [`reference-runs/`](reference-runs/), x86_64 and arm64 |
 | `hardware-diagnostics`, CUDA extension | run on four devices (RTX 5090, RTX 5070 Ti, RTX 2080 Super Max-Q, Tesla T4), all three engines, verification passed |
-| `hardware-diagnostics`, AMDGPU extension | run on a Radeon Pro W7900, all three engines, verification passed |
+| `hardware-diagnostics`, AMDGPU extension | run on two devices (Radeon Pro W7900, Radeon RX 7700 XT), all three engines, verification passed |
 | `hardware-diagnostics`, oneAPI extension | run on an Intel Arc integrated GPU (Meteor Lake), all three engines, verification passed |
-| `hardware-diagnostics`, Metal extension | names checked against the Metal.jl 1.11 sources, not run on hardware |
-| `plot-benchmarks` | tested on synthetic datasets; figures inspected on the six reference runs |
+| `hardware-diagnostics`, Metal extension | run on an Apple M4, all three engines, verification passed for the four element types Metal carries; `Float64` is refused per point |
+| `plot-benchmarks` | tested on synthetic datasets; figures inspected on the eight reference runs |
 
 ## Conventions
 

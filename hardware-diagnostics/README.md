@@ -111,14 +111,21 @@ sidecar records the package's `versioninfo` output for that reason.
 | Backend | Package | Status |
 | :--- | :--- | :--- |
 | NVIDIA CUDA | `CUDA` | run on an RTX 5090, an RTX 5070 Ti, an RTX 2080 Super Max-Q and a Tesla T4 |
-| AMD ROCm (HIP) | `AMDGPU` | run on a Radeon Pro W7900 |
+| AMD ROCm (HIP) | `AMDGPU` | run on a Radeon Pro W7900 and a Radeon RX 7700 XT |
 | Intel oneAPI (Level Zero) | `oneAPI` | run on an Intel Arc integrated GPU (Core Ultra 7 155H) |
-| Apple Metal | `Metal` | names checked against the Metal.jl 1.11 sources, not run on hardware |
+| Apple Metal | `Metal` | run on an Apple M4; `Float64` is unsupported by the API |
 
-The three exercised backends ran `--stress` with all three engines and the five element
-types, and the cross-engine verification passed on every device. The datasets are in
-`reference-runs/`, whose README records the hardware, the configuration and the outcome
+Every backend has now run `--stress` with all three engines, and the cross-engine
+verification passed on every device: 158 comparisons, none failed. All five element types
+were covered except on Metal, which carries no double precision — a `Float64` point there
+fails with the framework's own message and the remaining stages continue. The datasets are
+in `reference-runs/`, whose README records the hardware, the configuration and the outcome
 of each run.
+
+Which element types reach the vendor library is a property of the backend rather than of
+the type, so `Backends.vendor_blas_types` is a method the extensions override: Metal
+dispatches `Float16` to an Apple GEMM and has no `Float64` at all, while the BLAS-class
+backends follow `Float32`, `Float64`, `ComplexF32`, `ComplexF64`.
 
 ## Usage
 
