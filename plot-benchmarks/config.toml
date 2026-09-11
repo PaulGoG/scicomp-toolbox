@@ -2,6 +2,7 @@
 
 [input]
 dataset_directory = "../hardware-diagnostics/data"  # path; relative to this tool; the newest hardware_benchmark_*.csv is used unless --input is given
+comparison_directory = "../reference-runs"  # path; relative to this tool; searched recursively for the datasets of --compare
 
 [figures]
 format = "pdf"  # one of: "pdf" | "png" | "svg"
