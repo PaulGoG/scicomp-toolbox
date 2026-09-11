@@ -640,6 +640,47 @@ end
 is_generic_library(library) = occursin("generic", lowercase(String(library)))
 
 """
+Markers and line styles that separate series once the colour palette wraps. The Okabe-Ito
+palette carries seven hues, so a set of more than seven devices would otherwise draw two
+of them identically.
+"""
+const SERIES_MARKERS = (:circle, :rect, :utriangle)
+const SERIES_LINESTYLES = (:solid, :dash, :dot)
+
+"""
+    series_style(k::Integer) -> NamedTuple
+
+Colour, marker and line style of the `k`-th series. The first seven keep the palette
+order with a solid line and a round marker; beyond that the hue repeats but the marker
+and the line style change, so every series stays distinct and the figure survives
+grayscale.
+"""
+function series_style(k::Integer)
+    colors = Makie.wong_colors()
+    cycle = fld1(k, length(colors))
+    return (
+        color = colors[mod1(k, length(colors))],
+        marker = SERIES_MARKERS[mod1(cycle, length(SERIES_MARKERS))],
+        linestyle = SERIES_LINESTYLES[mod1(cycle, length(SERIES_LINESTYLES))],
+    )
+end
+
+"""
+    gapped(positions, values, n) -> Vector{Float64}
+
+`values` placed at their `positions` on a `1:n` axis, with `NaN` everywhere else. Makie
+breaks a line at `NaN`, so a device that could not measure an element type shows a gap
+instead of a segment interpolated across it.
+"""
+function gapped(positions, values, n::Integer)
+    padded = fill(NaN, n)
+    for (position, value) in zip(positions, values)
+        padded[Int(position)] = value
+    end
+    return padded
+end
+
+"""
     engine_series(panel::DataFrame, engine::AbstractString, types::Vector{String})
 
 Positions, throughputs and generic-fallback flags of one engine on one device, aligned
@@ -731,7 +772,6 @@ function accelerator_comparison_figure(
         Dict(key => rows[device_key.(eachrow(rows)) .== Ref(key), :] for key in devices)
     # descending peak throughput, so that the legend order follows the panels
     sort!(devices; by = key -> -maximum(panels[key].throughput_gops))
-    colors = Makie.wong_colors()
 
     fig = Figure(size = figure_size(settings.width_mm, 0.82))
     ticks = (1:length(types), types)
@@ -754,32 +794,47 @@ function accelerator_comparison_figure(
     labels = [Any[] for _ in backends]
     for (k, key) in enumerate(devices)
         panel = panels[key]
-        color = colors[mod1(k, length(colors))]
+        color, marker, linestyle = series_style(k)
         for (ax, engine) in ((ax_library, REFERENCE_ENGINE), (ax_portable, PORTABLE_ENGINE))
             positions, values, generic = engine_series(panel, engine, types)
             isempty(positions) && continue
             append!(throughputs, values)
-            lines!(ax, positions, values; color, linewidth = 1.2)
+            lines!(
+                ax,
+                1:length(types),
+                gapped(positions, values, length(types));
+                color,
+                linestyle,
+                linewidth = 1.2,
+            )
             marked_scatter!(
                 ax,
                 positions,
                 values,
                 engine == REFERENCE_ENGINE ? generic : falses(length(positions)),
-                color,
+                color;
+                marker,
             )
         end
         positions, values = ratio_series(panel, types)
         if !isempty(positions)
             append!(ratios, values)
-            lines!(ax_ratio, positions, values; color, linewidth = 1.2)
-            scatter!(ax_ratio, positions, values; color, markersize = 7)
+            lines!(
+                ax_ratio,
+                1:length(types),
+                gapped(positions, values, length(types));
+                color,
+                linestyle,
+                linewidth = 1.2,
+            )
+            scatter!(ax_ratio, positions, values; color, marker, markersize = 7)
         end
         group = findfirst(==(String(key[2])), backends)
         push!(
             elements[group],
             [
-                LineElement(; color, linewidth = 1.2),
-                MarkerElement(; color, marker = :circle, markersize = 7),
+                LineElement(; color, linestyle, linewidth = 1.2),
+                MarkerElement(; color, marker, markersize = 7),
             ],
         )
         push!(labels[group], drop_vendor(shorten_device_name(key[3])))
@@ -832,7 +887,9 @@ function accelerator_comparison_figure(
         labels,
         backends;
         orientation = :horizontal,
-        nbanks = 2,
+        # as many banks as the largest backend group holds, so every group is one column
+        # wide and the legend width follows the number of backends, not of devices
+        nbanks = maximum(length, labels),
         titleposition = :left,
         titlegap = 4,
         groupgap = 8,
@@ -877,7 +934,6 @@ function host_comparison_figure(
     # descending sweep ceiling, which orders the hosts by the parallelism they expose
     sort!(devices; by = key -> (-maximum(panels[key].blas_threads), key[3]))
     counts = sort(unique(Int.(rows.blas_threads)))
-    colors = Makie.wong_colors()
 
     fig = Figure(size = figure_size(settings.width_mm, 0.76))
     ticks = (counts, string.(counts))
@@ -908,22 +964,23 @@ function host_comparison_figure(
         efficiency = Float64.(panel.parallel_efficiency_pct)
         max_speedup = max(max_speedup, maximum(speedup))
         hollow |= any(panel.exceeds_physical_cores)
-        color = colors[mod1(k, length(colors))]
+        color, marker, linestyle = series_style(k)
         for (ax, values) in ((ax_speedup, speedup), (ax_efficiency, efficiency))
-            lines!(ax, threads, values; color, linewidth = 1.2)
+            lines!(ax, threads, values; color, linestyle, linewidth = 1.2)
             marked_scatter!(
                 ax,
                 threads,
                 values,
                 Vector{Bool}(panel.exceeds_physical_cores),
-                color,
+                color;
+                marker,
             )
         end
         push!(
             elements,
             [
-                LineElement(; color, linewidth = 1.2),
-                MarkerElement(; color, marker = :circle, markersize = 7),
+                LineElement(; color, linestyle, linewidth = 1.2),
+                MarkerElement(; color, marker, markersize = 7),
             ],
         )
         push!(labels, shorten_device_name(key[3]))
@@ -971,7 +1028,8 @@ function host_comparison_figure(
         elements,
         labels;
         orientation = :horizontal,
-        nbanks = 2,
+        # one more bank as hosts accumulate, so the row stays inside the figure width
+        nbanks = max(2, cld(length(labels), 5)),
         labelsize = 0.92 * settings.fontsize_pt,
         patchsize = (12.0f0, 8.0f0),
         colgap = 6,
