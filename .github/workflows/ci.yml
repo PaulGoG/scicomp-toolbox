@@ -36,8 +36,10 @@ jobs:
       - uses: julia-actions/cache@a7bed9df697e5d7309d68afe7542a87621a8b6c8 # v3.3.0
       - name: Test suites of every sub-environment
         run: julia --color=yes test.jl
-      - name: Standalone script smoke test
-        run: julia --color=yes run.jl sysinfo
+      - name: Standalone script smoke tests
+        run: |
+          julia --color=yes run.jl sysinfo
+          julia --color=yes run.jl workspace-audit --dirty-only
       - name: Dispatcher smoke test (CPU only, reduced sampling)
         run: >
           julia --color=yes run.jl hardware-diagnostics

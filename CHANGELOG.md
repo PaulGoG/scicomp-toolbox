@@ -8,6 +8,17 @@ a change belongs to it.
 
 ### Added
 
+- `workspace-audit` (tier 2): the git and artifact state of every project directory under
+  a workspace root in one command — branch, working-tree cleanliness, distance from the
+  upstream branch, stashes, untracked weight with the largest offenders, and
+  `*.backup.bundle` / `*.git.backup` artifacts with their age and whether they predate
+  `HEAD`. It only reads: no writes, no deletions, and no network unless `--fetch` is
+  passed, the distance otherwise coming from the remote-tracking refs already stored.
+  `--dirty-only` narrows the report to what needs attention.
+- A test environment for `standalone/`, so tier 2 scripts are no longer covered by the CI
+  smoke run alone. The global runner discovers it like any other suite; the scripts
+  themselves still run without instantiation. `sysinfo` gains coverage of its
+  `/proc/cpuinfo` parsing and its revision lookup.
 - `reference-runs/`: the datasets of eight `--stress` runs on eight accelerators of four
   vendors, one directory per device, with a README recording the hardware, the shared
   configuration and the outcome of each run. They are the provenance of the README

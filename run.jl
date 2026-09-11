@@ -12,8 +12,9 @@ using Printf: @printf
 
 const REPO_ROOT = @__DIR__
 const STANDALONE_DIR = joinpath(REPO_ROOT, "standalone")
-# directories holding a Project.toml that are environments but not tools
-const NON_TOOL_ENVIRONMENTS = Set(["formatter"])
+# directories holding a Project.toml that are environments but not tools: the pinned
+# formatter, and standalone/, whose Project.toml exists only so its scripts can be tested
+const NON_TOOL_ENVIRONMENTS = Set(["formatter", "standalone"])
 
 """
     find_subenvironments() -> Vector{Pair{String, String}}

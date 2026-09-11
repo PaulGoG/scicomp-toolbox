@@ -66,7 +66,11 @@ scicomp-toolbox/
 ├── formatter/                     # pinned JuliaFormatter environment (Project + Manifest)
 │   └── activate.jl
 ├── standalone/                    # tier 2: single-file scripts on the standard library
-│   └── sysinfo.jl                 # host and runtime introspection
+│   ├── Project.toml               # test environment only; the scripts run without it
+│   ├── Manifest.toml
+│   ├── sysinfo.jl                 # host and runtime introspection
+│   ├── workspace-audit.jl         # git and artifact state of a workspace
+│   └── test/
 ├── hardware-diagnostics/          # tier 1: HardwareDiagnostics package with GPU extensions
 │   ├── activate.jl
 │   ├── config.toml
@@ -97,7 +101,9 @@ the test runner handle both forms. Tools never share an environment, so their
 dependencies cannot conflict.
 
 A **tier 2 script** in `standalone/` relies on the standard library only and runs without
-instantiation.
+instantiation. The `Project.toml` beside them exists for their shared test suite in
+`standalone/test/`, which the global runner discovers like any other; running a script
+never needs it, and the dispatcher does not list `standalone/` as a tool.
 
 ## Requirements
 
@@ -115,6 +121,8 @@ load path (see `hardware-diagnostics/README.md`).
 ```bash
 julia run.jl --list                                     # catalog
 julia run.jl sysinfo                                    # standalone script
+julia run.jl workspace-audit                            # git state of the surrounding workspace
+julia run.jl workspace-audit ~/projects --dirty-only    # another root, only what needs attention
 julia run.jl hardware-diagnostics --quick --cpu-only    # tool; arguments are forwarded
 julia run.jl plot-benchmarks --format png               # figures from the newest dataset
 julia run.jl plot-benchmarks --compare                  # cross-host figures from reference-runs/
@@ -143,6 +151,7 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 | Tool | Tier | Purpose | Entry point |
 | :--- | :--- | :--- | :--- |
 | [`sysinfo`](standalone/sysinfo.jl) | 2 | CPU topology (physical and logical), memory, thread pools, BLAS library, repository revision | `standalone/sysinfo.jl` |
+| [`workspace-audit`](standalone/workspace-audit.jl) | 2 | Branch, working-tree state, distance from upstream, stashes, untracked weight and regenerable backup artifacts of every project under a workspace root | `standalone/workspace-audit.jl` |
 | [`hardware-diagnostics`](hardware-diagnostics/) | 1 | Host and accelerator introspection; dual-GEMM throughput through the vendor library and two KernelAbstractions kernels (naive, tiled), with thread scaling and cross-engine verification | `hardware-diagnostics/hardware-diagnostics.jl` |
 | [`plot-benchmarks`](plot-benchmarks/) | 1 | Thread-scaling and throughput figures (CairoMakie) from one hardware-diagnostics dataset, or across the machines of several (`--compare`) | `plot-benchmarks/plot-benchmarks.jl` |
 
@@ -151,7 +160,8 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 | Component | State |
 | :--- | :--- |
 | Dispatcher, test runner, formatting gate | in use; exercised by CI on Julia 1 (current stable), Ubuntu |
-| `sysinfo` | in use |
+| `sysinfo` | in use; parsing covered by the `standalone` suite |
+| `workspace-audit` | in use; read-only by construction, tested against repositories built in `mktempdir()` |
 | `hardware-diagnostics`, CPU path | tested (unit tests, static QA with Aqua, JET and ExplicitImports, end-to-end run); seven host processors in [`reference-runs/`](reference-runs/), x86_64 and arm64 |
 | `hardware-diagnostics`, CUDA extension | run on four devices (RTX 5090, RTX 5070 Ti, RTX 2080 Super Max-Q, Tesla T4), all three engines, verification passed |
 | `hardware-diagnostics`, AMDGPU extension | run on two devices (Radeon Pro W7900, Radeon RX 7700 XT), all three engines, verification passed |
@@ -164,6 +174,7 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 Run outputs go to `<tool>/data/` and figures to `<tool>/plots/`; both are ignored by git,
 as are logs, CSV and binary data files. The datasets under `reference-runs/` are the
 exception: they are committed, because the README figures and the backend validation rest
-on them. Tool and formatter manifests are committed; test manifests are not. Commits follow Conventional Commits and `CHANGELOG.md` records
+on them. Environment manifests are committed — tools, the formatter and `standalone/`;
+the manifests of `test/` subdirectories are not. Commits follow Conventional Commits and `CHANGELOG.md` records
 notable changes. Formatting is enforced with the JuliaFormatter version pinned in
 `formatter/Manifest.toml`.
