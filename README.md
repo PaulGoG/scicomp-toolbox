@@ -27,10 +27,9 @@ devices that have it and passes it on both consumer NVIDIA cards, whose rate is 
 at 1/64; rocBLAS keeps a factor two on both AMD cards, and Metal carries no double
 precision at all, which is the gap in the M4 line. Where `mul!` has no vendor GEMM and
 falls back to the generic GPUArrays path, the portable kernel leads by 1.06 to 8.1× on the
-seven devices whose fallback is genuinely generic. The M4 departs from that on both
-counts: its `Float16` point is no fallback at all — Metal routes half precision to an
-Apple GEMM, and the marker is open only because the dataset predates the label fix — while
-at `Int32` the GPUArrays path is the faster of the two.
+seven devices whose fallback is genuinely generic. The M4 is not one of them at `Float16`,
+which Metal routes to an Apple GEMM — the filled marker — and at `Int32`, where the
+fallback is real and beats the tiled kernel by 8 %, the only such case in the set.
 
 ![Speedup and parallel efficiency of seven host processors against the BLAS thread count](assets/cross_host_hosts_N4096.png)
 

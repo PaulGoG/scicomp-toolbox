@@ -44,9 +44,10 @@ a change belongs to it.
 - `HardwareDiagnostics` 0.3.2: the library label of a benchmark point assumed that every
   backend serves the BLAS element types and only those, which mislabels Metal twice over —
   it dispatches `Float16` to an Apple GEMM and supports no `Float64` at all. Vendor
-  coverage is now a method on the backend, which the Metal extension overrides. The
-  `apple-m4` dataset predates the fix and still reads `GPUArrays generic` on its `Float16`
-  rows.
+  coverage is now a method on the backend, which the Metal extension overrides. The three
+  affected fields of the `apple-m4` dataset were corrected to the value the fixed code
+  emits; the `library` column is a pure function of engine, backend and element type and
+  carries no measurement, so every other field of that file is unchanged.
 - `plot-benchmarks`: an element type a device could not measure was joined by a straight
   segment drawn across it, which reads as a measured point at the gap; lines now break
   there. Beyond the seven hues of the palette an eighth device repeated the first one's

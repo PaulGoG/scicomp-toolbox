@@ -77,12 +77,20 @@ defect of the tool:
   host contributes to the thread-scaling figure but not to the throughput panels above
   N = 1024.
 
-**Label caveat in `apple-m4`.** Its `Float16` rows name the library `GPUArrays generic`,
-which is wrong: `MPS_VALID_MATMUL_TYPES` and `MPSGRAPH_VALID_MATMUL_TYPES` both carry the
-`(Float16, Float16)` pair, so `mul!` reached an Apple GEMM, and the measured 3.45 TOP/s
-says so plainly. The tool decided vendor coverage from a fixed type set at the time of the
-run; `Backends.vendor_blas_types` now asks the backend instead. The dataset is left as it
-was produced, so the figure draws that point with an open marker.
+**One label was corrected in `apple-m4` after the run.** The three `Float16` rows of the
+Metal device were written `GPUArrays generic` by a defect in the version that produced
+them: vendor coverage came from one fixed type set that assumed every backend serves the
+BLAS types and only those. Metal does not — `MPS_VALID_MATMUL_TYPES` and
+`MPSGRAPH_VALID_MATMUL_TYPES` both carry the `(Float16, Float16)` pair, so `mul!` reached
+an Apple GEMM, as the measured 3.45 TOP/s says plainly. `Backends.vendor_blas_types` asks
+the backend since 0.3.2, and those three fields now read `Metal Performance Shaders`,
+exactly what the fixed code emits.
+
+The correction touches the `library` annotation and nothing else: the column is a pure
+function of engine, backend and element type, carrying no measurement. Every other field
+of the file, timings and throughputs included, is byte-identical to what the run wrote,
+and the untouched original is kept outside this repository with the run's `.toml` and
+`.log`.
 
 ## Figures
 
