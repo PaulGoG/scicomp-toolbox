@@ -16,6 +16,7 @@ export AcceleratorDevice,
     device_fingerprint,
     backend_label,
     vendor_blas_label,
+    vendor_blas_types,
     library_label,
     blas_library_label,
     ACCELERATOR_PACKAGES,
@@ -213,10 +214,21 @@ types it supports.
 vendor_blas_label(::CPU) = blas_library_label()
 
 """
-Element types for which `mul!` reaches the BLAS-class library; the remaining types run
+Element types for which `mul!` reaches the BLAS-class library on the host and on the
+accelerators whose vendor library follows the BLAS type set; the remaining types run
 through the generic fallbacks of LinearAlgebra (host) or GPUArrays (device).
 """
 const BLAS_ELEMENT_TYPES = (Float32, Float64, ComplexF32, ComplexF64)
+
+"""
+    vendor_blas_types(backend) -> Tuple
+
+Element types whose `mul!` reaches the vendor library of `backend`. The coverage is a
+property of the backend, not of the element type: Metal carries no `Float64` at all and
+routes `Float16` through Apple's own GEMM, so a backend whose library departs from
+[`BLAS_ELEMENT_TYPES`](@ref) overrides this method in its extension.
+"""
+vendor_blas_types(::KernelAbstractions.Backend) = BLAS_ELEMENT_TYPES
 
 """
     library_label(engine::Symbol, backend, ::Type{T}) -> String
@@ -231,7 +243,7 @@ function library_label(
 ) where {T}
     engine === :ka && return "KernelAbstractions naive"
     engine === :ka_tiled && return "KernelAbstractions tiled"
-    T in BLAS_ELEMENT_TYPES && return vendor_blas_label(backend)
+    T in vendor_blas_types(backend) && return vendor_blas_label(backend)
     return backend isa CPU ? "LinearAlgebra generic" : "GPUArrays generic"
 end
 

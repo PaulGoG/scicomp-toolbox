@@ -467,6 +467,9 @@ end
               HD.Backends.vendor_blas_label(CPU())
         @test HD.Backends.library_label(:blas, CPU(), Int32) == "LinearAlgebra generic"
         @test HD.Backends.library_label(:blas, CPU(), Float16) == "LinearAlgebra generic"
+        # vendor coverage is a backend property; the host follows the BLAS type set
+        @test HD.Backends.vendor_blas_types(CPU()) == HD.Backends.BLAS_ELEMENT_TYPES
+        @test Float16 ∉ HD.Backends.vendor_blas_types(CPU())
         @test HD.Backends.blas_vendor("libopenblas64_.so") == "OpenBLAS"
         @test HD.Backends.blas_vendor("libmkl_rt.so") == "MKL"
         @test HD.Backends.blas_vendor("libcustom.so") == "libcustom.so"
