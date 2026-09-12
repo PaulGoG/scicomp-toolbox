@@ -95,9 +95,15 @@ end
         @test parse_args(["--help"]).help
         @test parse_args(["/tmp/somewhere"]).root == "/tmp/somewhere"
         @test parse_args(["/tmp/a", "--fetch"]) ==
-              (; root = "/tmp/a", dirty_only = false, fetch = true, help = false)
+              (; root = "/tmp/a", dirty_only = false, fetch = true, depth = 2, help = false)
+        @test parse_args(String[]).depth == 2
+        @test parse_args(["--depth", "3"]).depth == 3
+        @test parse_args(["--depth=1"]).depth == 1
         @test_throws ArgumentError parse_args(["--unknown"])
         @test_throws ArgumentError parse_args(["/tmp/a", "/tmp/b"])
+        @test_throws ArgumentError parse_args(["--depth", "0"])
+        @test_throws ArgumentError parse_args(["--depth", "two"])
+        @test_throws ArgumentError parse_args(["--depth"])
     end
 
     @testset "workspace-audit: default root is the parent of the repository" begin
@@ -232,11 +238,11 @@ end
         end
     end
 
-    @testset "workspace-audit: the workspace walk is one level deep" begin
+    @testset "workspace-audit: the walk stops at repositories" begin
         mktempdir() do dir
             make_repository(joinpath(dir, "alpha"))
             make_repository(joinpath(dir, "beta"))
-            # a repository nested deeper must not appear as its own entry
+            # a repository inside a repository is that repository's business
             make_repository(joinpath(dir, "alpha", "inner"))
             mkpath(joinpath(dir, ".hidden"))
             write(joinpath(dir, "loose.txt"), "not a directory")
@@ -245,6 +251,53 @@ end
             @test [r.name for r in reports] == ["alpha", "beta"]
             @test all(r -> r.is_repository, reports)
             @test_throws ArgumentError audit_workspace(joinpath(dir, "absent"))
+            @test_throws ArgumentError audit_workspace(dir; depth = 0)
+        end
+    end
+
+    @testset "workspace-audit: repositories one level below the area" begin
+        mktempdir() do dir
+            # the layout the default depth of two is meant for
+            make_repository(joinpath(dir, "project-area", "ThePackage"))
+            make_repository(joinpath(dir, "project-area", "TheOtherPackage"))
+            make_repository(joinpath(dir, "flat"))
+            mkpath(joinpath(dir, "unversioned", "sources"))
+            write(joinpath(dir, "unversioned", "sources", "a.jl"), "1")
+
+            reports = audit_workspace(dir)
+            names = [r.name for r in reports]
+            # names are paths relative to the root, so same-named repositories stay apart
+            @test joinpath("project-area", "TheOtherPackage") in names
+            @test joinpath("project-area", "ThePackage") in names
+            @test "flat" in names
+            # an area with nothing under it is still reported, once
+            @test count(==("unversioned"), names) == 1
+            @test !only(filter(r -> r.name == "unversioned", reports)).is_repository
+            @test unversioned_areas(reports, dir) == ["unversioned"]
+            @test count(r -> r.is_repository, reports) == 3
+
+            # depth 1 sees only the repository that sits directly under the root
+            shallow = audit_workspace(dir; depth = 1)
+            @test count(r -> r.is_repository, shallow) == 1
+            @test sort(unversioned_areas(shallow, dir)) == ["project-area", "unversioned"]
+
+            # depth 3 finds no more, because the walk stops at each repository
+            @test count(r -> r.is_repository, audit_workspace(dir; depth = 3)) == 3
+        end
+    end
+
+    @testset "workspace-audit: artifacts beside an unversioned area" begin
+        mktempdir() do dir
+            area = joinpath(dir, "area")
+            mkpath(area)
+            write(joinpath(area, "old.backup.bundle"), zeros(UInt8, 32))
+            reports = audit_workspace(dir)
+            # reported once, carrying the artifact, not twice
+            @test length(reports) == 1
+            report = only(reports)
+            @test report.name == "area"
+            @test length(report.leftovers) == 1
+            @test needs_attention(report)
         end
     end
 

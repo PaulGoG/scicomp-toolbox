@@ -175,14 +175,20 @@ function find_leftovers(dir::AbstractString, head_time::Union{Float64, Nothing})
 end
 
 """
-    audit_directory(dir; fetch = false) -> DirectoryReport
+    audit_directory(dir; fetch = false, label = basename(dir)) -> DirectoryReport
 
 Collect the git and artifact state of one directory. With `fetch`, the remote-tracking
 refs are refreshed first, which needs the network; without it the comparison uses the refs
-already stored, which may be out of date.
+already stored, which may be out of date. `label` is the name the report carries, which
+the workspace walk sets to the path relative to the root so that two repositories of the
+same name under different projects stay apart.
 """
-function audit_directory(dir::AbstractString; fetch::Bool = false)
-    name = basename(rstrip(dir, '/'))
+function audit_directory(
+    dir::AbstractString;
+    fetch::Bool = false,
+    label::AbstractString = basename(rstrip(dir, '/')),
+)
+    name = String(label)
     if !is_repository_root(dir)
         return DirectoryReport(
             name,
@@ -276,21 +282,95 @@ function needs_attention(report::DirectoryReport)
 end
 
 """
-    audit_workspace(root; fetch = false) -> Vector{DirectoryReport}
+    subdirectories(dir) -> Vector{String}
 
-Audit every immediate subdirectory of `root`, in name order. The walk is one level deep:
-a workspace holds projects, and descending further would report their internals.
+Visible subdirectories of `dir` in name order, excluding symbolic links, which would
+otherwise let the walk leave the workspace or revisit it.
 """
-function audit_workspace(root::AbstractString; fetch::Bool = false)
-    isdir(root) || throw(ArgumentError("not a directory: $root"))
-    reports = DirectoryReport[]
-    for name in sort(readdir(root))
+function subdirectories(dir::AbstractString)
+    paths = String[]
+    for name in sort(readdir(dir))
         startswith(name, ".") && continue
-        path = joinpath(root, name)
+        path = joinpath(dir, name)
         isdir(path) && !islink(path) || continue
-        push!(reports, audit_directory(path; fetch))
+        push!(paths, path)
+    end
+    return paths
+end
+
+"""
+    walk_area!(reports, root, dir, level, depth; fetch = false) -> Bool
+
+Collect the interesting directories at or below `dir`, appending to `reports`, and report
+whether a repository was among them. A directory is interesting when it is a repository or
+holds a backup artifact. The walk never descends into a repository — what is inside one is
+its own business — and stops at `depth` levels below the root.
+"""
+function walk_area!(
+    reports::Vector{DirectoryReport},
+    root::AbstractString,
+    dir::AbstractString,
+    level::Integer,
+    depth::Integer;
+    fetch::Bool = false,
+)
+    label = relpath(dir, root)
+    if is_repository_root(dir)
+        push!(reports, audit_directory(dir; fetch, label))
+        return true
+    end
+    leftovers = find_leftovers(dir, nothing)
+    isempty(leftovers) || push!(reports, audit_directory(dir; fetch, label))
+    found = false
+    if level < depth
+        for path in subdirectories(dir)
+            found |= walk_area!(reports, root, path, level + 1, depth; fetch)
+        end
+    end
+    return found
+end
+
+"""
+    audit_workspace(root; fetch = false, depth = 2) -> Vector{DirectoryReport}
+
+Audit the projects under `root`. Each immediate subdirectory is an area, searched `depth`
+levels deep for repositories and backup artifacts; the default of two suits a workspace
+whose areas each hold their repository one level down. An area with nothing of interest
+under it contributes one report of its own, which is how a project directory under no
+version control becomes visible rather than silently absent.
+"""
+function audit_workspace(root::AbstractString; fetch::Bool = false, depth::Integer = 2)
+    isdir(root) || throw(ArgumentError("not a directory: $root"))
+    depth >= 1 || throw(ArgumentError("depth must be at least 1, got $depth"))
+    reports = DirectoryReport[]
+    for area in subdirectories(root)
+        before = length(reports)
+        walk_area!(reports, root, area, 1, depth; fetch)
+        length(reports) == before &&
+            push!(reports, audit_directory(area; fetch, label = relpath(area, root)))
     end
     return reports
+end
+
+"""
+    unversioned_areas(reports, root) -> Vector{String}
+
+Names of the top-level areas under which the walk found no repository. A `notes` directory
+belongs here legitimately; a directory of code does not.
+"""
+function unversioned_areas(reports::Vector{DirectoryReport}, root::AbstractString)
+    areas = String[]
+    versioned = Set{String}()
+    for report in reports
+        report.is_repository || continue
+        push!(versioned, first(splitpath(report.name)))
+    end
+    for report in reports
+        area = first(splitpath(report.name))
+        (area in versioned || area in areas) && continue
+        push!(areas, area)
+    end
+    return areas
 end
 
 function print_report(report::DirectoryReport)
@@ -352,15 +432,24 @@ function print_report(report::DirectoryReport)
     return nothing
 end
 
-function print_summary(reports::Vector{DirectoryReport})
+function print_summary(reports::Vector{DirectoryReport}, root::AbstractString)
     repositories = count(r -> r.is_repository, reports)
     attention = count(needs_attention, reports)
     leftovers = reduce(vcat, (r.leftovers for r in reports); init = Leftover[])
     stale = filter(l -> l.stale, leftovers)
+    unversioned = unversioned_areas(reports, root)
 
     println("\nSummary")
-    println("  Directories          : ", length(reports), " (", repositories, " git)")
+    println("  Repositories         : ", repositories)
     println("  Needing attention    : ", attention)
+    if !isempty(unversioned)
+        println(
+            "  Areas with no repo   : ",
+            length(unversioned),
+            " — ",
+            join(unversioned, ", "),
+        )
+    end
     unpushed = filter(r -> r.is_repository && r.ahead > 0, reports)
     if !isempty(unpushed)
         println(
@@ -400,9 +489,15 @@ Usage:
   julia run.jl workspace-audit [PATH] [options]
 
   PATH             workspace root to audit (default: the parent of this repository)
+  --depth N        levels below the root to search for repositories (default: 2)
   --dirty-only     report only directories with uncommitted, unpushed or removable state
   --fetch          refresh remote-tracking refs first; needs the network and is slower
   -h, --help
+
+Each immediate subdirectory of the root is an area, searched --depth levels deep. The
+default of two suits a workspace whose areas each hold their repository one level down;
+--depth 1 treats the areas themselves as the repositories. The walk never descends into a
+repository, and an area with no repository under it is reported as such.
 
 Without --fetch the distance from the upstream branch is measured against the
 remote-tracking refs already stored, which may be out of date.
@@ -424,13 +519,28 @@ function parse_args(args::Vector{String})
     dirty_only = false
     fetch = false
     help = false
+    depth = 2
+    expecting_depth = false
     for arg in args
-        if arg in ("-h", "--help")
+        if expecting_depth
+            parsed = tryparse(Int, arg)
+            (parsed === nothing || parsed < 1) &&
+                throw(ArgumentError("--depth takes a positive integer, got $arg"))
+            depth = parsed
+            expecting_depth = false
+        elseif arg in ("-h", "--help")
             help = true
         elseif arg == "--dirty-only"
             dirty_only = true
         elseif arg == "--fetch"
             fetch = true
+        elseif arg == "--depth"
+            expecting_depth = true
+        elseif startswith(arg, "--depth=")
+            parsed = tryparse(Int, last(split(arg, '=', limit = 2)))
+            (parsed === nothing || parsed < 1) &&
+                throw(ArgumentError("--depth takes a positive integer, got $arg"))
+            depth = parsed
         elseif startswith(arg, "-")
             throw(ArgumentError("unknown option: $arg"))
         elseif root === nothing
@@ -439,7 +549,8 @@ function parse_args(args::Vector{String})
             throw(ArgumentError("unexpected second path argument: $arg"))
         end
     end
-    return (; root, dirty_only, fetch, help)
+    expecting_depth && throw(ArgumentError("--depth takes a positive integer"))
+    return (; root, dirty_only, fetch, depth, help)
 end
 
 """
@@ -475,12 +586,13 @@ function main(args::Vector{String} = ARGS)
 
     println("Workspace audit")
     println("  Root                 : ", root)
+    println("  Search depth         : ", options.depth, " level(s) below the root")
     println(
         "  Upstream comparison  : ",
         options.fetch ? "refreshed (--fetch)" : "stored refs (pass --fetch to refresh)",
     )
 
-    reports = audit_workspace(root; fetch = options.fetch)
+    reports = audit_workspace(root; fetch = options.fetch, depth = options.depth)
     shown = options.dirty_only ? filter(needs_attention, reports) : reports
     if isempty(shown)
         println(
@@ -492,7 +604,7 @@ function main(args::Vector{String} = ARGS)
         return 0
     end
     foreach(print_report, shown)
-    print_summary(reports)
+    print_summary(reports, root)
     return 0
 end
 

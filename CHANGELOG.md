@@ -4,6 +4,21 @@ Notable changes to the workbench. The repository itself carries no version; the
 `HardwareDiagnostics` package follows semantic versioning and its version is given where
 a change belongs to it.
 
+## 2026-09-12
+
+### Changed
+
+- `workspace-audit` searches two levels below the root by default, with `--depth N` to
+  choose another. The one-level walk assumed each project directory was itself a
+  repository; the layout it was written for keeps the repository one level down, so the
+  first real run found nothing. The walk stops at every repository it meets, since what
+  lies inside one is that repository's business, and it reports each entry by its path
+  relative to the root so that two repositories of the same name stay apart. An area with
+  no repository beneath it is named in the summary rather than passed over, which is how a
+  directory of code under no version control becomes visible.
+- The `authors` field of `HardwareDiagnostics` gives the name without an e-mail address,
+  matching the copyright line of the LICENSE.
+
 ## 2026-09-11
 
 ### Added

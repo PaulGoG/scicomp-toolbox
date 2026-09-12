@@ -123,6 +123,7 @@ julia run.jl --list                                     # catalog
 julia run.jl sysinfo                                    # standalone script
 julia run.jl workspace-audit                            # git state of the surrounding workspace
 julia run.jl workspace-audit ~/projects --dirty-only    # another root, only what needs attention
+julia run.jl workspace-audit ~/projects --depth 1       # areas that are themselves repositories
 julia run.jl hardware-diagnostics --quick --cpu-only    # tool; arguments are forwarded
 julia run.jl plot-benchmarks --format png               # figures from the newest dataset
 julia run.jl plot-benchmarks --compare                  # cross-host figures from reference-runs/
@@ -151,7 +152,7 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 | Tool | Tier | Purpose | Entry point |
 | :--- | :--- | :--- | :--- |
 | [`sysinfo`](standalone/sysinfo.jl) | 2 | CPU topology (physical and logical), memory, thread pools, BLAS library, repository revision | `standalone/sysinfo.jl` |
-| [`workspace-audit`](standalone/workspace-audit.jl) | 2 | Branch, working-tree state, distance from upstream, stashes, untracked weight and regenerable backup artifacts of every project under a workspace root | `standalone/workspace-audit.jl` |
+| [`workspace-audit`](standalone/workspace-audit.jl) | 2 | Branch, working-tree state, distance from upstream, stashes, untracked weight and regenerable backup artifacts of every repository under a workspace root, searched two levels deep; areas under no version control are named | `standalone/workspace-audit.jl` |
 | [`hardware-diagnostics`](hardware-diagnostics/) | 1 | Host and accelerator introspection; dual-GEMM throughput through the vendor library and two KernelAbstractions kernels (naive, tiled), with thread scaling and cross-engine verification | `hardware-diagnostics/hardware-diagnostics.jl` |
 | [`plot-benchmarks`](plot-benchmarks/) | 1 | Thread-scaling and throughput figures (CairoMakie) from one hardware-diagnostics dataset, or across the machines of several (`--compare`) | `plot-benchmarks/plot-benchmarks.jl` |
 
