@@ -1,7 +1,7 @@
 name = "HardwareDiagnostics"
 uuid = "8fc1e2c1-14a9-422c-9178-779f4911c2d9"
 version = "0.3.2"
-authors = ["Paul-Adrian Gogîță <gogitapaul@yahoo.ro>"]
+authors = ["Paul-Adrian Gogîță"]
 
 [deps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
