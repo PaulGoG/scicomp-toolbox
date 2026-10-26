@@ -1,7 +1,7 @@
 #!/usr/bin/env julia
 # sysinfo.jl — host and Julia runtime introspection with the standard library only.
 # Reports the CPU topology (physical and logical), memory, thread pools, the BLAS
-# library and, when run inside a git checkout, the repository revision.
+# library and the revision of the toolbox checkout the script belongs to.
 
 using LinearAlgebra: BLAS
 using Printf: @printf
@@ -113,7 +113,7 @@ function main()
 
     revision = repository_revision(@__DIR__)
     if revision !== nothing
-        println("\n[Repository]")
+        println("\n[Toolbox revision]")
         println("  Branch               : ", revision[1])
         println("  Commit               : ", revision[2])
     end

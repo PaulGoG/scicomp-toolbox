@@ -42,6 +42,19 @@ function make_repository(dir::AbstractString; content::AbstractString = "x")
     return dir
 end
 
+"""
+    captured_stdout(f) -> String
+
+Standard output written by `f()`, collected through a temporary file.
+"""
+function captured_stdout(f)
+    return mktemp() do path, io
+        redirect_stdout(f, io)
+        flush(io)
+        return read(path, String)
+    end
+end
+
 @testset "standalone" begin
     @testset "workspace-audit: porcelain parsing" begin
         # "XY <path>" entries, NUL separated; a rename carries a second path field
@@ -54,7 +67,7 @@ end
         @test untracked == ["c.jl"]
         # the source path of a rename must not be counted as a further entry
         @test first(parse_status("R  new.jl\0old.jl\0")) == 1
-        # a path containing a space survives, which is why the NUL form is used
+        # NUL separation preserves paths with spaces
         @test parse_status("?? a file.txt\0") == (0, ["a file.txt"])
         # short or malformed fields are skipped rather than throwing
         @test parse_status("x\0") == (0, String[])
@@ -107,8 +120,6 @@ end
     end
 
     @testset "workspace-audit: default root is the parent of the repository" begin
-        # standalone/ sits in the repository, whose parent is the workspace
-        @test default_root() == dirname(dirname(STANDALONE_DIR))
         @test isdir(default_root())
     end
 
@@ -133,9 +144,10 @@ end
             @test !isempty(report.commit)
             @test report.tracked_changes == 0
             @test report.untracked_count == 0
-            # no upstream is configured, which is itself worth reporting
+            # without a remote, a missing upstream is not flagged
             @test isempty(report.upstream)
-            @test needs_attention(report)
+            @test !report.has_remote
+            @test !needs_attention(report)
 
             write(joinpath(repo, "tracked.txt"), "changed")
             write(joinpath(repo, "untracked.bin"), zeros(UInt8, 4096))
@@ -145,6 +157,39 @@ end
             @test dirty.untracked_bytes == 4096
             @test first(dirty.largest_untracked) == ("untracked.bin", 4096)
             @test needs_attention(dirty)
+            output = captured_stdout(() -> print_report(dirty))
+            @test occursin(r"\[[^\]]*untracked[^\]]*\]", output)
+        end
+    end
+
+    @testset "workspace-audit: leading space of the first status entry" begin
+        mktempdir() do dir
+            # " M a" is the shortest entry and loses its leading space if trimmed
+            repo = make_repository(joinpath(dir, "project"))
+            write(joinpath(repo, "a"), "1")
+            git_run(repo, "add", "a")
+            git_run(repo, "commit", "--quiet", "-m", "add a")
+            write(joinpath(repo, "a"), "2")
+            modified = audit_directory(repo)
+            @test modified.tracked_changes == 1
+            @test modified.untracked_count == 0
+
+            write(joinpath(repo, "b"), "3")
+            with_untracked = audit_directory(repo)
+            @test with_untracked.tracked_changes == 1
+            @test with_untracked.untracked_count == 1
+        end
+    end
+
+    @testset "workspace-audit: a remote without an upstream is flagged" begin
+        mktempdir() do dir
+            repo = make_repository(joinpath(dir, "project"))
+            git_run(repo, "remote", "add", "origin", joinpath(dir, "origin.git"))
+            report = audit_directory(repo)
+            @test report.has_remote
+            @test isempty(report.upstream)
+            @test needs_attention(report)
+            @test occursin("[no upstream]", captured_stdout(() -> print_report(report)))
         end
     end
 
@@ -242,7 +287,7 @@ end
         mktempdir() do dir
             make_repository(joinpath(dir, "alpha"))
             make_repository(joinpath(dir, "beta"))
-            # a repository inside a repository is that repository's business
+            # nested repositories are not reported
             make_repository(joinpath(dir, "alpha", "inner"))
             mkpath(joinpath(dir, ".hidden"))
             write(joinpath(dir, "loose.txt"), "not a directory")

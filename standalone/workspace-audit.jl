@@ -43,6 +43,7 @@ struct DirectoryReport
     untracked_bytes::Int
     largest_untracked::Vector{Tuple{String, Int}}
     upstream::String
+    has_remote::Bool
     ahead::Int
     behind::Int
     remote::String
@@ -51,16 +52,20 @@ struct DirectoryReport
 end
 
 """
-    git(dir, args...) -> Tuple{Bool, String}
+    git(dir, args...; strip_output = true) -> Tuple{Bool, String}
 
-Run `git -C dir args...`, returning whether it succeeded and its trimmed standard output.
-Standard error is discarded: every call site treats failure as "the fact is unavailable".
+Run `git -C dir args...` with optional locks disabled, so that `git status` never writes
+`index.lock`. Returns whether it succeeded and its standard output, trimmed unless
+`strip_output` is false. Standard error is discarded: every call site treats failure as
+"the fact is unavailable".
 """
-function git(dir::AbstractString, args::AbstractString...)
+function git(dir::AbstractString, args::AbstractString...; strip_output::Bool = true)
     out = IOBuffer()
     argv = collect(args)
-    ok = success(pipeline(`git -C $dir $argv`; stdout = out, stderr = devnull))
-    return ok, strip(String(take!(out)))
+    command = `git --no-optional-locks -C $dir $argv`
+    ok = success(pipeline(command; stdout = out, stderr = devnull))
+    output = String(take!(out))
+    return ok, strip_output ? String(strip(output)) : output
 end
 
 """
@@ -132,7 +137,7 @@ end
 """
     format_bytes(bytes) -> String
 
-Binary-prefixed size with three significant figures, e.g. `1.44 GiB`.
+Binary-prefixed size with two decimals, e.g. `1.44 GiB`.
 """
 function format_bytes(bytes::Integer)
     bytes < 1024 && return @sprintf("%d B", bytes)
@@ -179,9 +184,8 @@ end
 
 Collect the git and artifact state of one directory. With `fetch`, the remote-tracking
 refs are refreshed first, which needs the network; without it the comparison uses the refs
-already stored, which may be out of date. `label` is the name the report carries, which
-the workspace walk sets to the path relative to the root so that two repositories of the
-same name under different projects stay apart.
+already stored, which may be out of date. `label` names the report; the workspace walk
+passes the path relative to the root to keep same-named repositories distinct.
 """
 function audit_directory(
     dir::AbstractString;
@@ -201,6 +205,7 @@ function audit_directory(
             0,
             Tuple{String, Int}[],
             "",
+            false,
             0,
             0,
             "",
@@ -209,12 +214,20 @@ function audit_directory(
         )
     end
 
-    fetch && git(dir, "fetch", "--quiet", "--all")
+    if fetch
+        ok, _ = git(dir, "fetch", "--quiet", "--all")
+        ok || println(
+            stderr,
+            "  warning: fetch failed in $dir; distance from upstream uses the stored ",
+            "remote-tracking refs",
+        )
+    end
 
     _, branch = git(dir, "rev-parse", "--abbrev-ref", "HEAD")
     _, commit = git(dir, "rev-parse", "--short", "HEAD")
 
-    _, status_payload = git(dir, "status", "--porcelain", "-z", "-uall")
+    _, status_payload =
+        git(dir, "status", "--porcelain", "-z", "-uall"; strip_output = false)
     tracked_changes, untracked_paths = parse_status(status_payload)
 
     sized = [(path, path_size(joinpath(dir, path))) for path in untracked_paths]
@@ -238,6 +251,8 @@ function audit_directory(
     end
 
     _, remote = git(dir, "remote", "get-url", "origin")
+    _, remote_names = git(dir, "remote")
+    has_remote = !isempty(remote_names)
     _, stash_payload = git(dir, "stash", "list")
     stashes = isempty(stash_payload) ? 0 : count(==('\n'), stash_payload) + 1
 
@@ -255,6 +270,7 @@ function audit_directory(
         untracked_bytes,
         largest,
         has_upstream ? upstream : "",
+        has_remote,
         ahead,
         behind,
         remote,
@@ -266,8 +282,9 @@ end
 """
     needs_attention(report) -> Bool
 
-Whether the directory holds work that is not committed, not pushed, or an artifact that
-could be removed. A clean repository in step with its upstream needs none.
+Whether the directory holds uncommitted or untracked work, commits out of step with the
+upstream, stashes, a removable artifact, or a remote with no upstream configured. A clean
+repository in step with its upstream, or with no remote at all, needs none.
 """
 function needs_attention(report::DirectoryReport)
     isempty(report.leftovers) || return true
@@ -277,7 +294,7 @@ function needs_attention(report::DirectoryReport)
     report.ahead > 0 && return true
     report.behind > 0 && return true
     report.stashes > 0 && return true
-    isempty(report.upstream) && return true
+    report.has_remote && isempty(report.upstream) && return true
     return false
 end
 
@@ -299,12 +316,10 @@ function subdirectories(dir::AbstractString)
 end
 
 """
-    walk_area!(reports, root, dir, level, depth; fetch = false) -> Bool
+    walk_area!(reports, root, dir, level, depth; fetch = false) -> Nothing
 
-Collect the interesting directories at or below `dir`, appending to `reports`, and report
-whether a repository was among them. A directory is interesting when it is a repository or
-holds a backup artifact. The walk never descends into a repository — what is inside one is
-its own business — and stops at `depth` levels below the root.
+Append to `reports` the repositories and backup-artifact holders at or below `dir`. The
+walk does not descend into repositories and stops `depth` levels below the root.
 """
 function walk_area!(
     reports::Vector{DirectoryReport},
@@ -317,17 +332,16 @@ function walk_area!(
     label = relpath(dir, root)
     if is_repository_root(dir)
         push!(reports, audit_directory(dir; fetch, label))
-        return true
+        return nothing
     end
     leftovers = find_leftovers(dir, nothing)
     isempty(leftovers) || push!(reports, audit_directory(dir; fetch, label))
-    found = false
     if level < depth
         for path in subdirectories(dir)
-            found |= walk_area!(reports, root, path, level + 1, depth; fetch)
+            walk_area!(reports, root, path, level + 1, depth; fetch)
         end
     end
-    return found
+    return nothing
 end
 
 """
@@ -336,8 +350,7 @@ end
 Audit the projects under `root`. Each immediate subdirectory is an area, searched `depth`
 levels deep for repositories and backup artifacts; the default of two suits a workspace
 whose areas each hold their repository one level down. An area with nothing of interest
-under it contributes one report of its own, which is how a project directory under no
-version control becomes visible rather than silently absent.
+beneath it yields one non-repository report.
 """
 function audit_workspace(root::AbstractString; fetch::Bool = false, depth::Integer = 2)
     isdir(root) || throw(ArgumentError("not a directory: $root"))
@@ -380,9 +393,11 @@ function print_report(report::DirectoryReport)
     else
         flags = String[]
         report.tracked_changes > 0 && push!(flags, "dirty")
+        report.untracked_count > 0 && push!(flags, "untracked")
+        report.stashes > 0 && push!(flags, "stash")
         report.ahead > 0 && push!(flags, "unpushed")
         report.behind > 0 && push!(flags, "behind")
-        isempty(report.upstream) && push!(flags, "no upstream")
+        report.has_remote && isempty(report.upstream) && push!(flags, "no upstream")
         println("\n", report.name, isempty(flags) ? "" : "  [" * join(flags, ", ") * "]")
         println("  Branch               : ", report.branch, " @ ", report.commit)
         println(
@@ -473,7 +488,7 @@ function print_summary(reports::Vector{DirectoryReport}, root::AbstractString)
             "\nStale backup artifacts predate the HEAD they were taken from. To remove:",
         )
         for leftover in stale
-            println("  rm -rf ", leftover.path)
+            println("  rm -rf -- ", Base.shell_escape_posixly(leftover.path))
         end
     end
     println()
