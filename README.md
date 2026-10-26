@@ -10,8 +10,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Scientific scripting workbench in Julia. It hosts standalone utilities and self-contained
-tools that do not warrant a package of their own, behind a common dispatcher, test runner
-and formatting gate.
+tools that do not warrant a repository of their own, behind a common dispatcher, test
+runner and formatting gate.
 
 ![Dual-GEMM throughput per element type on eight accelerators, by engine, with the ratio of the portable kernel to the library](assets/cross_host_accelerators_N4096.png)
 
@@ -60,10 +60,11 @@ scicomp-toolbox/
 ├── assets/                        # figures used by this README
 ├── reference-runs/                # datasets of the eight validation runs, one per accelerator
 │   └── README.md                  # hardware, configuration and outcome of each run
-├── run.jl                         # dispatcher: list, run and scaffold tools
+├── run.jl                         # dispatcher: list and run tools
 ├── test.jl                        # global test runner
 ├── formatter/                     # pinned JuliaFormatter environment (Project + Manifest)
-│   └── activate.jl
+│   ├── activate.jl
+│   └── format.jl                  # formats a tree; used by check.jl and format.yml
 ├── standalone/                    # tier 2: single-file scripts on the standard library
 │   ├── Project.toml               # test environment only; the scripts run without it
 │   ├── Manifest.toml
@@ -97,7 +98,7 @@ an `activate.jl`, a validated `config.toml`, the entry point `<name>/<name>.jl`,
 suite under `test/` and a README. A tool that outgrows a script becomes a package inside
 that directory (`name` and `uuid` in `Project.toml`, `src/<Name>.jl`); the dispatcher and
 the test runner handle both forms. Tools never share an environment, so their
-dependencies cannot conflict.
+dependencies cannot conflict. A new tool starts as a pruned copy of `plot-benchmarks/`.
 
 A **tier 2 script** in `standalone/` relies on the standard library only and runs without
 instantiation. The `Project.toml` beside the scripts exists for their shared test suite
@@ -126,14 +127,13 @@ julia run.jl hardware-diagnostics --quick --cpu-only    # tool; arguments are fo
 julia run.jl plot-benchmarks --format png               # figures from the newest dataset
 julia run.jl plot-benchmarks --compare                  # cross-host figures from reference-runs/
 julia run.jl --threads 8 hardware-diagnostics           # Julia threads of the child process
-julia run.jl --new <name>                               # scaffold a tier 1 tool
 julia test.jl                                           # every test suite
 julia test.jl hardware-diagnostics                      # one suite
 julia check.jl                                          # format in place, then test
 julia check.jl --check                                  # fail on formatting differences
 ```
 
-The dispatcher instantiates a tool's environment before launching it, so a fresh clone
+Each tier 1 entry point activates and instantiates its own environment, so a fresh clone
 needs no manual setup. Child processes receive `--threads` from `JULIA_NUM_THREADS`, or
 `auto` when the variable is unset; `--threads N` before the tool name overrides both.
 
@@ -158,7 +158,7 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 
 | Component | State |
 | :--- | :--- |
-| Dispatcher, test runner, formatting gate | in use; exercised by CI on Julia 1 (current stable), Ubuntu |
+| Dispatcher, test runner, formatting gate | in use; exercised by CI on Julia 1.12 and the current stable release, Ubuntu |
 | `sysinfo` | in use; parsing covered by the `standalone` suite |
 | `workspace-audit` | in use; read-only by construction, tested against repositories built in `mktempdir()` |
 | `hardware-diagnostics`, CPU path | tested (unit tests, static QA with Aqua, JET and ExplicitImports, end-to-end run); seven host processors in [`reference-runs/`](reference-runs/), x86_64 and arm64 |

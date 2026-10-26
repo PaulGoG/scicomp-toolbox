@@ -4,6 +4,71 @@ Notable changes to the workbench. The repository itself carries no version; the
 `HardwareDiagnostics` package follows semantic versioning and its version is given where
 a change belongs to it.
 
+## 2026-10-26
+
+### Added
+
+- `formatter/format.jl`: the formatting program shared by `check.jl` and the CI gate, with
+  `--check` to report differences without applying them.
+- CI tests the declared Julia 1.12 floor alongside the current release.
+- `hardware-diagnostics` tests run the accelerator stage on a host-backed mock device
+  (allocation-limit skip and speedup paths) and `discover_accelerators` on a registered
+  probe.
+- `plot-benchmarks` validates `--size` against the measured sizes and names the flag of a
+  value that does not parse.
+- `workspace-audit` flags `untracked` and `stash`, and warns when `--fetch` fails instead
+  of silently using the stored refs.
+
+### Changed
+
+- `run.jl --new` is removed; a new tool starts as a pruned copy of `plot-benchmarks/`.
+  The dispatcher no longer instantiates a tool's environment in a separate process, the
+  entry points doing so themselves.
+- `hardware-diagnostics`: `verification_size` defaults to 72, so the padded edge tiles of
+  the tiled kernel and the partial work-groups of the naive kernel are part of the
+  cross-engine check. `Int8` is no longer offered, its accumulation bound exceeding
+  `typemax(Int8)` at every admissible size. A command-line value that does not parse
+  names its flag; a TOML syntax error, a missing default `config.toml` and duplicate
+  sizes or types are rejected with an `ArgumentError`. `--out-dir` resolves against the
+  working directory.
+- `plot-benchmarks`: one builder draws both thread-scaling figures, so the per-dataset
+  and the cross-host figure share layout, palette fallback and notation
+  (S(p) = T₁/T_p). Each cross-host figure chooses its problem size from the rows it
+  draws. The throughput figure prefers the element-type stage row over the sweep row at
+  the top thread count, shortens device names and omits the legend for a single engine.
+  Paths given on the command line resolve against the working directory.
+- Dependabot watches `standalone/`; the test environment of `hardware-diagnostics`
+  declares its `julia` compat, which stops the spurious stdlib bounds it proposed.
+- Manifests resolved on Julia 1.13.3 with KernelAbstractions 0.9.43; actions pinned to
+  julia-actions/cache 3.5.0 and setup-julia 3.0.3.
+
+### Fixed
+
+- The three root scripts reported a child killed by a signal as passed, `exitcode` being
+  0 for a signalled process; they now test `success` and exit with 128 plus the signal.
+- `hardware-diagnostics`: a point stopped by `max_point_seconds` after one sample
+  reported a median absolute deviation and a dispersion of 0; both are now empty for
+  single-sample points. Datasets written before this version carry 0 there. The warm-up
+  evaluation is timed and bounds the cost of a point; an N = 4096 kernel point could run
+  four times past the cap.
+- `plot-benchmarks`: intermediate ticks of a logarithmic axis outside 10⁻³ to 10⁴ were
+  labelled with the nearest power of ten, 2×10⁴ reading 10⁴; labels now carry their
+  mantissa in one style per axis. Value labels showed four significant digits near
+  100 and 10. A comparison set without accelerator rows aborted instead of skipping the
+  figure. The caption of the host figure claimed Float32 and complete sweeps whatever
+  the data.
+- `workspace-audit`: the porcelain status output was stripped before parsing, so the
+  first entry of a dirty repository could be lost and the repository reported clean.
+  Git runs with `--no-optional-locks`, so the tool no longer writes `index.lock`. The
+  suggested removal command is shell-quoted. A repository without a remote is no longer
+  flagged for having no upstream.
+- `sysinfo` labels the revision it reports as that of the toolbox checkout.
+
+### Removed
+
+- `TimingSummary.mean_s`, the dead `NON_TOOL_ENVIRONMENTS` of `test.jl` and
+  `SuiteResult.exit_code`.
+
 ## 2026-09-12
 
 ### Changed
@@ -35,7 +100,7 @@ a change belongs to it.
 - `reference-runs/`: the datasets of eight `--stress` runs on eight accelerators of four
   vendors, one directory per device, with a README recording the hardware, the shared
   configuration and the outcome of each run. They are the provenance of the README
-  figures and the evidence behind the backend status table. The Apple M4 is the first
+  figures and the evidence behind the backend status table. The Apple M4 is the only
   arm64 host of the set and the only run produced off Linux.
 - `Backends.vendor_blas_types(backend)`: the element types whose `mul!` reaches the vendor
   library, asked of the backend instead of read from one fixed set.

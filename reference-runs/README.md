@@ -17,7 +17,8 @@ reference-runs/
 ```
 
 All eight runs were produced on 2026-09-11 from the same source revision, command and
-configuration, so the datasets differ only in hardware:
+configuration; apart from the M4 (macOS) and the Tesla T4 (CUDA 12.9), they differ only
+in hardware:
 
 ```bash
 julia run.jl hardware-diagnostics --stress
@@ -51,7 +52,7 @@ distinct processor.
 
 The `.toml` provenance sidecar and the `.log` report of each run are not committed: they
 record host names and absolute paths of the machines they ran on. Everything the figures
-and the tables above need is in the `.csv`.
+need is in the `.csv`; the table above was compiled from the sidecars.
 
 ## Outcome
 
@@ -105,7 +106,3 @@ cp /tmp/figures/cross_host_*_N4096.png assets/               # the figures of th
 both cross-host figures at the largest problem size measured in every dataset (4096). An
 existing file is never overwritten, so the README figures are rendered elsewhere and
 copied over.
-
-An element type a device could not measure leaves a gap in its line, as in the `Float64`
-column of the M4. Past the seven hues of the palette the marker and the line style change
-as well, so the eighth device is distinguishable from the first.
