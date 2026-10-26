@@ -11,14 +11,21 @@ using Printf: @printf
 using TOML: TOML
 
 const REPO_ROOT = @__DIR__
-const NON_TOOL_ENVIRONMENTS = Set(["formatter"])
 
 struct SuiteResult
     name::String
     passed::Bool
     duration_s::Float64
-    exit_code::Int
 end
+
+"""
+    exit_status(process::Base.Process) -> Int
+
+Conventional status of a finished child: its exit code, or 128 plus the signal number when
+a signal terminated it.
+"""
+exit_status(process::Base.Process) =
+    process.termsignal != 0 ? 128 + process.termsignal : process.exitcode
 
 """
     is_package(dir::String) -> Bool
@@ -41,7 +48,6 @@ function discover_test_suites(target::Union{String, Nothing} = nothing)
     suites = String[]
     for item in sort(readdir(REPO_ROOT))
         startswith(item, ".") && continue
-        item in NON_TOOL_ENVIRONMENTS && continue
         target !== nothing && item != target && continue
         dir = joinpath(REPO_ROOT, item)
         isfile(joinpath(dir, "Project.toml")) || continue
@@ -63,27 +69,31 @@ function run_suite(name::String)
     t_start = time()
     instantiate =
         run(ignorestatus(`$julia -e 'using Pkg; Pkg.instantiate(; io = devnull)'`))
-    if instantiate.exitcode != 0
-        println(stderr, "<<< $name: instantiation failed (exit $(instantiate.exitcode))")
-        return SuiteResult(name, false, time() - t_start, instantiate.exitcode)
+    if !success(instantiate)
+        println(
+            stderr,
+            "<<< $name: instantiation failed (exit $(exit_status(instantiate)))",
+        )
+        return SuiteResult(name, false, time() - t_start)
     end
     cmd =
         is_package(dir) ? `$julia -e 'using Pkg; Pkg.test()'` :
         `$julia $(joinpath(dir, "test", "runtests.jl"))`
     process = run(ignorestatus(cmd))
     elapsed = time() - t_start
-    passed = process.exitcode == 0
+    passed = success(process)
     @printf(
         "<<< %s: %s (%.1f s)\n",
         name,
-        passed ? "passed" : "FAILED (exit $(process.exitcode))",
+        passed ? "passed" : "FAILED (exit $(exit_status(process)))",
         elapsed
     )
-    return SuiteResult(name, passed, elapsed, process.exitcode)
+    return SuiteResult(name, passed, elapsed)
 end
 
 function main(args::Vector{String} = ARGS)
-    target = isempty(args) ? nothing : args[1]
+    # String, not SubString: discover_test_suites dispatches on Union{String, Nothing}
+    target = isempty(args) ? nothing : String(rstrip(args[1], '/'))
     suites = discover_test_suites(target)
     if isempty(suites)
         if target !== nothing

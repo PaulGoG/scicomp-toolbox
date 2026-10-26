@@ -1,11 +1,10 @@
 #!/usr/bin/env julia
-# run.jl — workbench dispatcher: lists, executes and scaffolds tools.
+# run.jl — workbench dispatcher: lists and executes tools.
 #
 #   julia run.jl <tool> [args...]              run a sub-environment tool or a standalone script
 #   julia run.jl --threads N <tool> [args...]  Julia thread count of the child process
 #                                              (default: JULIA_NUM_THREADS, else auto)
 #   julia run.jl --list                        catalog of tools and standalone scripts
-#   julia run.jl --new <name>                  scaffold a sub-environment tool
 #   julia run.jl --help
 
 using Printf: @printf
@@ -72,7 +71,6 @@ Usage:
   julia run.jl <tool> [args...]              run a tool or a standalone script
   julia run.jl --threads N <tool> [args...]  Julia thread count of the child (default: auto)
   julia run.jl --list                        catalog of tools and standalone scripts
-  julia run.jl --new <name>                  scaffold a sub-environment tool
   julia run.jl --help                        this message
 
 Examples:
@@ -111,19 +109,13 @@ function list_tools()
 end
 
 """
-    instantiate_environment(dir::String)
+    exit_status(process::Base.Process) -> Int
 
-Resolve and install the environment in `dir` in a child process, so that a fresh clone
-runs without manual setup. Raises an error when instantiation fails.
+Conventional status of a finished child: its exit code, or 128 plus the signal number when
+a signal terminated it.
 """
-function instantiate_environment(dir::String)
-    cmd = `$(Base.julia_cmd()) --startup-file=no --project=$dir -e 'using Pkg; Pkg.instantiate(; io = devnull)'`
-    process = run(ignorestatus(cmd))
-    process.exitcode == 0 || error(
-        "instantiation of environment '$(basename(dir))' failed (exit $(process.exitcode))",
-    )
-    return nothing
-end
+exit_status(process::Base.Process) =
+    process.termsignal != 0 ? 128 + process.termsignal : process.exitcode
 
 """
     dispatch(target::String, args::Vector{String}, threads::String)
@@ -132,178 +124,22 @@ Run a tool (`<name>/<name>.jl` with its own project) or a standalone script, for
 `args`; the child's exit status becomes this process's exit status.
 """
 function dispatch(target::String, args::Vector{String}, threads::String)
+    target = rstrip(target, '/')
     tools = Dict(find_subenvironments())
     if haskey(tools, target)
         entry = tools[target]
         isempty(entry) && error("tool '$target' has no entry script $target/$target.jl")
         dir = joinpath(REPO_ROOT, target)
-        instantiate_environment(dir)
         cmd = `$(Base.julia_cmd()) --threads=$threads --project=$dir $entry $args`
-        exit(run(ignorestatus(cmd)).exitcode)
+        exit(exit_status(run(ignorestatus(cmd))))
     end
     script = joinpath(STANDALONE_DIR, endswith(target, ".jl") ? target : "$target.jl")
     if isfile(script)
         cmd = `$(Base.julia_cmd()) --threads=$threads $script $args`
-        exit(run(ignorestatus(cmd)).exitcode)
+        exit(exit_status(run(ignorestatus(cmd))))
     end
     println(stderr, "Unknown tool or script '$target'. Run `julia run.jl --list`.")
     exit(1)
-end
-
-"""
-    scaffold_tool(name::String)
-
-Create `<name>/` as a plain project environment with an activation script, a validated
-configuration, an entry script `<name>.jl`, a test suite and a README.
-"""
-function scaffold_tool(name::String)
-    if !occursin(r"^[a-z][a-z0-9-]*$", name)
-        println(stderr, "Tool names are lowercase kebab-case identifiers, got '$name'.")
-        exit(1)
-    end
-    dir = joinpath(REPO_ROOT, name)
-    if isdir(dir)
-        println(stderr, "Directory already exists: $dir")
-        exit(1)
-    end
-    mkdir(dir)
-    mkdir(joinpath(dir, "test"))
-
-    write(
-        joinpath(dir, "Project.toml"),
-        """
-[deps]
-TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
-
-[compat]
-TOML = "1"
-julia = "1.12"
-""",
-    )
-
-    write(
-        joinpath(dir, "activate.jl"),
-        """
-using Pkg
-Pkg.activate(@__DIR__; io = devnull)
-Pkg.instantiate(; io = devnull)
-""",
-    )
-
-    write(
-        joinpath(dir, "config.toml"),
-        """
-# Configuration of $name
-
-[parameters]
-verbose = true  # boolean
-""",
-    )
-
-    write(
-        joinpath(dir, "$name.jl"),
-        """
-#!/usr/bin/env julia
-# $name — entry point.
-#
-#   julia run.jl $name [--config PATH]
-
-using Pkg
-Pkg.activate(@__DIR__; io = devnull)
-Pkg.instantiate(; io = devnull)
-
-using TOML: TOML
-
-\"\"\"
-    load_config(path::AbstractString) -> Dict{String, Any}
-
-Parse the TOML configuration and enforce its constraints, raising an `ArgumentError`
-that names the offending key.
-\"\"\"
-function load_config(path::AbstractString)
-    isfile(path) || throw(ArgumentError("configuration file not found: \$path"))
-    config = TOML.parsefile(path)
-    parameters = get(config, "parameters", Dict{String, Any}())
-    verbose = get(parameters, "verbose", true)
-    verbose isa Bool ||
-        throw(ArgumentError("[parameters].verbose must be a boolean, got \$(repr(verbose))"))
-    return config
-end
-
-function main(args::Vector{String} = ARGS)
-    config_path = joinpath(@__DIR__, "config.toml")
-    i = 1
-    while i <= length(args)
-        if args[i] == "--config" && i < length(args)
-            config_path = args[i + 1]
-            i += 2
-        else
-            throw(ArgumentError("unknown argument '\$(args[i])'"))
-        end
-    end
-    config = load_config(config_path)
-    println("$name: configuration loaded from ", config_path)
-    return config
-end
-
-if abspath(PROGRAM_FILE) == @__FILE__
-    main(ARGS)
-end
-""",
-    )
-
-    write(
-        joinpath(dir, "test", "runtests.jl"),
-        """
-using Test
-
-include(joinpath(@__DIR__, "..", "$name.jl"))
-
-@testset "$name" begin
-    config = load_config(joinpath(@__DIR__, "..", "config.toml"))
-    @test haskey(config, "parameters")
-    @test_throws ArgumentError load_config(joinpath(@__DIR__, "missing.toml"))
-end
-""",
-    )
-
-    write(
-        joinpath(dir, "README.md"),
-        """
-# $name
-
-One-sentence statement of what the tool computes.
-
-```
-$name/
-├── activate.jl      # environment activation
-├── config.toml      # parameters (validated on load)
-├── $name.jl         # entry point
-├── Manifest.toml    # pinned dependencies, written by the first run
-├── Project.toml     # dependencies and compat bounds
-├── README.md
-└── test/
-    └── runtests.jl
-```
-
-## Usage
-
-```bash
-julia run.jl $name                       # through the dispatcher
-julia --project=$name $name/$name.jl     # directly
-julia test.jl $name                      # tests
-```
-""",
-    )
-
-    println(
-        "Created $name/ (Project.toml, activate.jl, config.toml, $name.jl, test/runtests.jl, README.md).",
-    )
-    println(
-        "Add dependencies with: julia --project=$name -e 'using Pkg; Pkg.add(\"PackageName\")'",
-    )
-    println("Run with:              julia run.jl $name")
-    println("The first run writes $name/Manifest.toml; commit it together with the tool.")
 end
 
 function main(args::Vector{String} = ARGS)
@@ -319,9 +155,6 @@ function main(args::Vector{String} = ARGS)
     action = args[1]
     if action in ("-l", "--list", "list")
         list_tools()
-    elseif action in ("-n", "--new", "new")
-        length(args) >= 2 || (println(stderr, "Usage: julia run.jl --new <name>"); exit(1))
-        scaffold_tool(args[2])
     else
         dispatch(action, args[2:end], threads)
     end
