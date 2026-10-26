@@ -10,8 +10,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Scientific scripting workbench in Julia. It hosts standalone utilities and self-contained
-tools that do not warrant a package of their own, behind one dispatcher, one test runner
-and one formatting gate.
+tools that do not warrant a package of their own, behind a common dispatcher, test runner
+and formatting gate.
 
 ![Dual-GEMM throughput per element type on eight accelerators, by engine, with the ratio of the portable kernel to the library](assets/cross_host_accelerators_N4096.png)
 
@@ -19,27 +19,26 @@ Output of `hardware-diagnostics` drawn by `plot-benchmarks`, pooled over the eig
 [`reference-runs/`](reference-runs/): the same operation, D = A·B + A·C at N = 4096, on
 eight accelerators of four vendors, through the library path of each device and through
 one tiled KernelAbstractions kernel compiled for all of them from the same source. Where a
-tuned vendor GEMM exists the library keeps its lead — 3.9 to 5.6× at `Float32` on the six
-discrete cards. The two integrated GPUs bracket that range from both sides: Apple's MPS is
-9.9× ahead of the portable kernel, while on the Intel Arc oneMKL is 6 % *behind* it. At
+tuned vendor GEMM exists the library leads by 3.9 to 5.5× at `Float32` on the six
+discrete cards. The two integrated GPUs bracket that range: Apple's MPS is
+9.9× ahead of the portable kernel, while on the Intel Arc oneMKL is 6 % behind it. At
 `Float64` the portable kernel comes within 15 % of the library on five of the seven
-devices that have it and passes it on both consumer NVIDIA cards, whose rate is fused off
-at 1/64; rocBLAS keeps a factor two on both AMD cards, and Metal carries no double
-precision at all, which is the gap in the M4 line. Where `mul!` has no vendor GEMM and
-falls back to the generic GPUArrays path, the portable kernel leads by 1.06 to 8.1× on the
-seven devices whose fallback is genuinely generic. The M4 is not one of them at `Float16`,
-which Metal routes to an Apple GEMM — the filled marker — and at `Int32`, where the
-fallback is real and beats the tiled kernel by 8 %, the only such case in the set.
+devices that have it and passes it on the RTX 5090 and RTX 5070 Ti, whose `Float64` rate
+is 1/64 of `Float32`. rocBLAS stays a factor two ahead on both AMD cards. Metal carries no
+double precision, and the M4 line has a gap there. Where `mul!` has no vendor GEMM and
+falls back to the generic GPUArrays path, the portable kernel leads by 1.05 to 8.1× on the
+seven devices other than the M4. On the M4, Metal routes `Float16` to an Apple GEMM (the
+filled marker), and at `Int32` the generic fallback beats the tiled kernel by 8 %.
 
 ![Speedup and parallel efficiency of seven host processors against the BLAS thread count](assets/cross_host_hosts_N4096.png)
 
 The host side of the same eight runs: seven processors from six to 32 physical cores,
 x86_64 and arm64. Each series ends at the physical core count of its host, and the shape
-of its tail is the topology — the EPYC regresses past 16 threads across its four dies,
+of its tail follows the topology. The EPYC regresses past 16 threads across its four dies,
 while both hybrid Intel parts lose efficiency as soon as the sweep spreads past their
-performance cores (30 % at 16 threads for the i9-13900KS, 17 % at 16 for the Core Ultra 7
-155H). The M4 shows the same knee at its four performance cores, flattening to 45 % at 10
-threads as the sweep reaches the efficiency ones.
+performance cores (efficiency 30 % at 16 threads for the i9-13900KS, 17 % at 16 for the
+Core Ultra 7 155H). The M4 shows the same knee at its four performance cores and falls to
+45 % at 10 threads, where the sweep includes its efficiency cores.
 
 ```bash
 julia run.jl hardware-diagnostics --stress                   # one machine
@@ -101,8 +100,8 @@ the test runner handle both forms. Tools never share an environment, so their
 dependencies cannot conflict.
 
 A **tier 2 script** in `standalone/` relies on the standard library only and runs without
-instantiation. The `Project.toml` beside them exists for their shared test suite in
-`standalone/test/`, which the global runner discovers like any other; running a script
+instantiation. The `Project.toml` beside the scripts exists for their shared test suite
+in `standalone/test/`, which the global runner discovers like any other. Running a script
 never needs it, and the dispatcher does not list `standalone/` as a tool.
 
 ## Requirements
@@ -110,11 +109,10 @@ never needs it, and the dispatcher does not list `standalone/` as a tool.
 Julia 1.12 or later through [juliaup](https://github.com/JuliaLang/juliaup); the declared
 floor of every environment is `julia = "1.12"` and the committed manifests are resolved
 with the current stable release (1.13). Linux is the primary platform and the one CI
-covers; `hardware-diagnostics` has also been run on macOS/arm64, which is where the Metal
-backend was exercised. GPU packages
-(`CUDA`, `AMDGPU`, `Metal`, `oneAPI`) are not dependencies of any tool: install the one
-matching the hardware into the default environment and the tool resolves it through the
-load path (see `hardware-diagnostics/README.md`).
+covers; `hardware-diagnostics` has also been run on macOS/arm64, where the Metal backend
+was exercised. GPU packages (`CUDA`, `AMDGPU`, `Metal`, `oneAPI`) are not dependencies of
+any tool: install the one matching the hardware into the default environment and the tool
+resolves it through the load path (see `hardware-diagnostics/README.md`).
 
 ## Entry points
 
@@ -173,9 +171,9 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 ## Conventions
 
 Run outputs go to `<tool>/data/` and figures to `<tool>/plots/`; both are ignored by git,
-as are logs, CSV and binary data files. The datasets under `reference-runs/` are the
-exception: they are committed, because the README figures and the backend validation rest
-on them. Environment manifests are committed — tools, the formatter and `standalone/`;
-the manifests of `test/` subdirectories are not. Commits follow Conventional Commits and `CHANGELOG.md` records
-notable changes. Formatting is enforced with the JuliaFormatter version pinned in
+as are logs, CSV and binary data files. The datasets under `reference-runs/` are committed
+because the README figures and the backend validation rest on them. The manifests of the
+tools, the formatter and `standalone/` are committed; those of `test/` subdirectories are
+not. Commits follow Conventional Commits and `CHANGELOG.md` records notable changes.
+Formatting is enforced with the JuliaFormatter version pinned in
 `formatter/Manifest.toml`.

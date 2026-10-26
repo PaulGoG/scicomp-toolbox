@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
-# workspace-audit.jl — git and artifact state of every project directory under a workspace
-# root, with the standard library only. Reports branch, working-tree cleanliness, distance
+# workspace-audit.jl — git and artifact state of every repository under a workspace root,
+# with the standard library only. Reports branch, working-tree cleanliness, distance
 # from the upstream branch, stashes, untracked weight and regenerable backup artifacts, so
 # that unsynced work and deletable leftovers are visible in one command.
 #

@@ -53,7 +53,7 @@ are absent.
 element-type axis: the throughput of the library engine, the throughput of the tiled
 KernelAbstractions kernel, and their ratio against a parity line, one series per
 accelerator of the compared datasets. The two throughput panels share their limits, so
-the vertical distance between them is the gap the portable kernel has to close. Hollow
+the vertical offset of a series between them is the gap between the two engines. Hollow
 markers in the library panel mark the element types the device has no vendor GEMM for,
 which `mul!` serves from the generic GPUArrays path.
 
@@ -67,9 +67,9 @@ accelerator that appears in several of them contributes one series, taken from t
 dataset that carries it.
 
 Exports are sized at the configured printed width (178 mm double column by default), at
-one point per unit for PDF and SVG and at `px_per_unit` pixels per point for PNG
-(`--px-per-unit` overrides the configured value; the README figures of the repository are
-rendered at 3).
+one point per unit for PDF and SVG and at `px_per_unit` pixels per point for PNG.
+`--px-per-unit` overrides the configured value; the README figures of the repository are
+rendered at 3.
 
 ## Configuration
 

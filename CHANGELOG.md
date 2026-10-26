@@ -9,13 +9,11 @@ a change belongs to it.
 ### Changed
 
 - `workspace-audit` searches two levels below the root by default, with `--depth N` to
-  choose another. The one-level walk assumed each project directory was itself a
-  repository; the layout it was written for keeps the repository one level down, so the
-  first real run found nothing. The walk stops at every repository it meets, since what
-  lies inside one is that repository's business, and it reports each entry by its path
-  relative to the root so that two repositories of the same name stay apart. An area with
-  no repository beneath it is named in the summary rather than passed over, which is how a
-  directory of code under no version control becomes visible.
+  choose another; the one-level walk assumed each project directory was itself a
+  repository and found nothing in a layout that keeps the repository one level down. The
+  walk stops at every repository it meets and reports each entry by its path relative to
+  the root, so repositories of the same name are distinguished. An area with no
+  repository beneath it is named in the summary.
 - The `authors` field of `HardwareDiagnostics` gives the name without an e-mail address,
   matching the copyright line of the LICENSE.
 
@@ -27,8 +25,8 @@ a change belongs to it.
   a workspace root in one command — branch, working-tree cleanliness, distance from the
   upstream branch, stashes, untracked weight with the largest offenders, and
   `*.backup.bundle` / `*.git.backup` artifacts with their age and whether they predate
-  `HEAD`. It only reads: no writes, no deletions, and no network unless `--fetch` is
-  passed, the distance otherwise coming from the remote-tracking refs already stored.
+  `HEAD`. It writes and deletes nothing and uses the network only when `--fetch` is
+  passed; otherwise the distance comes from the remote-tracking refs already stored.
   `--dirty-only` narrows the report to what needs attention.
 - A test environment for `standalone/`, so tier 2 scripts are no longer covered by the CI
   smoke run alone. The global runner discovers it like any other suite; the scripts
@@ -55,11 +53,9 @@ a change belongs to it.
 - Every GPU extension of `HardwareDiagnostics` has now run on hardware: four NVIDIA
   devices, two AMD devices, one Intel integrated GPU and one Apple M4, all three engines
   each. The cross-engine verification passed 158 comparisons with none failed; `Float64`
-  is absent on Metal, so the M4 contributes 18 of them rather than 20. No unexecuted
-  backend code remains.
+  is absent on Metal, so the M4 contributes 18 of them rather than 20.
 - The README figures are the two cross-host figures; the single-host throughput figure
-  they replace is no longer shipped, the per-dataset figures being the tool's default
-  output.
+  they replace is no longer shipped. Per-dataset figures remain the tool's default output.
 - `plot-benchmarks`: decade tick labels keep one style per axis — plain decimals while
   the axis stays between 10⁻³ and 10⁴, powers of ten otherwise, with 10⁰ and 10¹ always
   written `1` and `10`; ranges narrower than three decades add the 2× and 5×
@@ -68,20 +64,19 @@ a change belongs to it.
 ### Fixed
 
 - `HardwareDiagnostics` 0.3.2: the library label of a benchmark point assumed that every
-  backend serves the BLAS element types and only those, which mislabels Metal twice over —
-  it dispatches `Float16` to an Apple GEMM and supports no `Float64` at all. Vendor
-  coverage is now a method on the backend, which the Metal extension overrides. The three
-  affected fields of the `apple-m4` dataset were corrected to the value the fixed code
-  emits; the `library` column is a pure function of engine, backend and element type and
-  carries no measurement, so every other field of that file is unchanged.
-- `plot-benchmarks`: an element type a device could not measure was joined by a straight
-  segment drawn across it, which reads as a measured point at the gap; lines now break
-  there. Beyond the seven hues of the palette an eighth device repeated the first one's
-  colour, so the marker and the line style vary once the palette wraps, and the grouped
-  legend takes one column per backend instead of overflowing the figure width.
+  backend serves the BLAS element types and only those. Metal dispatches `Float16` to an
+  Apple GEMM and supports no `Float64`, so both were mislabelled. Vendor coverage is now a
+  method on the backend, which the Metal extension overrides. The three affected fields of
+  the `apple-m4` dataset were corrected to the value the fixed code emits; the `library`
+  column carries no measurement, and every other field of that file is unchanged.
+- `plot-benchmarks`: an element type a device could not measure was bridged by a straight
+  segment, as if it had been measured; lines now break there. Beyond the seven hues of
+  the palette an eighth device repeated the first one's colour; the marker and the line
+  style now vary once the palette wraps. The grouped legend takes one column per backend
+  instead of overflowing the figure width.
 - `plot-benchmarks`: the ideal reference S = t of the thread-scaling figure was drawn as
-  a two-point segment on a logarithmic thread axis, on which it is a chord and not the
-  reference; it is now sampled along the axis.
+  a two-point segment, a chord of the curve on the logarithmic thread axis; it is now
+  sampled along the axis.
 
 ## 2026-09-10
 

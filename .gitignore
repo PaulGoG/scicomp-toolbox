@@ -1,10 +1,11 @@
-# run outputs (never version-controlled)
+# run outputs
 data/
 plots/
 *.log
 hardware_benchmark_*
 
-# generated data and figure formats, except committed test fixtures
+# generated data and figure formats, except test fixtures, README figures and
+# reference runs
 *.csv
 *.h5
 *.jld2
@@ -14,8 +15,8 @@ hardware_benchmark_*
 !assets/**
 !reference-runs/**
 
-# test environments regenerate their manifests; tool and formatter manifests
-# are version-controlled
+# test environments regenerate their manifests; the manifests of tools, the formatter
+# and standalone/ are version-controlled
 */test/Manifest.toml
 
 # editor and OS metadata

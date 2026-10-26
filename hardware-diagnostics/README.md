@@ -66,8 +66,8 @@ the median absolute deviation; throughput is reported from the minimum (peak) an
 the median. Before a point runs, its single-evaluation time is predicted from the
 previous problem size of the same series by cubic extrapolation and the point is skipped
 when the prediction exceeds `max_point_seconds`. Points whose four operands exceed
-`memory_safety_fraction` of the free host memory (or of the device memory, or one operand
-above the device's maximum allocation) are skipped.
+`memory_safety_fraction` of the free host memory, or of the device memory, are skipped, as
+are device points with one operand above the device's maximum allocation.
 
 **Integer operands.** Integer entries are drawn from 1:4, so an entry of D is bounded by
 32N. The configuration is rejected when this bound exceeds `typemax(T)` for any
@@ -115,17 +115,17 @@ sidecar records the package's `versioninfo` output for that reason.
 | Intel oneAPI (Level Zero) | `oneAPI` | run on an Intel Arc integrated GPU (Core Ultra 7 155H) |
 | Apple Metal | `Metal` | run on an Apple M4; `Float64` is unsupported by the API |
 
-Every backend has now run `--stress` with all three engines, and the cross-engine
+Every backend has run `--stress` with all three engines, and the cross-engine
 verification passed on every device: 158 comparisons, none failed. All five element types
-were covered except on Metal, which carries no double precision — a `Float64` point there
-fails with the framework's own message and the remaining stages continue. The datasets are
-in `reference-runs/`, whose README records the hardware, the configuration and the outcome
-of each run.
+were covered except `Float64` on Metal, which carries no double precision; a `Float64`
+point there fails with the framework's own message and the remaining stages continue.
+The datasets are in `reference-runs/`, whose README records the hardware, the
+configuration and the outcome of each run.
 
-Which element types reach the vendor library is a property of the backend rather than of
-the type, so `Backends.vendor_blas_types` is a method the extensions override: Metal
-dispatches `Float16` to an Apple GEMM and has no `Float64` at all, while the BLAS-class
-backends follow `Float32`, `Float64`, `ComplexF32`, `ComplexF64`.
+Which element types reach the vendor library depends on the backend, so
+`Backends.vendor_blas_types` is a method the extensions override. The BLAS-class
+backends cover `Float32`, `Float64`, `ComplexF32` and `ComplexF64`; Metal dispatches
+`Float16` to an Apple GEMM and has no `Float64`.
 
 ## Usage
 

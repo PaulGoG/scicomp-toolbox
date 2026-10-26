@@ -16,8 +16,8 @@ reference-runs/
 └── tesla-t4/                 # NVIDIA Tesla T4, CUDA
 ```
 
-All eight runs were produced on 2026-09-11 from the same source revision, with the same
-command and the same configuration, so the datasets differ only in hardware:
+All eight runs were produced on 2026-09-11 from the same source revision, command and
+configuration, so the datasets differ only in hardware:
 
 ```bash
 julia run.jl hardware-diagnostics --stress
@@ -46,8 +46,8 @@ stands in, and `compute_units` is `0` in the provenance sidecar.
 Common to every run: Julia 1.13.0, KernelAbstractions 0.9.42, OpenBLAS (ILP64). Seven
 hosts are x86_64-linux-gnu; the Apple M4 is arm64-apple-darwin25.6.0 and the only run of
 the set produced off Linux. The RTX 5090 and the Radeon Pro W7900 sit in the same
-workstation, which is why their host rows coincide; the cross-host figures keep one series
-per distinct processor.
+workstation, so their host rows coincide; the cross-host figures keep one series per
+distinct processor.
 
 The `.toml` provenance sidecar and the `.log` report of each run are not committed: they
 record host names and absolute paths of the machines they ran on. Everything the figures
@@ -57,37 +57,38 @@ and the tables above need is in the `.csv`.
 
 The cross-engine verification passed everywhere it could run: **158 comparisons, none
 failed**. Both kernel engines are checked against `mul!` for every element type on the
-host and on the accelerator, which is 20 comparisons per machine and 18 on the M4, where
-`Float64` does not exist. Integers agree exactly and floating-point types stay within
+host and on the accelerator: 20 comparisons per machine, and 18 on the M4, whose GPU has
+no `Float64`. Integers agree exactly and floating-point types stay within
 8·√eps(T); the largest deviations observed are 3.5·10⁻³ for `Float16`, 3.8·10⁻⁷ for
 `Float32` and 8.0·10⁻¹⁶ for `Float64`.
 
-Every benchmark point carries `status = "ok"` apart from three groups, none of which is a
-defect of the tool:
+Every benchmark point carries `status = "ok"` apart from three groups:
 
 - CPU points the cubic time predictor skipped at N = 4096, recorded as
   `skipped: predicted ... exceeds max_point_seconds`.
-- The nine `Float64` points of the M4 — three sizes × three engines — recorded as
-  `failed: Metal does not support Float64 values`. Metal has no double precision at all,
-  so the run reports the refusal per point and continues instead of aborting the stage.
-- Thirty-six host points of the M4, skipped because that machine had 1014 MiB of free
-  memory when the run started and the budget is a fraction of what is free, not of what
-  is installed. Its thread sweep at N = 4096 is complete; its element-type stage is
-  complete only at N = 1024. The M4 dataset therefore holds 75 of 120 points, and the M4
-  host contributes to the thread-scaling figure but not to the throughput panels above
-  N = 1024.
+- The nine `Float64` points of the M4 (three sizes × three engines), recorded as
+  `failed: Metal does not support Float64 values`. Metal has no double precision; the run
+  reports the refusal per point and does not abort the stage.
+- Thirty-six host points of the M4, skipped because free host memory had fallen to about
+  75 MiB when the element-type stage set its budget (56.07 MiB); the machine had 1014 MiB
+  free when the run started. Its thread sweep at N = 4096 is complete; its element-type
+  stage is complete only at N = 1024. The M4 dataset therefore has 75 measured points of
+  120, and the M4 host contributes to the thread-scaling figure but not to the throughput
+  panels above N = 1024.
 
 **One label was corrected in `apple-m4` after the run.** The three `Float16` rows of the
 Metal device were written `GPUArrays generic` by a defect in the version that produced
 them: vendor coverage came from one fixed type set that assumed every backend serves the
-BLAS types and only those. Metal does not — `MPS_VALID_MATMUL_TYPES` and
+BLAS types and only those. Metal does not: `MPS_VALID_MATMUL_TYPES` and
 `MPSGRAPH_VALID_MATMUL_TYPES` both carry the `(Float16, Float16)` pair, so `mul!` reached
-an Apple GEMM, as the measured 3.45 TOP/s says plainly. `Backends.vendor_blas_types` asks
-the backend since 0.3.2, and those three fields now read `Metal Performance Shaders`,
-exactly what the fixed code emits.
+an Apple GEMM, consistent with the measured 3.45 TOP/s. `Backends.vendor_blas_types` asks
+the backend since 0.3.2, and those three fields now read `Metal Performance Shaders`, as
+the fixed code writes them.
 
-The correction touches the `library` annotation and nothing else: the column is a pure
-function of engine, backend and element type, carrying no measurement. Every other field
+The correction touches only the `library` annotation, a pure function of engine, backend
+and element type that carries no measurement. The three failed `Float64` rows of the
+Metal device keep the label the run wrote, `Metal Performance Shaders`; 0.3.2 writes
+`GPUArrays generic` for them. Every other field
 of the file, timings and throughputs included, is byte-identical to what the run wrote,
 and the untouched original is kept outside this repository with the run's `.toml` and
 `.log`.
@@ -102,10 +103,9 @@ cp /tmp/figures/cross_host_*_N4096.png assets/               # the figures of th
 
 `--compare` searches this directory recursively, pools the datasets by device and draws
 both cross-host figures at the largest problem size measured in every dataset (4096). An
-existing file is never overwritten, which is why the README figures are rendered
-elsewhere and copied over.
+existing file is never overwritten, so the README figures are rendered elsewhere and
+copied over.
 
-An element type a device could not measure leaves a gap in its line rather than a segment
-drawn across it, which is what the `Float64` column of the M4 shows. Past the seven hues
-of the palette the marker and the line style change as well, so the eighth device stays
-distinct from the first.
+An element type a device could not measure leaves a gap in its line, as in the `Float64`
+column of the M4. Past the seven hues of the palette the marker and the line style change
+as well, so the eighth device is distinguishable from the first.
