@@ -388,13 +388,14 @@ Float32 dual GEMM through the BLAS engine over the thread counts of
 [`thread_sweep`](@ref); speedup and parallel efficiency refer to the one-thread point of
 the same problem size. Sizes beyond the memory budget, or predicted to exceed
 `max_point_seconds` from the previous size's one-thread time, are skipped and recorded
-as such at every thread count.
+as such at every thread count. `on_record` is called with every record as it is produced.
 """
 function run_cpu_thread_sweep(
     config::BenchmarkConfig,
     host::HostInfo,
     rng::AbstractRNG,
-    reporter::Reporter,
+    reporter::Reporter;
+    on_record = Returns(nothing),
 )
     T = Float32
     cpu = CPU()
@@ -422,23 +423,22 @@ function run_cpu_thread_sweep(
                 advance!(reporter, "CPU sweep N = $N", length(counts))
                 emit(reporter, "  N = $N: $reason")
                 for t in counts
-                    push!(
-                        records,
-                        BenchmarkRecord(;
-                            device_type = "CPU",
-                            backend = "CPU",
-                            engine = "blas",
-                            library,
-                            device_name = host.cpu_model,
-                            data_type = string(T),
-                            matrix_dim = N,
-                            julia_threads = host.julia_threads,
-                            blas_threads = t,
-                            exceeds_physical_cores = t > host.physical_cores,
-                            nominal_ops = nominal_ops(T, N),
-                            status = reason,
-                        ),
+                    record = BenchmarkRecord(;
+                        device_type = "CPU",
+                        backend = "CPU",
+                        engine = "blas",
+                        library,
+                        device_name = host.cpu_model,
+                        data_type = string(T),
+                        matrix_dim = N,
+                        julia_threads = host.julia_threads,
+                        blas_threads = t,
+                        exceeds_physical_cores = t > host.physical_cores,
+                        nominal_ops = nominal_ops(T, N),
+                        status = reason,
                     )
+                    push!(records, record)
+                    on_record(record)
                 end
                 continue
             end
@@ -481,6 +481,7 @@ function run_cpu_thread_sweep(
                     status,
                 )
                 push!(records, record)
+                on_record(record)
                 emit(reporter, sweep_row(record))
             end
         end
@@ -496,13 +497,14 @@ end
 Every configured element type on the host: the BLAS engine at the reference thread
 counts and the KernelAbstractions engines on the Julia thread pool. A type whose
 operands exceed the memory budget is recorded as skipped at every engine and thread
-count of the stage.
+count of the stage. `on_record` is called with every record as it is produced.
 """
 function run_cpu_multitype(
     config::BenchmarkConfig,
     host::HostInfo,
     rng::AbstractRNG,
-    reporter::Reporter,
+    reporter::Reporter;
+    on_record = Returns(nothing),
 )
     cpu = CPU()
     engines = config.engines
@@ -546,6 +548,7 @@ function run_cpu_multitype(
                                 status = reason,
                             )
                             push!(records, record)
+                            on_record(record)
                             emit(reporter, type_row(record))
                         end
                     end
@@ -586,6 +589,7 @@ function run_cpu_multitype(
                             status,
                         )
                         push!(records, record)
+                        on_record(record)
                         emit(reporter, type_row(record))
                     end
                 end
@@ -627,7 +631,8 @@ end
 Every configured element type and size on one accelerator through the selected
 engines. Speedups compare against the CPU BLAS points at one thread and at the sweep
 ceiling. Points whose single operand exceeds the device's maximum allocation or whose
-footprint exceeds the device memory budget are skipped.
+footprint exceeds the device memory budget are skipped. `on_record` is called with every
+record as it is produced.
 """
 function run_accelerator_benchmarks(
     device::AcceleratorDevice,
@@ -635,7 +640,8 @@ function run_accelerator_benchmarks(
     host::HostInfo,
     cpu_records::AbstractVector{BenchmarkRecord},
     rng::AbstractRNG,
-    reporter::Reporter,
+    reporter::Reporter;
+    on_record = Returns(nothing),
 )
     backend = device.backend
     label = backend_label(backend)
@@ -705,6 +711,7 @@ function run_accelerator_benchmarks(
                     status,
                 )
                 push!(records, record)
+                on_record(record)
                 emit(reporter, device_row(record))
             end
         end

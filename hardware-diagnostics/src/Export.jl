@@ -12,7 +12,13 @@ using ..Config: BenchmarkConfig
 using ..Host: HostInfo
 
 export export_records_to_csv,
-    export_metadata_to_toml, safe_filepath, repository_commit, csv_header
+    export_metadata_to_toml,
+    safe_filepath,
+    repository_commit,
+    csv_header,
+    csv_row,
+    DatasetWriter,
+    write_record!
 
 """
     csv_header() -> String
@@ -27,6 +33,53 @@ csv_cell(value::Integer) = string(value)
 csv_cell(value::AbstractFloat) = isfinite(value) ? @sprintf("%.10g", value) : ""
 
 """
+    csv_row(record::BenchmarkRecord) -> String
+
+One CSV line of the dataset: the fields of `record` in order, strings quoted, undefined
+quantities (`NaN`) and inapplicable thread counts (0) as empty cells.
+"""
+function csv_row(record::BenchmarkRecord)
+    cells = String[]
+    for name in fieldnames(BenchmarkRecord)
+        value = getfield(record, name)
+        push!(cells, name === :blas_threads && value == 0 ? "" : csv_cell(value))
+    end
+    return join(cells, ",")
+end
+
+"""
+    DatasetWriter(filepath::AbstractString)
+
+Open `filepath`, write the CSV header and keep the stream open for `write_record!`;
+every row is flushed as it is written, so an interrupted run leaves a complete prefix of
+the dataset. `close` the writer when the run ends.
+"""
+struct DatasetWriter
+    io::IO
+    path::String
+end
+
+function DatasetWriter(filepath::AbstractString)
+    io = open(filepath, "w")
+    println(io, csv_header())
+    flush(io)
+    return DatasetWriter(io, String(filepath))
+end
+
+"""
+    write_record!(writer::DatasetWriter, record::BenchmarkRecord) -> nothing
+
+Append the row of `record` to the dataset and flush it.
+"""
+function write_record!(writer::DatasetWriter, record::BenchmarkRecord)
+    println(writer.io, csv_row(record))
+    flush(writer.io)
+    return nothing
+end
+
+Base.close(writer::DatasetWriter) = close(writer.io)
+
+"""
     export_records_to_csv(records, filepath) -> filepath
 
 Write the records as a tidy CSV file. Strings are quoted, undefined quantities (`NaN`)
@@ -39,12 +92,7 @@ function export_records_to_csv(
     open(filepath, "w") do io
         println(io, csv_header())
         for record in records
-            cells = String[]
-            for name in fieldnames(BenchmarkRecord)
-                value = getfield(record, name)
-                push!(cells, name === :blas_threads && value == 0 ? "" : csv_cell(value))
-            end
-            println(io, join(cells, ","))
+            println(io, csv_row(record))
         end
     end
     return filepath

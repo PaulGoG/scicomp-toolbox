@@ -39,8 +39,16 @@ a change belongs to it.
   Paths given on the command line resolve against the working directory.
 - Dependabot watches `standalone/`; the test environment of `hardware-diagnostics`
   declares its `julia` compat, which stops the spurious stdlib bounds it proposed.
-- Manifests resolved on Julia 1.13.3 with KernelAbstractions 0.9.43; actions pinned to
+- Manifests resolved on Julia 1.13.3 with KernelAbstractions 0.9.45; actions pinned to
   julia-actions/cache 3.5.0 and setup-julia 3.0.3.
+- `hardware-diagnostics` writes its TOML sidecar before the benchmark stages and its CSV
+  dataset one row per completed point, flushed as it goes, so a run interrupted by a
+  signal, an OOM kill or a scheduler limit keeps its provenance and every measured point.
+- KernelAbstractions stays on 0.9 (0.9.45): 0.10 replaces the CPU backend by an OpenCL
+  backend on PoCL, which changes what the host kernel engines measure, so adopting it is a
+  migration to be decided rather than a bump; Dependabot ignores its minor updates. The
+  GPU weak dependencies are bounded to their last series on 0.9 (CUDA 6.4, AMDGPU 2.9,
+  Metal 1.11, oneAPI 2.9), the later ones requiring 0.10.
 
 ### Fixed
 

@@ -55,6 +55,7 @@ export BenchmarkRecord, run_cpu_thread_sweep, run_cpu_multitype, run_accelerator
 include("Export.jl")
 using .Export
 export export_records_to_csv, export_metadata_to_toml, safe_filepath
+export DatasetWriter, write_record!, csv_row
 
 include("Driver.jl")
 using .Driver

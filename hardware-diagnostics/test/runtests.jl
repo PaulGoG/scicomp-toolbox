@@ -518,7 +518,15 @@ end
         reference = unique([1, last(counts)])
         @test total == length(counts) + 2 * (length(reference) + 2)
 
-        sweep = run_cpu_thread_sweep(config, host, rng, reporter)
+        seen = BenchmarkRecord[]
+        sweep = run_cpu_thread_sweep(
+            config,
+            host,
+            rng,
+            reporter;
+            on_record = r -> push!(seen, r),
+        )
+        @test seen == sweep
         @test length(sweep) == length(counts)
         @test all(r -> r.status == "ok", sweep)
         @test all(
@@ -644,14 +652,17 @@ end
             limited_records,
         )
         ample = mock_device(2^40, 2^40)
+        seen_device = BenchmarkRecord[]
         ample_records = run_accelerator_benchmarks(
             ample,
             config,
             host,
             cpu_records,
             rng,
-            device_reporter,
+            device_reporter;
+            on_record = r -> push!(seen_device, r),
         )
+        @test seen_device == ample_records
         @test length(ample_records) == n_device_points
         @test all(r -> r.status == "ok" && r.device_type == "GPU", ample_records)
         @test all(
@@ -718,6 +729,15 @@ end
             @test occursin(",,", lines[3])
             @test !occursin("NaN", lines[3])
             @test count(==(','), lines[3]) == length(fieldnames(BenchmarkRecord)) - 1
+            @test HD.Export.csv_row(measured) == lines[2]
+
+            streamed = joinpath(dir, "streamed.csv")
+            writer = HD.Export.DatasetWriter(streamed)
+            @test readlines(streamed) == [lines[1]]
+            HD.Export.write_record!(writer, measured)
+            @test HD.Export.write_record!(writer, skipped) === nothing
+            close(writer)
+            @test read(streamed, String) == read(path, String)
 
             metadata = joinpath(dir, "metadata.toml")
             export_metadata_to_toml(

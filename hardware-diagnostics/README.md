@@ -194,7 +194,9 @@ record_hostname = true  # boolean
 ## Outputs
 
 Each run writes three files named `hardware_benchmark_<timestamp>.*` into the output
-directory; an existing file is never overwritten (`#1`, `#2`, ... suffixes).
+directory; an existing file is never overwritten (`#1`, `#2`, ... suffixes). The sidecar
+is written before the benchmark stages and the dataset grows by one row as each point
+completes, so an interrupted run keeps its provenance and every measured point.
 
 - `.log`: the report as printed to the console, without progress line or escape
   sequences: host and accelerator sections, verification, the three stages, summary.
