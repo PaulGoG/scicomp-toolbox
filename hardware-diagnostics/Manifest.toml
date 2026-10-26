@@ -1,8 +1,8 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.13.0"
+julia_version = "1.13.3"
 manifest_format = "2.1"
-project_hash = "b14e9c5e835f321607f79807c1a5dcfbab4a18c6"
+project_hash = "86fddab8116fd7808bc77944e0cdeae0e9a232a6"
 
 [[deps.Adapt]]
 deps = ["LinearAlgebra"]
@@ -60,7 +60,7 @@ version = "1.11.0"
 deps = ["Dates", "KernelAbstractions", "LinearAlgebra", "Printf", "Random", "Statistics", "TOML"]
 path = "."
 uuid = "8fc1e2c1-14a9-422c-9178-779f4911c2d9"
-version = "0.3.0"
+version = "0.3.2"
 
     [deps.HardwareDiagnostics.extensions]
     HardwareDiagnosticsAMDGPUExt = "AMDGPU"
@@ -86,10 +86,10 @@ version = "1.12.0"
 
 [[deps.KernelAbstractions]]
 deps = ["Adapt", "Atomix", "InteractiveUtils", "MacroTools", "PrecompileTools", "Requires", "StaticArrays", "UUIDs"]
-git-tree-sha1 = "a5b87110fa95d711355af44832497745aa93fb52"
+git-tree-sha1 = "920671fc8e3be4daf278442bf0bd5cfb46ebac48"
 registries = "General"
 uuid = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
-version = "0.9.42"
+version = "0.9.43"
 
     [deps.KernelAbstractions.extensions]
     EnzymeExt = "EnzymeCore"
