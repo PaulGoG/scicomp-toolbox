@@ -13,3 +13,8 @@ updates:
       - "/standalone"
     schedule:
       interval: "weekly"
+    ignore:
+      # KernelAbstractions 0.10 moves the CPU backend to PoCL; adopting it is a
+      # deliberate migration, not a version bump
+      - dependency-name: "KernelAbstractions"
+        update-types: ["version-update:semver-minor"]
