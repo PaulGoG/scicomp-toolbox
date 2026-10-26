@@ -2,10 +2,10 @@
     HardwareDiagnostics
 
 Host and accelerator introspection together with a dual-GEMM throughput benchmark
-executed through two engines: a portable KernelAbstractions kernel and the linear
-algebra library reached through `LinearAlgebra.mul!` (OpenBLAS or MKL on the host,
-the vendor library on accelerators). GPU backends attach through the package
-extensions `HardwareDiagnostics{CUDA,AMDGPU,Metal,oneAPI}Ext`, which activate when the
+executed through three engines: `LinearAlgebra.mul!` (OpenBLAS or MKL on the host, the
+vendor library on accelerators), a naive KernelAbstractions kernel and a tiled one.
+GPU backends attach through the package extensions
+`HardwareDiagnostics{CUDA,AMDGPU,Metal,oneAPI}Ext`, which activate when the
 corresponding package is loaded in the session.
 """
 module HardwareDiagnostics

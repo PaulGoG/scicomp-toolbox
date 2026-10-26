@@ -10,7 +10,13 @@ using ..Kernels: ENGINES, integer_accumulation_bound, integer_range_safe
 using ..Sampling: SamplingPolicy
 
 export BenchmarkConfig,
-    validate_config, load_config, parse_cli_args, usage_text, PRESET_SIZES, SUPPORTED_TYPES
+    validate_config,
+    load_config,
+    parse_cli_args,
+    usage_text,
+    first_line,
+    PRESET_SIZES,
+    SUPPORTED_TYPES
 
 """
 Element types accepted in `target_types`.
@@ -21,7 +27,6 @@ const SUPPORTED_TYPES = Dict{String, DataType}(
     "Float64" => Float64,
     "ComplexF32" => ComplexF32,
     "ComplexF64" => ComplexF64,
-    "Int8" => Int8,
     "Int16" => Int16,
     "Int32" => Int32,
     "Int64" => Int64,
@@ -196,6 +201,8 @@ function parse_problem_sizes(table::AbstractDict)
         )
         push!(sizes, Int(value))
     end
+    allunique(sizes) ||
+        throw(ArgumentError("[benchmark].problem_sizes contains duplicates"))
     return sizes
 end
 
@@ -230,6 +237,7 @@ function parse_target_types(table::AbstractDict)
         )
         push!(types, SUPPORTED_TYPES[String(value)])
     end
+    allunique(types) || throw(ArgumentError("[benchmark].target_types contains duplicates"))
     return types
 end
 
@@ -306,7 +314,7 @@ function validate_config(raw::AbstractDict; preset::String = "config")
     )
     verify_kernels = get_boolean(hardware, "verify_kernels", true, "hardware")
     verification_size =
-        get_integer(hardware, "verification_size", 64, "hardware"; low = 8, high = 1024)
+        get_integer(hardware, "verification_size", 72, "hardware"; low = 8, high = 1024)
     (run_cpu || gpu_backend !== :none) || throw(
         ArgumentError(
             "[hardware]: run_cpu = false together with gpu_backend = \"none\" leaves nothing to run",
@@ -345,16 +353,51 @@ function validate_config(raw::AbstractDict; preset::String = "config")
 end
 
 """
+    first_line(text::AbstractString) -> String
+
+First line of `text`, for one-line error reports.
+"""
+first_line(text::AbstractString) = String(first(split(text, '\n')))
+
+"""
+    option_value(::Type{T}, flag::AbstractString, text::AbstractString) -> T
+
+Parse `text` as `T` for the command-line option `flag`; `ArgumentError` naming the flag
+when it does not parse.
+"""
+function option_value(::Type{T}, flag::AbstractString, text::AbstractString) where {T}
+    value = tryparse(T, text)
+    value === nothing &&
+        throw(ArgumentError("$flag expects a value of type $T, got '$text'"))
+    return value
+end
+
+"""
+    parse_toml_file(path::AbstractString) -> Dict{String, Any}
+
+`TOML.parsefile` with syntax errors turned into an `ArgumentError` naming `path`.
+"""
+function parse_toml_file(path::AbstractString)
+    try
+        return TOML.parsefile(path)
+    catch err
+        err isa TOML.ParserError || rethrow()
+        throw(ArgumentError("$path: $(sprint(showerror, err))"))
+    end
+end
+
+"""
     load_config(path::AbstractString) -> BenchmarkConfig
 
 Parse and validate a TOML configuration file.
 """
 function load_config(path::AbstractString)
     isfile(path) || throw(ArgumentError("configuration file not found: $path"))
-    return validate_config(TOML.parsefile(path))
+    return validate_config(parse_toml_file(path))
 end
 
 function usage_text()
+    preset(name) = join(PRESET_SIZES[name], ", ")
     return """
     hardware-diagnostics — host and accelerator introspection with a dual-GEMM benchmark
 
@@ -362,16 +405,16 @@ function usage_text()
       julia run.jl hardware-diagnostics [options]
 
     Problem sizes (default: problem_sizes of the configuration file):
-      -q, --quick               N = 512, 1024
-          --standard            N = 1024, 2048
-          --stress              N = 1024, 2048, 4096
+      -q, --quick               N = $(preset("quick"))
+          --standard            N = $(preset("standard"))
+          --stress              N = $(preset("stress"))
           --sizes N1,N2,...     explicit dimensions
 
     Engines and types:
           --engines E1,E2,...   subset of blas | ka | ka_tiled (default: all three)
           --ka-only             KernelAbstractions kernels only (ka, ka_tiled)
           --blas-only           LinearAlgebra.mul! (vendor library) only
-          --types T1,T2,...     Float16 Float32 Float64 ComplexF32 ComplexF64 Int8 Int16 Int32 Int64
+          --types T1,T2,...     Float16 Float32 Float64 ComplexF32 ComplexF64 Int16 Int32 Int64
 
     Sampling:
           --min-time S          minimum sampling time per point [s]
@@ -389,7 +432,7 @@ function usage_text()
 
     Files:
           --config FILE         configuration file (default: config.toml next to the tool)
-          --out-dir DIR         output directory (relative paths resolve against the tool)
+          --out-dir DIR         output directory, relative to the working directory
           --no-csv, --no-metadata, --no-log, --no-hostname
 
       -h, --help
@@ -400,7 +443,9 @@ end
     parse_cli_args(args, base_dir) -> BenchmarkConfig
 
 Read `config.toml` from `base_dir` (or the file given by `--config`), apply the
-command-line options on top, and validate. `--help` is handled by the caller.
+command-line options on top, and validate. The configuration file must exist. A
+relative `--out-dir` resolves against the working directory. `--help` is handled by
+the caller.
 """
 function parse_cli_args(args::AbstractVector{<:AbstractString}, base_dir::AbstractString)
     arguments = String.(args)
@@ -409,19 +454,13 @@ function parse_cli_args(args::AbstractVector{<:AbstractString}, base_dir::Abstra
         if argument == "--config"
             i < length(arguments) || throw(ArgumentError("--config requires a file path"))
             config_path = arguments[i + 1]
-            isfile(config_path) ||
-                throw(ArgumentError("configuration file not found: $config_path"))
         end
     end
-    raw = isfile(config_path) ? TOML.parsefile(config_path) : Dict{String, Any}()
-    raw isa Dict{String, Any} || (raw = convert(Dict{String, Any}, raw))
-    tables = Dict(
-        name => get!(raw, name, Dict{String, Any}()) for
-        name in ("benchmark", "sampling", "hardware", "safety", "output")
-    )
-    for (name, table) in tables
-        table isa AbstractDict || throw(ArgumentError("[$name] must be a table"))
-    end
+    isfile(config_path) ||
+        throw(ArgumentError("configuration file not found: $config_path"))
+    raw = parse_toml_file(config_path)
+    tables = Dict(name => section(raw, name) for name in KNOWN_KEYS[""])
+    merge!(raw, tables)
     preset = "config"
 
     i = 1
@@ -444,8 +483,10 @@ function parse_cli_args(args::AbstractVector{<:AbstractString}, base_dir::Abstra
             tables["benchmark"]["problem_sizes"] = copy(PRESET_SIZES["stress"])
             preset = "stress"
         elseif argument == "--sizes"
-            tables["benchmark"]["problem_sizes"] =
-                parse.(Int, parse_list(value_of(argument)))
+            items = parse_list(value_of(argument))
+            sizes = [option_value(Int, argument, item) for item in items]
+            allunique(sizes) || throw(ArgumentError("$argument contains duplicates"))
+            tables["benchmark"]["problem_sizes"] = sizes
             preset = "custom"
         elseif argument == "--engines"
             tables["benchmark"]["engines"] = parse_list(value_of(argument))
@@ -454,17 +495,23 @@ function parse_cli_args(args::AbstractVector{<:AbstractString}, base_dir::Abstra
         elseif argument == "--blas-only"
             tables["benchmark"]["engines"] = ["blas"]
         elseif argument == "--types"
-            tables["benchmark"]["target_types"] = parse_list(value_of(argument))
+            types = parse_list(value_of(argument))
+            allunique(types) || throw(ArgumentError("$argument contains duplicates"))
+            tables["benchmark"]["target_types"] = types
         elseif argument == "--seed"
-            tables["benchmark"]["seed"] = parse(Int, value_of(argument))
+            tables["benchmark"]["seed"] = option_value(Int, argument, value_of(argument))
         elseif argument == "--min-time"
-            tables["sampling"]["min_sampling_time_s"] = parse(Float64, value_of(argument))
+            tables["sampling"]["min_sampling_time_s"] =
+                option_value(Float64, argument, value_of(argument))
         elseif argument == "--min-samples"
-            tables["sampling"]["min_samples"] = parse(Int, value_of(argument))
+            tables["sampling"]["min_samples"] =
+                option_value(Int, argument, value_of(argument))
         elseif argument == "--max-samples"
-            tables["sampling"]["max_samples"] = parse(Int, value_of(argument))
+            tables["sampling"]["max_samples"] =
+                option_value(Int, argument, value_of(argument))
         elseif argument == "--max-point-seconds"
-            tables["sampling"]["max_point_seconds"] = parse(Float64, value_of(argument))
+            tables["sampling"]["max_point_seconds"] =
+                option_value(Float64, argument, value_of(argument))
         elseif argument == "--cpu-only"
             tables["hardware"]["gpu_backend"] = "none"
         elseif argument == "--gpu-only"
@@ -478,7 +525,7 @@ function parse_cli_args(args::AbstractVector{<:AbstractString}, base_dir::Abstra
         elseif argument == "--config"
             value_of(argument)  # already applied
         elseif argument == "--out-dir"
-            tables["output"]["output_directory"] = value_of(argument)
+            tables["output"]["output_directory"] = abspath(value_of(argument))
         elseif argument == "--no-csv"
             tables["output"]["export_csv"] = false
         elseif argument == "--no-metadata"

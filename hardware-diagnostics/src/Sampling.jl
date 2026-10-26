@@ -3,7 +3,7 @@ Time-budgeted repetition of one benchmark evaluation and robust summary statisti
 """
 module Sampling
 
-using Statistics: mean, median
+using Statistics: median
 
 export SamplingPolicy, TimingSummary, sample_timings, summarize_timings
 
@@ -13,6 +13,7 @@ export SamplingPolicy, TimingSummary, sample_timings, summarize_timings
 Stopping rule of [`sample_timings`](@ref): sampling continues until at least
 `min_samples` evaluations have consumed at least `min_sampling_time_s`, stops at
 `max_samples`, and stops early once the accumulated time exceeds `max_point_seconds`.
+The last cap overrides `min_samples`, so a slow point may stop after one evaluation.
 """
 struct SamplingPolicy
     min_sampling_time_s::Float64
@@ -50,22 +51,22 @@ end
 """
     TimingSummary
 
-Statistics of the sampled evaluation times in seconds: sample count, minimum, median,
-median absolute deviation and mean.
+Statistics of the sampled evaluation times in seconds: sample count, minimum, median
+and median absolute deviation (`NaN` for a single sample).
 """
 struct TimingSummary
     samples::Int
     min_s::Float64
     median_s::Float64
     mad_s::Float64
-    mean_s::Float64
 end
 
 """
     sample_timings(evaluate, policy::SamplingPolicy) -> Vector{Float64}
 
 Wall-clock durations in seconds of repeated calls to `evaluate()` (which must include
-any device synchronization), following `policy`. The caller performs warm-up.
+any device synchronization), following `policy`. The caller performs warm-up. The cap
+`max_point_seconds` on the accumulated time is checked before `min_samples`.
 """
 function sample_timings(evaluate::F, policy::SamplingPolicy) where {F}
     times = Float64[]
@@ -87,19 +88,15 @@ end
 """
     summarize_timings(times::AbstractVector{<:Real}) -> TimingSummary
 
-Minimum, median, median absolute deviation and mean of `times`.
+Minimum, median and median absolute deviation of `times`. The deviation is defined
+from two samples on and is `NaN` for a single one.
 """
 function summarize_timings(times::AbstractVector{<:Real})
     isempty(times) && throw(ArgumentError("cannot summarize an empty sample"))
     values = Float64.(times)
     center = median(values)
-    return TimingSummary(
-        length(values),
-        minimum(values),
-        center,
-        median(abs.(values .- center)),
-        mean(values),
-    )
+    mad_s = length(values) >= 2 ? median(abs.(values .- center)) : NaN
+    return TimingSummary(length(values), minimum(values), center, mad_s)
 end
 
 end

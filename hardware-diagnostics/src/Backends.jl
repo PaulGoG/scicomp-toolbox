@@ -223,10 +223,9 @@ const BLAS_ELEMENT_TYPES = (Float32, Float64, ComplexF32, ComplexF64)
 """
     vendor_blas_types(backend) -> Tuple
 
-Element types whose `mul!` reaches the vendor library of `backend`. The coverage is a
-property of the backend, not of the element type: Metal carries no `Float64` at all and
-routes `Float16` through Apple's own GEMM, so a backend whose library departs from
-[`BLAS_ELEMENT_TYPES`](@ref) overrides this method in its extension.
+Element types whose `mul!` reaches the vendor library of `backend`;
+`BLAS_ELEMENT_TYPES` by default. Extensions whose library covers a different set
+override it (Metal).
 """
 vendor_blas_types(::KernelAbstractions.Backend) = BLAS_ELEMENT_TYPES
 

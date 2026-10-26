@@ -6,9 +6,7 @@
 #
 #   julia run.jl hardware-diagnostics [options]      (see --help)
 
-using Pkg
-Pkg.activate(@__DIR__; io = devnull)
-Pkg.instantiate(; io = devnull)
+include(joinpath(@__DIR__, "activate.jl"))
 
 using HardwareDiagnostics
 

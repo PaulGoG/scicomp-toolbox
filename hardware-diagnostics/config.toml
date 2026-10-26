@@ -3,21 +3,21 @@
 [benchmark]
 engines = ["blas", "ka", "ka_tiled"]  # non-empty subset of: "blas" | "ka" | "ka_tiled"
 problem_sizes = [1024, 2048]  # positive integers, N of the N × N operands; CLI presets replace this list
-target_types = ["Float16", "Float32", "Float64", "Int32", "Int64"]  # subset of: Float16 | Float32 | Float64 | ComplexF32 | ComplexF64 | Int8 | Int16 | Int32 | Int64
+target_types = ["Float16", "Float32", "Float64", "Int32", "Int64"]  # subset of: Float16 | Float32 | Float64 | ComplexF32 | ComplexF64 | Int16 | Int32 | Int64
 seed = 20260907  # integer >= 0; seeds the operand generator
 
 [sampling]
 min_sampling_time_s = 0.5  # float > 0 [s]; sampling continues until this budget and min_samples are both met
 min_samples = 3  # integer >= 1
 max_samples = 30  # integer in [min_samples, 10000]
-max_point_seconds = 60.0  # float > 0 [s]; a point whose predicted single evaluation exceeds this is skipped
+max_point_seconds = 60.0  # float > 0 [s]; a point predicted above this per evaluation is skipped; also caps the sampling time of a point, overriding min_samples
 
 [hardware]
 run_cpu = true  # boolean
 gpu_backend = "auto"  # one of: "none" | "auto" | "oneapi" | "cuda" | "amdgpu" | "metal"
 thread_sweep_ceiling = "physical"  # one of: "physical" | "logical"
-verify_kernels = true  # boolean; cross-engine equality check before benchmarking
-verification_size = 64  # integer in [8, 1024]
+verify_kernels = true  # boolean; cross-engine check against mul! before benchmarking (tolerance 8·sqrt(eps(T)); exact for integers)
+verification_size = 72  # integer in [8, 1024]; not a multiple of 16, so the tiled kernel's padded edge tiles are exercised
 
 [safety]
 memory_safety_fraction = 0.75  # float in (0.0, 0.95]; usable fraction of free host memory or of device memory

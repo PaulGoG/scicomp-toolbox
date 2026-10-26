@@ -39,12 +39,9 @@ Backends.backend_label(::MetalBackend) = "Metal"
 Backends.vendor_blas_label(::MetalBackend) = "Metal Performance Shaders"
 
 """
-Element types Metal.jl dispatches to an Apple GEMM rather than to the GPUArrays fallback.
-`MPS_VALID_MATMUL_TYPES` and `MPSGRAPH_VALID_MATMUL_TYPES` both carry the
-`(Float16, Float16)` and `(Float32, Float32)` pairs, so half precision reaches the vendor
-path here even though it does not on the BLAS backends; `(ComplexF32, ComplexF32)` is
-served by the MPSGraph route that `mul!` prefers. Metal supports no `Float64` at all, and
-such a point fails rather than falling back.
+Element types that Metal.jl's `mul!` routes to MPS or MPSGraph (`MPS_VALID_MATMUL_TYPES`,
+`MPSGRAPH_VALID_MATMUL_TYPES`): Float16, Float32, ComplexF32. Metal has no Float64; such
+points fail.
 """
 Backends.vendor_blas_types(::MetalBackend) = (Float16, Float32, ComplexF32)
 Backends.device_fingerprint(::MetalBackend) =

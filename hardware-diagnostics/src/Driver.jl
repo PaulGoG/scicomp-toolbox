@@ -15,7 +15,7 @@ using ..Benchmark:
     run_accelerator_benchmarks,
     run_cpu_multitype,
     run_cpu_thread_sweep
-using ..Config: BenchmarkConfig, parse_cli_args, usage_text
+using ..Config: BenchmarkConfig, first_line, parse_cli_args, usage_text
 using ..Export:
     export_metadata_to_toml, export_records_to_csv, repository_commit, safe_filepath
 using ..Formatting: format_bytes, format_seconds
@@ -92,8 +92,6 @@ function print_accelerator_report(
     end
     return nothing
 end
-
-first_line(text::AbstractString) = String(first(split(text, '\n')))
 
 """
     run_verification(config, backends, rng, reporter)

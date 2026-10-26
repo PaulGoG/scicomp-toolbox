@@ -57,7 +57,10 @@ reference run on the same operands of size `verification_size` for every element
 every device, and each kernel result is compared with the reference: relative deviation
 at most 8·√eps(T) for floating-point types, exact equality for integers. A deviation
 above tolerance aborts the run. Element types the library cannot multiply on a device are
-reported as unverifiable and fail as individual points.
+reported as unverifiable and fail as individual points. The default
+`verification_size = 72` is not a multiple of the 16 × 16 tile, so the padded edge tiles
+of the tiled kernel and the partial work-groups of the naive kernel are part of the
+check.
 
 **Sampling.** Each point is evaluated once for compilation and first touch, then
 repeatedly until at least `min_samples` evaluations have consumed `min_sampling_time_s`
@@ -65,13 +68,17 @@ seconds, at most `max_samples` times. The dataset records the minimum, the media
 the median absolute deviation; throughput is reported from the minimum (peak) and from
 the median. Before a point runs, its single-evaluation time is predicted from the
 previous problem size of the same series by cubic extrapolation and the point is skipped
-when the prediction exceeds `max_point_seconds`. Points whose four operands exceed
+when the prediction exceeds `max_point_seconds`. The same cap bounds the sampling time of
+a point, so a slow point may stop after a single evaluation; the warm-up evaluation is
+timed, and when it alone exceeds the cap the point is recorded from that one evaluation.
+A point with one sample carries no dispersion: its `mad_time_ms` and `dispersion_pct`
+cells are empty. Points whose four operands exceed
 `memory_safety_fraction` of the free host memory, or of the device memory, are skipped, as
 are device points with one operand above the device's maximum allocation.
 
 **Integer operands.** Integer entries are drawn from 1:4, so an entry of D is bounded by
 32N. The configuration is rejected when this bound exceeds `typemax(T)` for any
-configured size: `Int8` is therefore unusable and `Int16` requires N ≤ 1023. Integer
+configured size: `Int8` is therefore not offered and `Int16` requires N ≤ 1023. Integer
 points through `mul!` run on the generic fallback of LinearAlgebra (host) or GPUArrays
 (device), as the `library` column states; `Float16` on the host likewise.
 
@@ -83,8 +90,8 @@ points through `mul!` run on the generic fallback of LinearAlgebra (host) or GPU
    elsewhere). With `thread_sweep_ceiling = "logical"` the sweep continues to the logical
    thread count, and points above the physical count are marked (`*` in the report,
    `exceeds_physical_cores` in the dataset) because they oversubscribe hyper-threads.
-   Speedup S(t) = t₁/t_t and parallel efficiency E(t) = S(t)/t refer to the one-thread
-   point of the same size.
+   Speedup S(p) = T₁/T_p and parallel efficiency E(p) = S(p)/p, with T_p the time at p
+   threads, refer to the one-thread point of the same size.
 2. *CPU element types*: every configured type, the library engine at one thread and at
    the sweep ceiling, the kernel engines on the Julia thread pool. The pool size is fixed
    at process start (`julia run.jl --threads N ...`) and recorded in `julia_threads`.
@@ -154,21 +161,21 @@ the command-line options apply on top. Unknown keys are rejected.
 [benchmark]
 engines = ["blas", "ka", "ka_tiled"]  # non-empty subset of: "blas" | "ka" | "ka_tiled"
 problem_sizes = [1024, 2048]  # positive integers, N of the N × N operands; CLI presets replace this list
-target_types = ["Float16", "Float32", "Float64", "Int32", "Int64"]  # subset of: Float16 | Float32 | Float64 | ComplexF32 | ComplexF64 | Int8 | Int16 | Int32 | Int64
+target_types = ["Float16", "Float32", "Float64", "Int32", "Int64"]  # subset of: Float16 | Float32 | Float64 | ComplexF32 | ComplexF64 | Int16 | Int32 | Int64
 seed = 20260907  # integer >= 0; seeds the operand generator
 
 [sampling]
 min_sampling_time_s = 0.5  # float > 0 [s]; sampling continues until this budget and min_samples are both met
 min_samples = 3  # integer >= 1
 max_samples = 30  # integer in [min_samples, 10000]
-max_point_seconds = 60.0  # float > 0 [s]; a point whose predicted single evaluation exceeds this is skipped
+max_point_seconds = 60.0  # float > 0 [s]; a point predicted above this per evaluation is skipped; also caps the sampling time of a point, overriding min_samples
 
 [hardware]
 run_cpu = true  # boolean
 gpu_backend = "auto"  # one of: "none" | "auto" | "oneapi" | "cuda" | "amdgpu" | "metal"
 thread_sweep_ceiling = "physical"  # one of: "physical" | "logical"
-verify_kernels = true  # boolean; cross-engine equality check before benchmarking
-verification_size = 64  # integer in [8, 1024]
+verify_kernels = true  # boolean; cross-engine check against mul! before benchmarking (tolerance 8·sqrt(eps(T)); exact for integers)
+verification_size = 72  # integer in [8, 1024]; not a multiple of 16, so the tiled kernel's padded edge tiles are exercised
 
 [safety]
 memory_safety_fraction = 0.75  # float in (0.0, 0.95]; usable fraction of free host memory or of device memory
@@ -190,15 +197,15 @@ directory; an existing file is never overwritten (`#1`, `#2`, ... suffixes).
   sequences: host and accelerator sections, verification, the three stages, summary.
 - `.csv`: one row per planned point, skipped and failed points included, with the
   columns `device_type, backend, engine, library, device_name, data_type, matrix_dim,
-  julia_threads, blas_threads,
-  exceeds_physical_cores, nominal_ops, samples, min_time_ms, median_time_ms,
-  mad_time_ms, dispersion_pct, throughput_gops, throughput_median_gops, speedup_vs_1t,
-  parallel_efficiency_pct, speedup_vs_cpu_1t, speedup_vs_cpu_maxt, status`. Undefined
-  quantities and inapplicable thread counts are empty cells; `engine` is `blas`, `ka`
-  or `ka_tiled`; `library` names what executed the point (the BLAS library and its
-  integer interface, `LinearAlgebra generic`, `GPUArrays generic`, `KernelAbstractions
-  naive` or `KernelAbstractions tiled`); `status` is `ok`, `skipped: <reason>` or
-  `failed: <error>`.
+  julia_threads, blas_threads, exceeds_physical_cores, nominal_ops, samples,
+  min_time_ms, median_time_ms, mad_time_ms, dispersion_pct, throughput_gops,
+  throughput_median_gops, speedup_vs_1t, parallel_efficiency_pct, speedup_vs_cpu_1t,
+  speedup_vs_cpu_maxt, status`. Undefined quantities and inapplicable thread counts are
+  empty cells; `engine` is `blas`, `ka` or `ka_tiled`; `library` names what executed the
+  point (the BLAS library and its integer interface, `LinearAlgebra generic`,
+  `GPUArrays generic`, `KernelAbstractions naive` or `KernelAbstractions tiled`);
+  `status` is `ok`, `skipped: <reason>` or `failed: <error>`. `mad_time_ms` and
+  `dispersion_pct` are empty for single-sample points.
 - `.toml`: provenance sidecar with the host fingerprint (CPU model, physical and logical
   counts, thread pools, BLAS library, memory, ISA flags, Julia and KernelAbstractions
   versions, toolbox commit), the effective configuration and the accelerator inventory
@@ -214,5 +221,6 @@ julia --project=hardware-diagnostics -e 'using Pkg; Pkg.test()'
 The suite runs Aqua, ExplicitImports and JET on the package, then unit tests of both
 kernels (against `A*B + A*C`, including sizes that are not multiples of the tile), the
 sampling rule, the configuration constraints, the command line, the host topology, the
-backend registry, the three stages at N = 32 and an end-to-end run into a temporary
-directory.
+backend registry, the three stages at N = 32, the accelerator stage on a host-backed
+mock device (allocation-limit skip and speedup paths) and an end-to-end run into a
+temporary directory.

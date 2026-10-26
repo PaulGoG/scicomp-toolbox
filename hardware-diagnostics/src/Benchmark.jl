@@ -10,11 +10,10 @@ using Printf: @sprintf
 using Random: AbstractRNG
 using ..Backends:
     AcceleratorDevice, backend_label, library_label, reclaim_device_memory!, to_device
-using ..Config: BenchmarkConfig, SUPPORTED_TYPES
+using ..Config: BenchmarkConfig, SUPPORTED_TYPES, first_line
 using ..Formatting: format_bytes, format_throughput
 using ..Host: HostInfo, thread_sweep
 using ..Kernels:
-    ENGINES,
     KERNEL_ENGINES,
     create_matrix,
     evaluate_engine!,
@@ -40,8 +39,8 @@ One row of the tidy dataset. Times are in milliseconds, throughputs in 10⁹ ope
 per second (from the minimum and from the median time), `dispersion_pct` is the median
 absolute deviation relative to the median. `blas_threads` is 0 where the BLAS thread
 count does not apply (KernelAbstractions engine, accelerators). Quantities that are
-undefined for a row are `NaN`; `status` is `"ok"`, `"skipped: <reason>"` or
-`"failed: <error>"`.
+undefined for a row are `NaN`, the dispersion of a single-sample point included;
+`status` is `"ok"`, `"skipped: <reason>"` or `"failed: <error>"`.
 """
 struct BenchmarkRecord
     device_type::String
@@ -178,10 +177,26 @@ function plan_total_steps(config::BenchmarkConfig, host::HostInfo, n_devices::In
 end
 
 """
+    warm_up_and_sample(evaluate, policy::SamplingPolicy) -> TimingSummary
+
+Evaluate once for compilation and first touch, timed, then sample under `policy`. When
+the warm-up alone exceeds `policy.max_point_seconds`, sampling is skipped and the
+summary is that single evaluation, so no point costs much more than twice the cap.
+"""
+function warm_up_and_sample(evaluate::F, policy::SamplingPolicy) where {F}
+    t0 = time_ns()
+    evaluate()
+    t_warm = (time_ns() - t0) / 1e9
+    t_warm > policy.max_point_seconds && return summarize_timings([t_warm])
+    GC.gc(false)
+    return summarize_timings(sample_timings(evaluate, policy))
+end
+
+"""
     measure_point(engine::Symbol, backend, ::Type{T}, N::Int, rng, policy) -> TimingSummary
 
-One benchmark point: generate the operands, move them to `backend`, evaluate once for
-compilation and first touch, then sample the evaluation under `policy`.
+One benchmark point: generate the operands, move them to `backend`, then warm up and
+sample the evaluation under `policy` ([`warm_up_and_sample`](@ref)).
 """
 function measure_point(
     engine::Symbol,
@@ -195,19 +210,11 @@ function measure_point(
     B = to_device(create_matrix(rng, T, N), backend)
     C = to_device(create_matrix(rng, T, N), backend)
     D = similar(A)
-    engine in ENGINES || throw(
-        ArgumentError("unknown engine :$engine; expected one of $(join(ENGINES, ", "))"),
-    )
     evaluate = () -> evaluate_engine!(engine, backend, D, A, B, C)
-    evaluate()
-    GC.gc(false)
-    times = sample_timings(evaluate, policy)
-    summary = summarize_timings(times)
+    summary = warm_up_and_sample(evaluate, policy)
     reclaim_device_memory!(backend)
     return summary
 end
-
-first_line(text::AbstractString) = String(first(split(text, '\n')))
 
 """
     try_measure(engine, backend, T, N, rng, policy) -> (summary, status)

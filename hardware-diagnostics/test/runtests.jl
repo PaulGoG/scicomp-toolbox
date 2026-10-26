@@ -221,7 +221,24 @@ end
         @test summary.min_s == 1.0
         @test summary.median_s == 3.0
         @test summary.mad_s == 1.0
-        @test summary.mean_s == 22.0
+        single = summarize_timings([0.25])
+        @test single.samples == 1
+        @test isnan(single.mad_s)
+        single_record = BenchmarkRecord(;
+            device_type = "CPU",
+            backend = "CPU",
+            engine = "blas",
+            library = "OpenBLAS (ILP64)",
+            device_name = "Mock",
+            data_type = "Float32",
+            matrix_dim = 32,
+            julia_threads = 1,
+            nominal_ops = nominal_ops(Float32, 32),
+            summary = single,
+        )
+        @test isnan(single_record.dispersion_pct)
+        @test isnan(single_record.mad_time_ms)
+        @test summarize_timings([0.2, 0.3]).mad_s ≈ 0.05
         @test_throws ArgumentError summarize_timings(Float64[])
         @test_throws ArgumentError SamplingPolicy(;
             min_sampling_time_s = 0.0,
@@ -390,6 +407,11 @@ end
         @test_throws ArgumentError parse_cli_args(["--unknown-flag"], TOOL_DIR)
         @test_throws ArgumentError parse_cli_args(["--sizes"], TOOL_DIR)
         @test_throws ArgumentError parse_cli_args(["--sizes", "abc"], TOOL_DIR)
+        @test_throws ArgumentError HD.Config.option_value(Int, "--seed", "abc")
+        @test_throws "--seed" HD.Config.option_value(Int, "--seed", "abc")
+        @test_throws ArgumentError parse_cli_args(["--sizes", "1024,"], TOOL_DIR)
+        @test_throws "--sizes" parse_cli_args(["--sizes", "1024,"], TOOL_DIR)
+        @test_throws ArgumentError parse_cli_args(["--sizes", "1024,1024"], TOOL_DIR)
         @test_throws ArgumentError parse_cli_args(["--cpu-only", "--gpu-only"], TOOL_DIR)
         @test_throws ArgumentError parse_cli_args(
             ["--config", joinpath(TOOL_DIR, "missing.toml")],
@@ -413,6 +435,11 @@ end
                 ["--config", path, "--quick"],
                 TOOL_DIR,
             )
+            write(path, "[benchmark\nseed = 1\n")
+            @test_throws ArgumentError parse_cli_args(["--config", path], TOOL_DIR)
+            @test_throws path parse_cli_args(["--config", path], TOOL_DIR)
+            @test_throws path load_config(path)
+            @test_throws ArgumentError parse_cli_args(String[], dir)
         end
         @test occursin("--gpu-backend", usage_text())
         result, text = capture_stdout(() -> configure(["--help"], TOOL_DIR))
@@ -560,6 +587,92 @@ end
             rng,
             config.sampling,
         )
+
+        # a warm-up above max_point_seconds is the only evaluation of the point
+        slow = SamplingPolicy(;
+            min_sampling_time_s = 1e-3,
+            min_samples = 2,
+            max_samples = 4,
+            max_point_seconds = 0.05,
+        )
+        warm = HD.Benchmark.warm_up_and_sample(() -> sleep(0.1), slow)
+        @test warm.samples == 1 && warm.min_s > 0.05 && isnan(warm.mad_s)
+        tiny = SamplingPolicy(;
+            min_sampling_time_s = 1e-3,
+            min_samples = 2,
+            max_samples = 4,
+            max_point_seconds = 1e-9,
+        )
+        @test HD.Benchmark.measure_point(:blas, CPU(), Float32, 32, rng, tiny).samples == 1
+
+        # accelerator stage on host-backed mock devices
+        cpu_records = vcat(sweep, multitype)
+        n_device_points =
+            length(config.problem_sizes) *
+            length(config.target_types) *
+            length(config.engines)
+        mock_device(total_memory_bytes, max_alloc_bytes) = AcceleratorDevice(
+            :mock,
+            "Host-backed mock",
+            "CPU",
+            "none",
+            0,
+            0,
+            0,
+            total_memory_bytes,
+            max_alloc_bytes,
+            CPU(),
+            Dict{String, String}(),
+        )
+        limited = mock_device(0, 1024)
+        @test 1024 < HD.Kernels.matrix_bytes(32, Float32)
+        device_reporter = Reporter(IO[devnull]; total = n_device_points, console = devnull)
+        limited_records = run_accelerator_benchmarks(
+            limited,
+            config,
+            host,
+            cpu_records,
+            rng,
+            device_reporter,
+        )
+        @test length(limited_records) == n_device_points
+        @test all(
+            r ->
+                startswith(r.status, "skipped") &&
+                occursin("maximum device allocation", r.status) &&
+                r.samples == 0,
+            limited_records,
+        )
+        ample = mock_device(2^40, 2^40)
+        ample_records = run_accelerator_benchmarks(
+            ample,
+            config,
+            host,
+            cpu_records,
+            rng,
+            device_reporter,
+        )
+        @test length(ample_records) == n_device_points
+        @test all(r -> r.status == "ok" && r.device_type == "GPU", ample_records)
+        @test all(
+            r ->
+                isfinite(r.speedup_vs_cpu_1t) &&
+                r.speedup_vs_cpu_1t > 0 &&
+                isfinite(r.speedup_vs_cpu_maxt) &&
+                r.speedup_vs_cpu_maxt > 0,
+            ample_records,
+        )
+        @test device_reporter.progress.current == 2 * n_device_points
+
+        # discovery through a registered probe
+        HD.Backends.register_backend!(:mock, () -> ample)
+        try
+            discovered = discover_accelerators(:auto)
+            @test count(d -> d.name === :mock, discovered) == 1
+            @test isempty(discover_accelerators(:none))
+        finally
+            filter!(p -> first(p) !== :mock, HD.Backends.BACKEND_PROBES)
+        end
     end
 
     @testset "Export" begin
