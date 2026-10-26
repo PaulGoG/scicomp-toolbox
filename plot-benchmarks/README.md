@@ -28,7 +28,9 @@ julia run.jl plot-benchmarks --compare                        # every dataset un
 julia run.jl plot-benchmarks --compare /scratch/runs --px-per-unit 3
 ```
 
-Figures are written to `plots/` (ignored by git) as `<dataset stem>_thread_scaling.<fmt>`
+Paths given on the command line are relative to the working directory; those in the
+configuration file are relative to the tool. Figures are written to `plots/` (ignored by
+git) as `<dataset stem>_thread_scaling.<fmt>`
 and `<dataset stem>_throughput_N<N>.<fmt>`; the dataset stem carries the run timestamp,
 so each figure traces back to the dataset and its provenance sidecar. With `--compare`
 the names are `cross_host_accelerators_N<N>.<fmt>` and `cross_host_hosts_N<N>.<fmt>`.
@@ -37,7 +39,7 @@ Existing files are never overwritten (`#1`, `#2`, ... suffixes).
 ## Figures
 
 **Thread scaling.** Two stacked panels sharing the thread axis (log₂): speedup
-S(t) = t₁/t_t with the dashed ideal S = t, and parallel efficiency E(t) = S(t)/t with
+S(p) = T₁/T_p with the dashed ideal S = p, and parallel efficiency E(p) = S(p)/p with
 the dashed 100 % reference. One series per problem size; hollow markers mark thread
 counts above the physical core count when the dataset was produced with
 `thread_sweep_ceiling = "logical"`.
@@ -55,14 +57,17 @@ KernelAbstractions kernel, and their ratio against a parity line, one series per
 accelerator of the compared datasets. The two throughput panels share their limits, so
 the vertical offset of a series between them is the gap between the two engines. Hollow
 markers in the library panel mark the element types the device has no vendor GEMM for,
-which `mul!` serves from the generic GPUArrays path.
+which `mul!` serves from the generic GPUArrays path. A type a device could not measure
+leaves a gap in its line; past the seven hues of the palette the marker and the line
+style change as well.
 
 **Host processors across machines** (`--compare`). Speedup and parallel efficiency of the
 library engine against the BLAS thread count, one series per host processor, with the
 ideal references. Each series ends at the physical core count of its host.
 
-Both comparison figures are drawn at the largest problem size measured in every compared
-dataset, unless `--size` is given. Datasets are pooled by device: a processor or
+Each comparison figure is drawn at the largest problem size measured in every compared
+dataset that holds rows for it (accelerator rows for the first, thread-sweep rows for the
+second), unless `--size` is given. Datasets are pooled by device: a processor or
 accelerator that appears in several of them contributes one series, taken from the first
 dataset that carries it.
 

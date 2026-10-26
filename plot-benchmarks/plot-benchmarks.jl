@@ -222,10 +222,24 @@ Three significant digits without exponent notation (`1130`, `212`, `94.3`, `3.46
 `0.42`, `0.0042`).
 """
 function value_label(x::Real)
-    x >= 100 && return @sprintf("%.0f", round(x; sigdigits = 3))
-    x >= 10 && return @sprintf("%.1f", x)
-    x >= 1 && return @sprintf("%.2f", x)
-    return @sprintf("%.3g", x)
+    r = round(x; sigdigits = 3)
+    r >= 100 && return @sprintf("%.0f", r)
+    r >= 10 && return @sprintf("%.1f", r)
+    r >= 1 && return @sprintf("%.2f", r)
+    return @sprintf("%.3g", r)
+end
+
+"""
+    log_label(value::Real, plain::Bool)
+
+Label of a logarithmic tick: a plain decimal when `plain` or when the decade is 10⁰ or
+10¹, otherwise `10^k` or `m × 10^k` with the integer mantissa `m`.
+"""
+function log_label(value::Real, plain::Bool)
+    k = floor(Int, log10(value) + 1e-9)
+    mantissa = round(Int, value / 10.0^k)
+    (plain || k in (0, 1)) && return @sprintf("%g", mantissa * 10.0^k)
+    return mantissa == 1 ? L"10^{%$k}" : L"%$mantissa \times 10^{%$k}"
 end
 
 """
@@ -238,9 +252,7 @@ labelled with powers of ten, except 10⁰ and 10¹, which always read `1` and `1
 function decade_ticks(low::Real, high::Real)
     exponents = ceil(Int, log10(low)):floor(Int, log10(high))
     plain = all(k -> -3 <= k <= 4, exponents)
-    labels = Any[
-        (plain || k in (0, 1)) ? @sprintf("%g", 10.0^k) : L"10^{%$k}" for k in exponents
-    ]
+    labels = Any[log_label(10.0^k, plain) for k in exponents]
     return (Float64[10.0^k for k in exponents], labels)
 end
 
@@ -248,7 +260,9 @@ end
     log_ticks(low::Real, high::Real) -> Tuple{Vector{Float64}, Vector}
 
 Decade ticks inside `[low, high]`, with the 2× and 5× intermediates added when the range
-spans fewer than three decades and would otherwise carry too few labels.
+spans fewer than three decades and would otherwise carry too few labels. The labels keep
+one style for the whole axis: plain decimals while every tick lies between 10⁻³ and 10⁴,
+powers of ten with integer mantissas otherwise.
 """
 function log_ticks(low::Real, high::Real)
     log10(high) - log10(low) >= 3 && return decade_ticks(low, high)
@@ -258,18 +272,16 @@ function log_ticks(low::Real, high::Real)
         low <= value <= high && push!(positions, value)
     end
     isempty(positions) && return decade_ticks(low, high)
-    labels = Any[
-        1e-3 <= value <= 1e4 ? @sprintf("%g", value) : L"10^{%$(round(Int, log10(value)))}" for value in positions
-    ]
+    plain = all(v -> 1e-3 <= v <= 1e4, positions)
+    labels = Any[log_label(v, plain) for v in positions]
     return (positions, labels)
 end
 
 """
     ideal_scaling(max_threads::Real) -> Tuple{Vector{Float64}, Vector{Float64}}
 
-Sampling of the ideal speedup S = t between one thread and `max_threads`. The curve is
-sampled rather than drawn as a segment because the thread axis is logarithmic, on which a
-two-point segment is a chord and not the reference.
+Ideal speedup S = p sampled along the logarithmic thread axis between one thread and
+`max_threads`; a two-point segment would be a chord of that axis.
 """
 function ideal_scaling(max_threads::Real)
     threads = 2.0 .^ range(0, log2(Float64(max_threads)); length = 96)
@@ -279,9 +291,8 @@ end
 """
     shorten_device_name(name::AbstractString) -> String
 
-Strip the vendor decorations of a `device_name` that carry no information about the
-device — trademark marks, the clock suffix of Intel CPU strings, the core-count and
-generation words, the GeForce and Max-Q wording — and collapse the remaining whitespace.
+Strip vendor decorations from `name` (trademark marks, the Intel clock suffix, core-count
+and generation words, GeForce and Max-Q wording) and collapse whitespace.
 """
 function shorten_device_name(name::AbstractString)
     short = String(name)
@@ -312,25 +323,30 @@ function sweep_rows(df::DataFrame)
 end
 
 """
-    thread_scaling_figure(df::DataFrame, settings::FigureSettings) -> Union{Figure, Nothing}
+    scaling_figure(series::Vector{DataFrame}, labels::Vector{String}, settings::FigureSettings;
+                   caption::AbstractString, footnote::Union{Nothing, AbstractString} = nothing,
+                   min_banks::Integer = 1) -> Figure
 
-Speedup and parallel efficiency against BLAS thread count, one series per problem size,
-with the ideal references; hollow markers mark thread counts above the physical core
-count. `nothing` when the dataset has no sweep rows.
+Speedup and parallel efficiency against the BLAS thread count, one line per entry of
+`series` (sweep rows sorted by `blas_threads`), with the ideal references. Thread counts
+above the physical core count are drawn hollow. `caption` is written in the speedup
+panel; `footnote` is appended on a second line only when no point is hollow.
 """
-function thread_scaling_figure(df::DataFrame, settings::FigureSettings)
-    rows = sweep_rows(df)
-    nrow(rows) == 0 && return nothing
-    sizes = sort(unique(rows.matrix_dim))
-    counts = sort(unique(Int.(rows.blas_threads)))
-    colors = Makie.wong_colors()
-    hollow = any(rows.exceeds_physical_cores)
+function scaling_figure(
+    series::Vector{DataFrame},
+    labels::Vector{String},
+    settings::FigureSettings;
+    caption::AbstractString,
+    footnote::Union{Nothing, AbstractString} = nothing,
+    min_banks::Integer = 1,
+)
+    counts = sort(unique(Int[Int(t) for panel in series for t in panel.blas_threads]))
 
-    fig = Figure(size = figure_size(settings.width_mm, 0.78))
+    fig = Figure(size = figure_size(settings.width_mm, 0.76))
     ticks = (counts, string.(counts))
     ax_speedup = Axis(
         fig[2, 1];
-        ylabel = L"Speedup $S(t) = t_1 / t_t$",
+        ylabel = L"Speedup $S(p) = T_1 / T_p$",
         xscale = log2,
         xticks = ticks,
     )
@@ -345,39 +361,36 @@ function thread_scaling_figure(df::DataFrame, settings::FigureSettings)
     hidexdecorations!(ax_speedup; grid = false, ticks = false)
 
     max_speedup = 1.0
+    hollow = false
     elements = Any[]
-    labels = Any[]
-    for (k, N) in enumerate(sizes)
-        series = rows[rows.matrix_dim .== N, :]
-        threads = Float64.(series.blas_threads)
-        speedup = Float64.(series.speedup_vs_1t)
-        efficiency = Float64.(series.parallel_efficiency_pct)
+    legend_labels = Any[]
+    for (k, (panel, label)) in enumerate(zip(series, labels))
+        threads = Float64.(panel.blas_threads)
+        speedup = Float64.(panel.speedup_vs_1t)
+        efficiency = Float64.(panel.parallel_efficiency_pct)
         max_speedup = max(max_speedup, maximum(speedup))
-        color = colors[mod1(k, length(colors))]
+        hollow |= any(panel.exceeds_physical_cores)
+        color, marker, linestyle = series_style(k)
         for (ax, values) in ((ax_speedup, speedup), (ax_efficiency, efficiency))
-            lines!(ax, threads, values; color, linewidth = 1.2)
-            filled = .!series.exceeds_physical_cores
-            scatter!(ax, threads[filled], values[filled]; color, markersize = 7)
-            scatter!(
+            lines!(ax, threads, values; color, linestyle, linewidth = 1.2)
+            marked_scatter!(
                 ax,
-                threads[.!filled],
-                values[.!filled];
-                color = :white,
-                strokecolor = color,
-                strokewidth = 1.2,
-                markersize = 7,
+                threads,
+                values,
+                Vector{Bool}(panel.exceeds_physical_cores),
+                color;
+                marker,
             )
         end
         push!(
             elements,
             [
-                LineElement(; color, linewidth = 1.2),
-                MarkerElement(; color, marker = :circle, markersize = 7),
+                LineElement(; color, linestyle, linewidth = 1.2),
+                MarkerElement(; color, marker, markersize = 7),
             ],
         )
-        push!(labels, "N = $N")
+        push!(legend_labels, label)
     end
-    top = 1.08 * max(max_speedup, 1.0)
     lines!(
         ax_speedup,
         ideal_scaling(maximum(counts))...;
@@ -387,7 +400,7 @@ function thread_scaling_figure(df::DataFrame, settings::FigureSettings)
     )
     hlines!(ax_efficiency, [100.0]; color = :grey35, linestyle = :dash, linewidth = 0.9)
     push!(elements, LineElement(; color = :grey35, linestyle = :dash, linewidth = 0.9))
-    push!(labels, L"Ideal ($S = t$, $E = 100$ \%)")
+    push!(legend_labels, L"Ideal ($S = p$, $E = 100$ \%)")
     if hollow
         push!(
             elements,
@@ -399,18 +412,33 @@ function thread_scaling_figure(df::DataFrame, settings::FigureSettings)
                 markersize = 7,
             ),
         )
-        push!(labels, "Above physical cores")
+        push!(legend_labels, "Above physical cores")
     end
-    top <= 12 && (ax_speedup.yticks = 0:1:ceil(Int, top))
+    text!(
+        ax_speedup,
+        0.01,
+        0.97;
+        text = footnote === nothing || hollow ? caption : caption * "\n" * footnote,
+        space = :relative,
+        align = (:left, :top),
+        fontsize = 0.9 * settings.fontsize_pt,
+    )
+    top = 1.16 * max_speedup
+    top <= 16 && (ax_speedup.yticks = 0:2:ceil(Int, top))
     ax_efficiency.yticks = 0:25:100
     ylims!(ax_speedup, 0, top)
     ylims!(ax_efficiency, 0, 112)
-    xlims!(ax_efficiency, minimum(counts) / 1.25, maximum(counts) * 1.25)
+    xlims!(ax_efficiency, minimum(counts) / 1.3, maximum(counts) * 1.3)
     Legend(
         fig[1, 1],
         elements,
-        labels;
+        legend_labels;
         orientation = :horizontal,
+        # one more bank as series accumulate, so the row stays inside the figure width
+        nbanks = max(min_banks, cld(length(legend_labels), 5)),
+        labelsize = 0.92 * settings.fontsize_pt,
+        patchsize = (12.0f0, 8.0f0),
+        colgap = 6,
         tellwidth = false,
         tellheight = true,
     )
@@ -420,11 +448,30 @@ function thread_scaling_figure(df::DataFrame, settings::FigureSettings)
 end
 
 """
+    thread_scaling_figure(df::DataFrame, settings::FigureSettings) -> Union{Figure, Nothing}
+
+Thread scaling of the dataset's CPU sweep, one series per problem size in ascending
+order. `nothing` when the dataset has no sweep rows.
+"""
+function thread_scaling_figure(df::DataFrame, settings::FigureSettings)
+    rows = sweep_rows(df)
+    nrow(rows) == 0 && return nothing
+    sizes = sort(unique(rows.matrix_dim))
+    return scaling_figure(
+        DataFrame[rows[rows.matrix_dim .== N, :] for N in sizes],
+        String["N = $N" for N in sizes],
+        settings;
+        caption = "Library engine (mul!), " * join(unique(String.(rows.data_type)), ", "),
+    )
+end
+
+"""
     throughput_rows(df::DataFrame, N::Integer) -> DataFrame
 
 Measured points at problem size `N`: every engine on accelerators; on the CPU the kernel
 engines and the library engine at its largest thread count within the physical cores
-(the largest count overall when every count exceeds them).
+(the largest count overall when every count exceeds them). A library row of the
+element-type stage supersedes the sweep row of the same element type.
 """
 function throughput_rows(df::DataFrame, N::Integer)
     ok = df[(df.status .== "ok") .& (df.matrix_dim .== N), :]
@@ -437,16 +484,31 @@ function throughput_rows(df::DataFrame, N::Integer)
             row.engine != "blas" ||
             (!ismissing(row.blas_threads) && row.blas_threads == max_threads)
     end
-    return ok[keep, :]
+    rows = ok[keep, :]
+    # the element-type stage remeasures the top thread count; its row supersedes the
+    # sweep row of the same element type
+    staged = Set(
+        row.data_type for row in eachrow(rows) if
+        row.device_type == "CPU" && row.engine == "blas" && ismissing(row.speedup_vs_1t)
+    )
+    superseded = map(eachrow(rows)) do row
+        row.device_type == "CPU" &&
+            row.engine == "blas" &&
+            !ismissing(row.speedup_vs_1t) &&
+            row.data_type in staged
+    end
+    return rows[.!superseded, :]
 end
 
 device_key(row) = (row.device_type, row.backend, row.device_name)
 
 function device_caption(row, N::Integer, cpu_threads)
+    name = shorten_device_name(row.device_name)
     if row.device_type == "CPU"
-        return "$(row.device_name), library at $(cpu_threads) threads, N = $N"
+        cpu_threads == 0 && return "$(name), N = $N"
+        return "$(name), library at $(cpu_threads) threads, N = $N"
     end
-    return "$(row.backend): $(row.device_name), N = $N"
+    return "$(row.backend): $(name), N = $N"
 end
 
 """
@@ -488,11 +550,13 @@ function throughput_figure(
     ticks = decade_ticks(fill_to, y_top)
 
     fig = Figure(size = figure_size(settings.width_mm, 0.22 + 0.3 * length(devices)))
+    # a single engine needs no legend; the panels then start at the first row
+    offset = n_engines > 1 ? 1 : 0
     axes = Axis[]
     for (d, key) in enumerate(devices)
         panel = rows[device_key.(eachrow(rows)) .== Ref(key), :]
         ax = Axis(
-            fig[d + 1, 1];
+            fig[d + offset, 1];
             yscale = log10,
             ylabel = "Throughput [GOP/s]",
             yticks = ticks,
@@ -500,15 +564,9 @@ function throughput_figure(
             xlabel = d == length(devices) ? "Element type" : "",
         )
         for (e, engine) in enumerate(engines)
-            xs = Float64[]
-            ys = Float64[]
-            for (t, type) in enumerate(types)
-                hit = panel[(panel.engine .== engine) .& (panel.data_type .== type), :]
-                nrow(hit) == 0 && continue
-                push!(xs, t + (e - (n_engines + 1) / 2) * bar_width)
-                push!(ys, first(hit.throughput_gops))
-            end
-            isempty(xs) && continue
+            positions, ys, _ = engine_series(panel, engine, types)
+            isempty(positions) && continue
+            xs = positions .+ (e - (n_engines + 1) / 2) * bar_width
             color = colors[engine]
             barplot!(
                 ax,
@@ -545,23 +603,25 @@ function throughput_figure(
         push!(axes, ax)
     end
     linkxaxes!(axes...)
-    Legend(
-        fig[1, 1],
-        [
-            PolyElement(;
-                color = colors[e],
-                strokecolor = darker(colors[e]),
-                strokewidth = 0.6,
-            ) for e in engines
-        ],
-        [ENGINE_LABELS[e] for e in engines];
-        orientation = :horizontal,
-        tellwidth = false,
-        tellheight = true,
-    )
-    rowgap!(fig.layout, 1, 2)
+    if offset == 1
+        Legend(
+            fig[1, 1],
+            [
+                PolyElement(;
+                    color = colors[e],
+                    strokecolor = darker(colors[e]),
+                    strokewidth = 0.6,
+                ) for e in engines
+            ],
+            [ENGINE_LABELS[e] for e in engines];
+            orientation = :horizontal,
+            tellwidth = false,
+            tellheight = true,
+        )
+        rowgap!(fig.layout, 1, 2)
+    end
     for d in 2:length(devices)
-        rowgap!(fig.layout, d, 6)
+        rowgap!(fig.layout, d - 1 + offset, 6)
     end
     return fig
 end
@@ -584,17 +644,31 @@ function comparison_datasets(root::AbstractString)
     return sort!(paths)
 end
 
-"""
-    common_size(frames::Vector{DataFrame}) -> Int
+is_accelerator_row(row) = row.device_type == "GPU"
+is_sweep_row(row) =
+    row.device_type == "CPU" &&
+    row.engine == REFERENCE_ENGINE &&
+    !ismissing(row.speedup_vs_1t)
 
-Largest problem size measured in every dataset, so that the compared devices carry the
-same work per point.
 """
-function common_size(frames::Vector{DataFrame})
-    shared =
-        intersect((Set(frame[frame.status .== "ok", :matrix_dim]) for frame in frames)...)
+    shared_size(frames::Vector{DataFrame}, select) -> Union{Int, Nothing}
+
+Largest problem size measured in every dataset that holds a row satisfying `select`;
+datasets without such rows do not constrain the choice. `nothing` when no dataset holds
+such rows; `ArgumentError` when they share no size.
+"""
+function shared_size(frames::Vector{DataFrame}, select)
+    measured = Set{Int}[]
+    for frame in frames
+        sizes = Set{Int}(
+            row.matrix_dim for row in eachrow(frame) if row.status == "ok" && select(row)
+        )
+        isempty(sizes) || push!(measured, sizes)
+    end
+    isempty(measured) && return nothing
+    shared = intersect(measured...)
     isempty(shared) &&
-        throw(ArgumentError("the datasets share no problem size measured in all of them"))
+        throw(ArgumentError("the datasets share no problem size for the requested rows"))
     return maximum(shared)
 end
 
@@ -626,7 +700,7 @@ function pooled_devices(frames::Vector{DataFrame}, N::Integer, device_type::Abst
 end
 
 """
-    log_limits(values; bottom = 0.06, top = 0.22) -> Tuple{Float64, Float64}
+    log_limits(values; bottom = 0.06, top = 0.18) -> Tuple{Float64, Float64}
 
 Limits of a logarithmic axis holding `values`, with room below the lowest point and above
 the highest one for the panel caption.
@@ -763,7 +837,8 @@ function accelerator_comparison_figure(
     settings::FigureSettings;
     matrix_dim::Union{Integer, Nothing} = nothing,
 )
-    N = matrix_dim === nothing ? common_size(frames) : Int(matrix_dim)
+    N = matrix_dim === nothing ? shared_size(frames, is_accelerator_row) : Int(matrix_dim)
+    N === nothing && return nothing
     rows = pooled_devices(frames, N, "GPU")
     nrow(rows) == 0 && return nothing
     types = filter(type -> type in rows.data_type, TYPE_ORDER)
@@ -839,6 +914,7 @@ function accelerator_comparison_figure(
         )
         push!(labels[group], drop_vendor(shorten_device_name(key[3])))
     end
+    isempty(throughputs) && return nothing
 
     hlines!(ax_ratio, [1.0]; color = :grey35, linestyle = :dash, linewidth = 0.9)
     text!(
@@ -874,9 +950,14 @@ function accelerator_comparison_figure(
         ylims!(ax, limits...)
         hidexdecorations!(ax; grid = false, ticks = false)
     end
-    ratio_limits = log_limits(ratios; bottom = 0.10, top = 0.16)
-    ax_ratio.yticks = log_ticks(ratio_limits...)
-    ylims!(ax_ratio, ratio_limits...)
+    if isempty(ratios)
+        ax_ratio.yticks = log_ticks(0.5, 2.0)
+        ylims!(ax_ratio, 0.5, 2.0)
+    else
+        ratio_limits = log_limits(ratios; bottom = 0.10, top = 0.16)
+        ax_ratio.yticks = log_ticks(ratio_limits...)
+        ylims!(ax_ratio, ratio_limits...)
+    end
     for ax in (ax_library, ax_portable, ax_ratio)
         xlims!(ax, 0.5, length(types) + 0.5)
     end
@@ -911,16 +992,18 @@ end
     host_comparison_figure(frames::Vector{DataFrame}, settings::FigureSettings;
                            matrix_dim = nothing) -> Union{Figure, Nothing}
 
-Speedup and parallel efficiency of the library engine against the BLAS thread count, one
-series per host processor of the datasets, at the shared problem size. `nothing` when the
-datasets hold no thread-scaling point.
+Thread scaling of the library engine, one series per host processor of the datasets, at
+`matrix_dim` (default: the largest size shared by the datasets that hold sweep rows),
+ordered by descending sweep ceiling. `nothing` when the datasets hold no thread-scaling
+point at that size.
 """
 function host_comparison_figure(
     frames::Vector{DataFrame},
     settings::FigureSettings;
     matrix_dim::Union{Integer, Nothing} = nothing,
 )
-    N = matrix_dim === nothing ? common_size(frames) : Int(matrix_dim)
+    N = matrix_dim === nothing ? shared_size(frames, is_sweep_row) : Int(matrix_dim)
+    N === nothing && return nothing
     pooled = pooled_devices(frames, N, "CPU")
     nrow(pooled) == 0 && return nothing
     rows = pooled[
@@ -929,116 +1012,21 @@ function host_comparison_figure(
     ]
     nrow(rows) == 0 && return nothing
     devices = unique(device_key.(eachrow(rows)))
-    panels =
-        Dict(key => rows[device_key.(eachrow(rows)) .== Ref(key), :] for key in devices)
+    panels = Dict(
+        key => sort(rows[device_key.(eachrow(rows)) .== Ref(key), :], :blas_threads) for
+        key in devices
+    )
     # descending sweep ceiling, which orders the hosts by the parallelism they expose
     sort!(devices; by = key -> (-maximum(panels[key].blas_threads), key[3]))
-    counts = sort(unique(Int.(rows.blas_threads)))
-
-    fig = Figure(size = figure_size(settings.width_mm, 0.76))
-    ticks = (counts, string.(counts))
-    ax_speedup = Axis(
-        fig[2, 1];
-        ylabel = L"Speedup $S(t) = t_1 / t_t$",
-        xscale = log2,
-        xticks = ticks,
+    T = join(unique(String.(rows.data_type)), ", ")
+    return scaling_figure(
+        DataFrame[panels[key] for key in devices],
+        String[shorten_device_name(key[3]) for key in devices],
+        settings;
+        caption = "Library engine (mul!), $T, N = $N",
+        footnote = "Each series ends at the physical core count of its host",
+        min_banks = 2,
     )
-    ax_efficiency = Axis(
-        fig[3, 1];
-        xlabel = "BLAS threads",
-        ylabel = "Parallel efficiency [%]",
-        xscale = log2,
-        xticks = ticks,
-    )
-    linkxaxes!(ax_speedup, ax_efficiency)
-    hidexdecorations!(ax_speedup; grid = false, ticks = false)
-
-    max_speedup = 1.0
-    hollow = false
-    elements = Any[]
-    labels = Any[]
-    for (k, key) in enumerate(devices)
-        panel = sort(panels[key], :blas_threads)
-        threads = Float64.(panel.blas_threads)
-        speedup = Float64.(panel.speedup_vs_1t)
-        efficiency = Float64.(panel.parallel_efficiency_pct)
-        max_speedup = max(max_speedup, maximum(speedup))
-        hollow |= any(panel.exceeds_physical_cores)
-        color, marker, linestyle = series_style(k)
-        for (ax, values) in ((ax_speedup, speedup), (ax_efficiency, efficiency))
-            lines!(ax, threads, values; color, linestyle, linewidth = 1.2)
-            marked_scatter!(
-                ax,
-                threads,
-                values,
-                Vector{Bool}(panel.exceeds_physical_cores),
-                color;
-                marker,
-            )
-        end
-        push!(
-            elements,
-            [
-                LineElement(; color, linestyle, linewidth = 1.2),
-                MarkerElement(; color, marker, markersize = 7),
-            ],
-        )
-        push!(labels, shorten_device_name(key[3]))
-    end
-    lines!(
-        ax_speedup,
-        ideal_scaling(maximum(counts))...;
-        color = :grey35,
-        linestyle = :dash,
-        linewidth = 0.9,
-    )
-    hlines!(ax_efficiency, [100.0]; color = :grey35, linestyle = :dash, linewidth = 0.9)
-    push!(elements, LineElement(; color = :grey35, linestyle = :dash, linewidth = 0.9))
-    push!(labels, L"Ideal ($S = t$, $E = 100$ \%)")
-    if hollow
-        push!(
-            elements,
-            MarkerElement(;
-                color = :white,
-                strokecolor = :grey35,
-                strokewidth = 1.2,
-                marker = :circle,
-                markersize = 7,
-            ),
-        )
-        push!(labels, "Above physical cores")
-    end
-    text!(
-        ax_speedup,
-        0.01,
-        0.97;
-        text = "Library engine (mul!), Float32, N = $N\nEach series ends at the physical core count of its host",
-        space = :relative,
-        align = (:left, :top),
-        fontsize = 0.9 * settings.fontsize_pt,
-    )
-    top = 1.16 * max_speedup
-    top <= 16 && (ax_speedup.yticks = 0:2:ceil(Int, top))
-    ax_efficiency.yticks = 0:25:100
-    ylims!(ax_speedup, 0, top)
-    ylims!(ax_efficiency, 0, 112)
-    xlims!(ax_efficiency, minimum(counts) / 1.3, maximum(counts) * 1.3)
-    Legend(
-        fig[1, 1],
-        elements,
-        labels;
-        orientation = :horizontal,
-        # one more bank as hosts accumulate, so the row stays inside the figure width
-        nbanks = max(2, cld(length(labels), 5)),
-        labelsize = 0.92 * settings.fontsize_pt,
-        patchsize = (12.0f0, 8.0f0),
-        colgap = 6,
-        tellwidth = false,
-        tellheight = true,
-    )
-    rowgap!(fig.layout, 1, 2)
-    rowgap!(fig.layout, 2, 6)
-    return fig
 end
 
 """
@@ -1084,9 +1072,9 @@ Usage:
   julia run.jl plot-benchmarks --compare [DIR] [options]
 
   --input FILE.csv    dataset (default: newest hardware_benchmark_*.csv in [input].dataset_directory)
-  --compare [DIR]     cross-host figures from every dataset under DIR, searched recursively
-                      (default: [input].comparison_directory)
-  --out-dir DIR       output directory (default: [figures].output_directory, relative to the tool)
+  --compare [DIR]     cross-host figures from every dataset under DIR, searched recursively,
+                      relative to the working directory (default: [input].comparison_directory)
+  --out-dir DIR       output directory, relative to the working directory (default: [figures].output_directory)
   --format F          pdf | png | svg
   --size N            problem size of the throughput figures (default: largest measured, and
                       with --compare the largest measured in every dataset)
@@ -1110,6 +1098,14 @@ function render(
     matrix_dim::Union{Integer, Nothing} = nothing,
 )
     df = read_dataset(dataset)
+    sizes = sort(unique(df[df.status .== "ok", :matrix_dim]))
+    if matrix_dim !== nothing && !(matrix_dim in sizes)
+        throw(
+            ArgumentError(
+                "--size $matrix_dim was not measured; measured sizes: $(join(sizes, ", "))",
+            ),
+        )
+    end
     mkpath(output_dir)
     stem = first(splitext(basename(dataset)))
     set_theme!(publication_theme(settings.fontsize_pt))
@@ -1159,19 +1155,30 @@ function render_comparison(
     matrix_dim::Union{Integer, Nothing} = nothing,
 )
     frames = DataFrame[read_dataset(path) for path in paths]
-    N = matrix_dim === nothing ? common_size(frames) : Int(matrix_dim)
+    if matrix_dim !== nothing
+        measured = (Set(frame[frame.status .== "ok", :matrix_dim]) for frame in frames)
+        sizes = sort(collect(intersect(measured...)))
+        matrix_dim in sizes || throw(
+            ArgumentError(
+                "--size $matrix_dim was not measured in every dataset; shared sizes: $(join(sizes, ", "))",
+            ),
+        )
+    end
     mkpath(output_dir)
     set_theme!(publication_theme(settings.fontsize_pt))
     written = String[]
-    for (figure, stem) in (
-        (
-            accelerator_comparison_figure(frames, settings; matrix_dim = N),
-            "cross_host_accelerators",
-        ),
-        (host_comparison_figure(frames, settings; matrix_dim = N), "cross_host_hosts"),
+    for (stem, build, select) in (
+        ("cross_host_accelerators", accelerator_comparison_figure, is_accelerator_row),
+        ("cross_host_hosts", host_comparison_figure, is_sweep_row),
     )
-        if figure === nothing
+        N = matrix_dim === nothing ? shared_size(frames, select) : Int(matrix_dim)
+        if N === nothing
             println("no rows for $stem in the compared datasets; figure skipped")
+            continue
+        end
+        figure = build(frames, settings; matrix_dim = N)
+        if figure === nothing
+            println("no rows at N = $N for $stem; figure skipped")
             continue
         end
         push!(
@@ -1201,6 +1208,13 @@ function main(args::Vector{String} = ARGS)
         i += 1
         return args[i]
     end
+    function positive_integer(flag)
+        text = value_of(flag)
+        value = tryparse(Int, text)
+        (value === nothing || value < 1) &&
+            throw(ArgumentError("$flag must be a positive integer, got '$text'"))
+        return value
+    end
     while i <= length(args)
         argument = args[i]
         if argument in ("-h", "--help")
@@ -1213,9 +1227,9 @@ function main(args::Vector{String} = ARGS)
         elseif argument == "--format"
             format = lowercase(value_of(argument))
         elseif argument == "--size"
-            matrix_dim = parse(Int, value_of(argument))
+            matrix_dim = positive_integer(argument)
         elseif argument == "--px-per-unit"
-            px_per_unit = parse(Int, value_of(argument))
+            px_per_unit = positive_integer(argument)
         elseif argument == "--compare"
             compare = true
             # the directory is optional; the next token is one unless it is another flag
@@ -1237,9 +1251,6 @@ function main(args::Vector{String} = ARGS)
             ),
         )
     end
-    if px_per_unit !== nothing && px_per_unit < 1
-        throw(ArgumentError("--px-per-unit must be an integer >= 1, got $px_per_unit"))
-    end
     settings = FigureSettings(
         settings.dataset_directory,
         settings.comparison_directory,
@@ -1249,11 +1260,14 @@ function main(args::Vector{String} = ARGS)
         settings.fontsize_pt,
         settings.output_directory,
     )
+    # configuration paths resolve against the tool directory, command-line paths against
+    # the working directory
     resolve(path) = isabspath(path) ? path : normpath(joinpath(@__DIR__, path))
-    output = resolve(out_dir === nothing ? settings.output_directory : out_dir)
+    output = out_dir === nothing ? resolve(settings.output_directory) : abspath(out_dir)
     if compare
         root =
-            resolve(compare_dir === nothing ? settings.comparison_directory : compare_dir)
+            compare_dir === nothing ? resolve(settings.comparison_directory) :
+            abspath(compare_dir)
         paths = comparison_datasets(root)
         for path in paths
             println("dataset ", path)
@@ -1261,7 +1275,8 @@ function main(args::Vector{String} = ARGS)
         written = render_comparison(paths, settings, output; matrix_dim)
     else
         dataset =
-            input === nothing ? latest_dataset(resolve(settings.dataset_directory)) : input
+            input === nothing ? latest_dataset(resolve(settings.dataset_directory)) :
+            abspath(input)
         dataset === nothing && throw(
             ArgumentError(
                 "no hardware_benchmark_*.csv found in $(resolve(settings.dataset_directory)); pass --input",
