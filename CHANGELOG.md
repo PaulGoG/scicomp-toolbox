@@ -43,7 +43,8 @@ a change belongs to it.
   (`core_cpus_list`, or `thread_siblings_list` before Linux 5.3), which covers arm64.
 - `plot-benchmarks` classifies rows by the `stage` column when the dataset has one.
 - `plot-benchmarks` on CSV 1.1 and CairoMakie 0.15.16; `standalone` declares its
-  `Printf` and `Test` compat.
+  `Printf` and `Test` compat; the test environment of `hardware-diagnostics` admits JET
+  0.13.
 - The device-level reading of the accelerator figure moved from the README to
   `reference-runs/README.md`.
 
