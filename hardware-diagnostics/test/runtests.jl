@@ -112,11 +112,11 @@ end
         @test nominal_ops(ComplexF32, 512) == 16.0 * 512^3
         @test footprint_bytes(1024, Float32) == 4 * 1024 * 1024 * 4
         @test footprint_bytes(512, Int8) == 4 * 512 * 512
-        @test HD.integer_accumulation_bound(1000) == 32_000
-        @test integer_range_safe(Int16, 1023)
-        @test !integer_range_safe(Int16, 1024)
-        @test integer_range_safe(Int8, 3)
-        @test !integer_range_safe(Int8, 4)
+        @test HD.integer_accumulation_bound(1000) == 2000
+        @test integer_range_safe(Int16, 16383)
+        @test !integer_range_safe(Int16, 16384)
+        @test integer_range_safe(Int8, 63)
+        @test !integer_range_safe(Int8, 64)
         @test integer_range_safe(Int32, 4096)
         @test integer_range_safe(Float16, 100_000)
 
@@ -161,7 +161,13 @@ end
         @test length(verify_engines(cpu, Float64, 40, rng; engines = (:ka_tiled,))) == 1
         @test HD.verification_tolerance(Float64) ≈ 8 * sqrt(eps(Float64))
         @test HD.verification_tolerance(ComplexF32) ≈ 8 * sqrt(eps(Float32))
-        @test all(1 .<= create_matrix(rng, Int8, 16) .<= 4)
+        @test all(in((-1, 1)), create_matrix(rng, Int8, 16))
+        same = HD.operand_rng(7, Float32, 32)
+        @test create_matrix(same, Float32, 32) ==
+              create_matrix(HD.operand_rng(7, Float32, 32), Float32, 32)
+        @test rand(HD.operand_rng(7, Float32, 32)) != rand(HD.operand_rng(7, Float32, 33))
+        @test rand(HD.operand_rng(7, Float32, 32)) != rand(HD.operand_rng(7, Float64, 32))
+        @test rand(HD.operand_rng(7, Float32, 32)) != rand(HD.operand_rng(8, Float32, 32))
         @test eltype(create_matrix(rng, ComplexF64, 4)) === ComplexF64
     end
 
@@ -297,13 +303,13 @@ end
         @test_throws ArgumentError validate_config(
             altered(d -> begin
                 d["benchmark"]["target_types"] = ["Int16"]
-                d["benchmark"]["problem_sizes"] = [1024]
+                d["benchmark"]["problem_sizes"] = [16384]
             end),
         )
         @test validate_config(
             altered(d -> begin
                 d["benchmark"]["target_types"] = ["Int16"]
-                d["benchmark"]["problem_sizes"] = [1000]
+                d["benchmark"]["problem_sizes"] = [1024, 2048, 4096]
             end),
         ) isa BenchmarkConfig
         @test validate_config(altered(d -> begin
@@ -531,7 +537,6 @@ end
             plan,
             config,
             host,
-            rng,
             reporter;
             on_record = r -> push!(seen, r),
         )
@@ -602,7 +607,7 @@ end
         tight_plan = benchmark_plan(tight, host, AcceleratorDevice[])
         tight_reporter =
             Reporter(IO[devnull]; total = length(tight_plan), console = devnull)
-        tight_records = run_benchmark_plan(tight_plan, tight, host, rng, tight_reporter)
+        tight_records = run_benchmark_plan(tight_plan, tight, host, tight_reporter)
         skipped = filter(r -> r.stage == "thread_sweep", tight_records)
         @test [r.blas_threads for r in skipped] == counts
         @test all(
@@ -627,7 +632,6 @@ end
             capped_plan,
             capped,
             host,
-            rng,
             Reporter(IO[devnull]; total = length(capped_plan), console = devnull),
         )
         @test all(

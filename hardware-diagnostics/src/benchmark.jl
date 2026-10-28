@@ -355,7 +355,7 @@ function reference_time_ms(
 end
 
 """
-    run_point(point, budget_bytes, previous, records, config, host, rng) -> BenchmarkRecord
+    run_point(point, budget_bytes, previous, records, config, host) -> BenchmarkRecord
 
 Measure `point` unless [`skip_reason`](@ref) applies and build its record. `previous`
 maps each series to its last measured `(N, minimum time [s])` and is updated; `records`
@@ -368,7 +368,6 @@ function run_point(
     records::AbstractVector{BenchmarkRecord},
     config::BenchmarkConfig,
     host::HostInfo,
-    rng::AbstractRNG,
 )
     T, N, t = point.element_type, point.matrix_dim, point.blas_threads
     on_host = point.device === nothing
@@ -382,6 +381,7 @@ function run_point(
     )
     if reason === nothing
         t > 0 && BLAS.set_num_threads(t)
+        rng = operand_rng(config.seed, T, N)
         summary, status = try_measure(point.engine, backend, T, N, rng, config.sampling)
         summary === nothing || (previous[key] = (N, summary.min_s))
     else
@@ -592,7 +592,7 @@ function point_label(point::BenchmarkPoint)
 end
 
 """
-    run_benchmark_plan(plan, config, host, rng, reporter; on_record = Returns(nothing))
+    run_benchmark_plan(plan, config, host, reporter; on_record = Returns(nothing))
         -> Vector{BenchmarkRecord}
 
 Execute `plan` in order, one record per point ([`run_point`](@ref)). The host memory
@@ -606,7 +606,6 @@ function run_benchmark_plan(
     plan::AbstractVector{BenchmarkPoint},
     config::BenchmarkConfig,
     host::HostInfo,
-    rng::AbstractRNG,
     reporter::Reporter;
     on_record = Returns(nothing),
 )
@@ -631,7 +630,7 @@ function run_benchmark_plan(
                 foreach(line -> emit(reporter, line), size_header(point))
             end
             advance!(reporter, point_label(point))
-            record = run_point(point, budget, previous, records, config, host, rng)
+            record = run_point(point, budget, previous, records, config, host)
             push!(records, record)
             on_record(record)
             emit(reporter, report_row(record))

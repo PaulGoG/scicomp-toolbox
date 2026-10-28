@@ -2,10 +2,10 @@
 # counts and the cross-engine verification.
 
 """
-Value range of integer operand entries; bounds the accumulated sums (see
-[`integer_accumulation_bound`](@ref)).
+Values of the integer operand entries, drawn with equal probability. Unit magnitude bounds
+every partial sum of D (see [`integer_accumulation_bound`](@ref)).
 """
-const INTEGER_ENTRY_RANGE = 1:4
+const INTEGER_ENTRIES = (-1, 1)
 
 """
 Edge length of the square work-group and of the local-memory tiles.
@@ -172,22 +172,32 @@ footprint_bytes(N::Integer, ::Type{T}) where {T} = 4 * matrix_bytes(N, T)
     create_matrix(rng::AbstractRNG, ::Type{T}, N::Integer) -> Matrix{T}
 
 N × N host operand: standard normal entries for floating-point and complex types,
-uniform integers in [`INTEGER_ENTRY_RANGE`](@ref) for integer types.
+entries of [`INTEGER_ENTRIES`](@ref) for integer types.
 """
 create_matrix(rng::AbstractRNG, ::Type{T}, N::Integer) where {T <: AbstractFloat} =
     randn(rng, T, N, N)
 create_matrix(rng::AbstractRNG, ::Type{Complex{T}}, N::Integer) where {T <: AbstractFloat} =
     randn(rng, Complex{T}, N, N)
 create_matrix(rng::AbstractRNG, ::Type{T}, N::Integer) where {T <: Integer} =
-    rand(rng, T(first(INTEGER_ENTRY_RANGE)):T(last(INTEGER_ENTRY_RANGE)), N, N)
+    rand(rng, T.(INTEGER_ENTRIES), N, N)
+
+"""
+    operand_rng(seed::Integer, ::Type{T}, N::Integer) -> Xoshiro
+
+Generator of the operands of element type `T` and size `N`, derived from the run seed.
+Every point of that type and size, on any engine or device, multiplies the same
+operands, and they do not depend on which other points the run contains.
+"""
+operand_rng(seed::Integer, ::Type{T}, N::Integer) where {T} =
+    Xoshiro(vcat(UInt64(seed), UInt64(N), UInt64.(codeunits(string(T)))))
 
 """
     integer_accumulation_bound(N::Integer) -> Int
 
-Largest value an entry of D can reach for integer operands drawn from
-[`INTEGER_ENTRY_RANGE`](@ref): two products of at most `last(range)²` summed over N.
+Largest magnitude a partial sum of an entry of D can reach for operands drawn from
+[`INTEGER_ENTRIES`](@ref): 2N products of unit magnitude.
 """
-integer_accumulation_bound(N::Integer) = 2 * last(INTEGER_ENTRY_RANGE)^2 * Int(N)
+integer_accumulation_bound(N::Integer) = 2 * Int(N)
 
 """
     integer_range_safe(::Type{T}, N::Integer) -> Bool

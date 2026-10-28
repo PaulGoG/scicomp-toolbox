@@ -76,11 +76,14 @@ cells are empty. Points whose four operands exceed
 `memory_safety_fraction` of the free host memory, or of the device memory, are skipped, as
 are device points with one operand above the device's maximum allocation.
 
-**Integer operands.** Integer entries are drawn from 1:4, so an entry of D is bounded by
-32N. The configuration is rejected when this bound exceeds `typemax(T)` for any
-configured size: `Int8` is therefore not offered and `Int16` requires N ≤ 1023. Integer
-points through `mul!` run on the generic fallback of LinearAlgebra (host) or GPUArrays
-(device), as the `library` column states; `Float16` on the host likewise.
+**Operands.** Floating-point and complex entries are standard normal, integer entries
+±1 with equal probability, so every partial sum of an entry of D is bounded by 2N in
+magnitude. The configuration is rejected when this bound exceeds `typemax(T)` for any
+configured size: `Int8` is therefore not offered and `Int16` requires N ≤ 16383. Each
+element type and size has its own generator derived from `seed`, so a point multiplies
+the same operands on every engine and device, whatever other points the run contains.
+Integer points through `mul!` run on the generic fallback of LinearAlgebra (host) or
+GPUArrays (device), as the `library` column states; `Float16` on the host likewise.
 
 **Stages.** The run is planned as one list of points and executed in order; the `stage`
 column of the dataset names the stage of each row (`thread_sweep`, `element_types`,

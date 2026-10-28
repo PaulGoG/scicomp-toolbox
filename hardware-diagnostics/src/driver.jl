@@ -70,7 +70,7 @@ function print_accelerator_report(
 end
 
 """
-    run_verification(config, backends, rng, reporter)
+    run_verification(config, backends, reporter)
 
 Compare every configured kernel engine with the `mul!` reference on every backend and
 element type at `verification_size`. Element types the library cannot multiply on a
@@ -80,7 +80,6 @@ an error.
 function run_verification(
     config::BenchmarkConfig,
     backends::AbstractVector,
-    rng::Xoshiro,
     reporter::Reporter,
 )
     engines = filter(in(KERNEL_ENGINES), config.engines)
@@ -95,6 +94,7 @@ function run_verification(
     end
     for backend in backends, T in config.target_types
         results = try
+            rng = operand_rng(config.seed, T, config.verification_size)
             verify_engines(backend, T, config.verification_size, rng; engines)
         catch err
             err isa InterruptException && rethrow()
@@ -163,7 +163,6 @@ function run_diagnostics(
     log_io === nothing || push!(sinks, log_io)
 
     devices = discover_accelerators(config.gpu_backend)
-    rng = Xoshiro(config.seed)
     plan = benchmark_plan(config, host, devices)
     reporter = Reporter(sinks; total = length(plan))
     records = BenchmarkRecord[]
@@ -238,9 +237,9 @@ function run_diagnostics(
             backends = Any[]
             config.run_cpu && push!(backends, CPU())
             append!(backends, [device.backend for device in devices])
-            run_verification(config, backends, rng, reporter)
+            run_verification(config, backends, reporter)
         end
-        append!(records, run_benchmark_plan(plan, config, host, rng, reporter; on_record))
+        append!(records, run_benchmark_plan(plan, config, host, reporter; on_record))
         finish!(reporter)
 
         measured = count(record -> record.status == "ok", records)
