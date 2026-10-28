@@ -196,6 +196,7 @@ end
         @test single.samples == 1
         @test isnan(single.mad_s)
         single_record = BenchmarkRecord(;
+            stage = "thread_sweep",
             device_type = "CPU",
             backend = "CPU",
             engine = "blas",
@@ -482,25 +483,64 @@ end
         @test HD.applies_to_os(:metal) == Sys.isapple()
     end
 
-    @testset "Benchmark stages on the host (N = 32)" begin
+    @testset "Benchmark plan on the host and on mock devices (N = 32)" begin
         config = validate_config(base_config_dict())
         host = host_info(; record_hostname = false)
         rng = Xoshiro(config.seed)
-        total = HD.plan_total_steps(config, host, 0)
-        reporter = Reporter(IO[devnull]; total, console = devnull)
         counts = thread_sweep(host.physical_cores, host.logical_threads, :physical)
         reference = unique([1, last(counts)])
-        @test total == length(counts) + 2 * (length(reference) + 2)
+        n_type_points = 2 * (length(reference) + 2)
+        n_device_points =
+            length(config.problem_sizes) *
+            length(config.target_types) *
+            length(config.engines)
+        mock_device(total_memory_bytes, max_alloc_bytes) = AcceleratorDevice(
+            :mock,
+            "Host-backed mock",
+            "CPU",
+            "none",
+            0,
+            0,
+            0,
+            total_memory_bytes,
+            max_alloc_bytes,
+            CPU(),
+            Dict{String, String}(),
+        )
+        limited = mock_device(0, 1024)
+        ample = mock_device(2^40, 2^40)
+        @test 1024 < HD.matrix_bytes(32, Float32)
 
+        plan = benchmark_plan(config, host, [limited, ample])
+        @test [p.stage for p in plan] == vcat(
+            fill(:thread_sweep, length(counts)),
+            fill(:element_types, n_type_points),
+            fill(:accelerator, 2 * n_device_points),
+        )
+        @test length(benchmark_plan(config, host, AcceleratorDevice[])) ==
+              length(counts) + n_type_points
+        gpu_only = validate_config(altered(d -> begin
+            d["hardware"]["run_cpu"] = false
+            d["hardware"]["gpu_backend"] = "auto"
+        end))
+        @test isempty(benchmark_plan(gpu_only, host, AcceleratorDevice[]))
+
+        reporter = Reporter(IO[devnull]; total = length(plan), console = devnull)
         seen = BenchmarkRecord[]
-        sweep = run_cpu_thread_sweep(
+        records = run_benchmark_plan(
+            plan,
             config,
             host,
             rng,
             reporter;
             on_record = r -> push!(seen, r),
         )
-        @test seen == sweep
+        @test seen == records
+        @test [r.stage for r in records] == [string(p.stage) for p in plan]
+        @test reporter.progress.current == length(plan)
+        @test BLAS.get_num_threads() == host.blas_threads
+
+        sweep = filter(r -> r.stage == "thread_sweep", records)
         @test length(sweep) == length(counts)
         @test all(r -> r.status == "ok", sweep)
         @test all(
@@ -513,10 +553,9 @@ end
         @test all(r -> isnan(r.speedup_vs_cpu_1t) && isnan(r.speedup_vs_cpu_maxt), sweep)
         @test all(r -> r.throughput_gops > 0 && r.samples >= 2, sweep)
         @test all(r -> !r.exceeds_physical_cores, sweep)
-        @test BLAS.get_num_threads() == host.blas_threads
 
-        multitype = run_cpu_multitype(config, host, rng, reporter)
-        @test length(multitype) == 2 * (length(reference) + 2)
+        multitype = filter(r -> r.stage == "element_types", records)
+        @test length(multitype) == n_type_points
         ka = filter(r -> r.engine in ("ka", "ka_tiled"), multitype)
         @test length(ka) == 4
         @test all(r -> r.blas_threads == 0 && r.julia_threads == Threads.nthreads(), ka)
@@ -530,29 +569,76 @@ end
             r -> isnan(r.speedup_vs_1t) && isnan(r.parallel_efficiency_pct),
             multitype,
         )
-        @test HD.cpu_reference_time_ms(multitype, Float32, 32, 1) > 0
-        @test isnan(HD.cpu_reference_time_ms(multitype, Float64, 32, 1))
-        @test reporter.progress.current == total
+        @test HD.reference_time_ms(records, :element_types, Float32, 32, 1) > 0
+        @test isnan(HD.reference_time_ms(records, :element_types, Float64, 32, 1))
+        # both CPU stages measure Float32 through the library at one thread; the stage
+        # column keeps the two rows apart
+        @test count(
+            r -> r.engine == "blas" && r.data_type == "Float32" && r.blas_threads == 1,
+            records,
+        ) == 2
+
+        devices = filter(r -> r.stage == "accelerator", records)
+        limited_records = devices[1:n_device_points]
+        ample_records = devices[(n_device_points + 1):end]
+        @test all(
+            r ->
+                startswith(r.status, "skipped") &&
+                occursin("maximum device allocation", r.status) &&
+                r.samples == 0,
+            limited_records,
+        )
+        @test all(r -> r.status == "ok" && r.device_type == "GPU", ample_records)
+        @test all(
+            r ->
+                isfinite(r.speedup_vs_cpu_1t) &&
+                r.speedup_vs_cpu_1t > 0 &&
+                isfinite(r.speedup_vs_cpu_maxt) &&
+                r.speedup_vs_cpu_maxt > 0,
+            ample_records,
+        )
 
         tight = validate_config(altered(d -> d["safety"]["memory_safety_fraction"] = 1e-12))
-        tight_reporter = Reporter(
-            IO[devnull];
-            total = HD.plan_total_steps(tight, host, 0),
-            console = devnull,
-        )
-        skipped = run_cpu_thread_sweep(tight, host, rng, tight_reporter)
-        @test length(skipped) == length(counts)
+        tight_plan = benchmark_plan(tight, host, AcceleratorDevice[])
+        tight_reporter =
+            Reporter(IO[devnull]; total = length(tight_plan), console = devnull)
+        tight_records = run_benchmark_plan(tight_plan, tight, host, rng, tight_reporter)
+        skipped = filter(r -> r.stage == "thread_sweep", tight_records)
         @test [r.blas_threads for r in skipped] == counts
         @test all(
             r -> startswith(r.status, "skipped") && r.samples == 0 && isnan(r.min_time_ms),
             skipped,
         )
-        skipped_types = run_cpu_multitype(tight, host, rng, tight_reporter)
-        @test length(skipped_types) == 2 * (length(reference) + 2)
+        skipped_types = filter(r -> r.stage == "element_types", tight_records)
+        @test length(skipped_types) == n_type_points
         @test all(r -> startswith(r.status, "skipped"), skipped_types)
         @test [r.blas_threads for r in skipped_types if r.engine == "blas"] == vcat(reference, reference)
         @test all(r -> r.blas_threads == 0, filter(r -> r.engine != "blas", skipped_types))
         @test tight_reporter.progress.current == tight_reporter.progress.total
+
+        # every series is extrapolated from its own previous size: with a negligible cap
+        # each first size runs once and each second size is predicted out
+        capped = validate_config(altered(d -> begin
+            d["benchmark"]["problem_sizes"] = [16, 32]
+            d["sampling"]["max_point_seconds"] = 1e-9
+        end))
+        capped_plan = benchmark_plan(capped, host, [ample])
+        capped_records = run_benchmark_plan(
+            capped_plan,
+            capped,
+            host,
+            rng,
+            Reporter(IO[devnull]; total = length(capped_plan), console = devnull),
+        )
+        @test all(
+            r -> r.status == "ok" && r.samples == 1,
+            filter(r -> r.matrix_dim == 16, capped_records),
+        )
+        @test all(
+            r -> occursin("predicted", r.status),
+            filter(r -> r.matrix_dim == 32, capped_records),
+        )
+
         @test HD.prediction_reason((32, 2.0), 64, 10.0) !== nothing
         @test HD.prediction_reason((32, 1.0), 64, 10.0) === nothing
         @test HD.prediction_reason(nothing, 64, 10.0) === nothing
@@ -586,68 +672,6 @@ end
         )
         @test HD.measure_point(:blas, CPU(), Float32, 32, rng, tiny).samples == 1
 
-        # accelerator stage on host-backed mock devices
-        cpu_records = vcat(sweep, multitype)
-        n_device_points =
-            length(config.problem_sizes) *
-            length(config.target_types) *
-            length(config.engines)
-        mock_device(total_memory_bytes, max_alloc_bytes) = AcceleratorDevice(
-            :mock,
-            "Host-backed mock",
-            "CPU",
-            "none",
-            0,
-            0,
-            0,
-            total_memory_bytes,
-            max_alloc_bytes,
-            CPU(),
-            Dict{String, String}(),
-        )
-        limited = mock_device(0, 1024)
-        @test 1024 < HD.matrix_bytes(32, Float32)
-        device_reporter = Reporter(IO[devnull]; total = n_device_points, console = devnull)
-        limited_records = run_accelerator_benchmarks(
-            limited,
-            config,
-            host,
-            cpu_records,
-            rng,
-            device_reporter,
-        )
-        @test length(limited_records) == n_device_points
-        @test all(
-            r ->
-                startswith(r.status, "skipped") &&
-                occursin("maximum device allocation", r.status) &&
-                r.samples == 0,
-            limited_records,
-        )
-        ample = mock_device(2^40, 2^40)
-        seen_device = BenchmarkRecord[]
-        ample_records = run_accelerator_benchmarks(
-            ample,
-            config,
-            host,
-            cpu_records,
-            rng,
-            device_reporter;
-            on_record = r -> push!(seen_device, r),
-        )
-        @test seen_device == ample_records
-        @test length(ample_records) == n_device_points
-        @test all(r -> r.status == "ok" && r.device_type == "GPU", ample_records)
-        @test all(
-            r ->
-                isfinite(r.speedup_vs_cpu_1t) &&
-                r.speedup_vs_cpu_1t > 0 &&
-                isfinite(r.speedup_vs_cpu_maxt) &&
-                r.speedup_vs_cpu_maxt > 0,
-            ample_records,
-        )
-        @test device_reporter.progress.current == 2 * n_device_points
-
         # discovery dispatches on the backend name; the test environment never loads
         # Metal, so its probe method can stand in for an extension
         @eval HD.probe_accelerator(::Val{:metal}) = $ample
@@ -666,6 +690,7 @@ end
         config = validate_config(base_config_dict())
         host = host_info(; record_hostname = false)
         measured = BenchmarkRecord(;
+            stage = "thread_sweep",
             device_type = "CPU",
             backend = "CPU",
             engine = "blas",
@@ -681,6 +706,7 @@ end
             parallel_efficiency_pct = 75.0,
         )
         skipped = BenchmarkRecord(;
+            stage = "element_types",
             device_type = "CPU",
             backend = "CPU",
             engine = "ka",

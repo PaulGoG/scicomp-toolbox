@@ -44,7 +44,7 @@ export SamplingPolicy, TimingSummary, sample_timings, summarize_timings
 export BenchmarkConfig, validate_config, load_config, parse_cli_args, usage_text
 export HostInfo, host_info, physical_core_count, thread_sweep
 export Reporter
-export BenchmarkRecord, run_cpu_thread_sweep, run_cpu_multitype, run_accelerator_benchmarks
+export BenchmarkRecord, BenchmarkPoint, benchmark_plan, run_benchmark_plan
 export export_records_to_csv, export_metadata_to_toml, safe_filepath
 export DatasetWriter, write_record!, csv_row
 export configure, run_diagnostics

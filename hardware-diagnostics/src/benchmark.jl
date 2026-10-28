@@ -1,17 +1,27 @@
-# Benchmark stages: the CPU thread-scaling sweep, the CPU element-type suite and the
-# accelerator suite, all producing [`BenchmarkRecord`](@ref)s.
+# The benchmark as a plan of points, executed in order: the CPU thread-scaling sweep, the
+# CPU element-type stage and the accelerator stage, each point producing one
+# [`BenchmarkRecord`](@ref).
+
+"""
+Stages of a run in execution order, as written to the `stage` column: the Float32
+library engine over the BLAS thread counts, every element type and engine on the host,
+every element type and engine on each accelerator.
+"""
+const STAGES = (:thread_sweep, :element_types, :accelerator)
 
 """
     BenchmarkRecord
 
-One row of the tidy dataset. Times are in milliseconds, throughputs in 10⁹ operations
-per second (from the minimum and from the median time), `dispersion_pct` is the median
-absolute deviation relative to the median. `blas_threads` is 0 where the BLAS thread
-count does not apply (KernelAbstractions engine, accelerators). Quantities that are
-undefined for a row are `NaN`, the dispersion of a single-sample point included;
-`status` is `"ok"`, `"skipped: <reason>"` or `"failed: <error>"`.
+One row of the tidy dataset. `stage` is one of [`STAGES`](@ref). Times are in
+milliseconds, throughputs in 10⁹ operations per second (from the minimum and from the
+median time), `dispersion_pct` is the median absolute deviation relative to the median.
+`blas_threads` is 0 where the BLAS thread count does not apply (KernelAbstractions
+engine, accelerators). Quantities that are undefined for a row are `NaN`, the dispersion
+of a single-sample point included; `status` is `"ok"`, `"skipped: <reason>"` or
+`"failed: <error>"`.
 """
 struct BenchmarkRecord
+    stage::String
     device_type::String
     backend::String
     engine::String
@@ -38,8 +48,8 @@ struct BenchmarkRecord
 end
 
 """
-    BenchmarkRecord(; device_type, backend, engine, library, device_name, data_type,
-                    matrix_dim, julia_threads, nominal_ops, blas_threads = 0,
+    BenchmarkRecord(; stage, device_type, backend, engine, library, device_name,
+                    data_type, matrix_dim, julia_threads, nominal_ops, blas_threads = 0,
                     exceeds_physical_cores = false, summary = nothing,
                     speedup_vs_1t = NaN, parallel_efficiency_pct = NaN,
                     speedup_vs_cpu_1t = NaN, speedup_vs_cpu_maxt = NaN, status = "ok")
@@ -47,6 +57,7 @@ end
 Build a record from a [`TimingSummary`](@ref) (or none, for skipped and failed points).
 """
 function BenchmarkRecord(;
+    stage::AbstractString,
     device_type::AbstractString,
     backend::AbstractString,
     engine::AbstractString,
@@ -78,6 +89,7 @@ function BenchmarkRecord(;
         gops_median = nominal_ops / summary.median_s / 1e9
     end
     return BenchmarkRecord(
+        String(stage),
         String(device_type),
         String(backend),
         String(engine),
@@ -107,9 +119,25 @@ end
 element_type(record::BenchmarkRecord) = SUPPORTED_TYPES[record.data_type]
 
 """
+    BenchmarkPoint
+
+One measurement of the plan: its `stage` (one of [`STAGES`](@ref)), the accelerator
+`device` (`nothing` on the host), engine, element type, problem size N and BLAS thread
+count (0 where it does not apply: kernel engines and accelerators).
+"""
+struct BenchmarkPoint
+    stage::Symbol
+    device::Union{AcceleratorDevice, Nothing}
+    engine::Symbol
+    element_type::DataType
+    matrix_dim::Int
+    blas_threads::Int
+end
+
+"""
     reference_thread_counts(host::HostInfo, config::BenchmarkConfig) -> Vector{Int}
 
-BLAS thread counts of the element-type suite and of the accelerator comparisons: one
+BLAS thread counts of the element-type stage and of the accelerator comparisons: one
 thread and the ceiling of the scaling sweep.
 """
 function reference_thread_counts(host::HostInfo, config::BenchmarkConfig)
@@ -119,30 +147,43 @@ function reference_thread_counts(host::HostInfo, config::BenchmarkConfig)
 end
 
 """
-    plan_total_steps(config::BenchmarkConfig, host::HostInfo, n_devices::Int) -> Int
+    benchmark_plan(config, host, devices) -> Vector{BenchmarkPoint}
 
-Number of progress steps of a run: every (size, type, engine, thread count) point,
-skipped points included.
+Every point of a run in execution order. With `run_cpu`: the thread sweep (Float32,
+library engine, each size at every count of [`thread_sweep`](@ref)), then the
+element-type stage (each size, type and engine; the library engine at the
+[`reference_thread_counts`](@ref)). Then each size, type and engine on every device.
 """
-function plan_total_steps(config::BenchmarkConfig, host::HostInfo, n_devices::Int)
-    n_sizes = length(config.problem_sizes)
-    n_types = length(config.target_types)
-    engines = config.engines
-    sweep =
-        config.run_cpu ?
-        n_sizes * length(
-            thread_sweep(
-                host.physical_cores,
-                host.logical_threads,
-                config.thread_sweep_ceiling,
-            ),
-        ) : 0
-    per_type =
-        (:blas in engines ? length(reference_thread_counts(host, config)) : 0) +
-        count(in(KERNEL_ENGINES), engines)
-    multitype = config.run_cpu ? n_sizes * n_types * per_type : 0
-    accelerators = n_devices * n_sizes * n_types * length(engines)
-    return sweep + multitype + accelerators
+function benchmark_plan(
+    config::BenchmarkConfig,
+    host::HostInfo,
+    devices::AbstractVector{<:AcceleratorDevice},
+)
+    plan = BenchmarkPoint[]
+    if config.run_cpu
+        counts = thread_sweep(
+            host.physical_cores,
+            host.logical_threads,
+            config.thread_sweep_ceiling,
+        )
+        for N in config.problem_sizes, t in counts
+            push!(plan, BenchmarkPoint(:thread_sweep, nothing, :blas, Float32, N, t))
+        end
+        blas_counts = reference_thread_counts(host, config)
+        for N in config.problem_sizes, T in config.target_types, engine in config.engines
+            for t in (engine === :blas ? blas_counts : [0])
+                push!(plan, BenchmarkPoint(:element_types, nothing, engine, T, N, t))
+            end
+        end
+    end
+    for device in devices,
+        N in config.problem_sizes,
+        T in config.target_types,
+        engine in config.engines
+
+        push!(plan, BenchmarkPoint(:accelerator, device, engine, T, N, 0))
+    end
+    return plan
 end
 
 """
@@ -238,6 +279,149 @@ function prediction_reason(
         predicted,
         previous[1],
         max_point_seconds
+    )
+end
+
+"""
+    memory_budget(point::BenchmarkPoint, config::BenchmarkConfig) -> Float64
+
+Bytes available to the operands of a point: `memory_safety_fraction` of the free host
+memory, or of the device memory (unbounded when the device does not report it).
+"""
+function memory_budget(point::BenchmarkPoint, config::BenchmarkConfig)
+    device = point.device
+    device === nothing && return config.memory_safety_fraction * Sys.free_memory()
+    device.total_memory_bytes > 0 || return Inf
+    return config.memory_safety_fraction * device.total_memory_bytes
+end
+
+"""
+    skip_reason(point, budget_bytes, previous, max_point_seconds) -> Union{Nothing, String}
+
+Why `point` is not measured: its operands exceed the memory budget, one operand exceeds
+the device's maximum allocation, or the previous point of its series predicts more than
+`max_point_seconds` ([`prediction_reason`](@ref)); `nothing` when it is measured.
+"""
+function skip_reason(
+    point::BenchmarkPoint,
+    budget_bytes::Real,
+    previous::Union{Nothing, Tuple{Int, Float64}},
+    max_point_seconds::Real,
+)
+    N, T = point.matrix_dim, point.element_type
+    reason = memory_reason(N, T, budget_bytes)
+    reason === nothing || return reason
+    device = point.device
+    if device !== nothing &&
+       device.max_alloc_bytes > 0 &&
+       matrix_bytes(N, T) > device.max_alloc_bytes
+        return "skipped: one operand of $(format_bytes(matrix_bytes(N, T))) exceeds the maximum device allocation $(format_bytes(device.max_alloc_bytes))"
+    end
+    return prediction_reason(previous, N, max_point_seconds)
+end
+
+const SeriesKey = Tuple{Symbol, Union{AcceleratorDevice, Nothing}, Symbol, DataType, Int}
+
+"""
+Series of a point for the cost prediction: the points that differ only in N.
+"""
+series_key(point::BenchmarkPoint)::SeriesKey =
+    (point.stage, point.device, point.engine, point.element_type, point.blas_threads)
+
+"""
+    reference_time_ms(records, stage::Symbol, ::Type{T}, N, blas_threads) -> Float64
+
+Minimum time of the measured CPU library point of `stage` for `T`, `N` and
+`blas_threads`, or `NaN`.
+"""
+function reference_time_ms(
+    records::AbstractVector{BenchmarkRecord},
+    stage::Symbol,
+    ::Type{T},
+    N::Int,
+    blas_threads::Int,
+) where {T}
+    for record in records
+        record.stage == string(stage) &&
+            record.device_type == "CPU" &&
+            record.engine == "blas" &&
+            record.status == "ok" &&
+            record.data_type == string(T) &&
+            record.matrix_dim == N &&
+            record.blas_threads == blas_threads &&
+            return record.min_time_ms
+    end
+    return NaN
+end
+
+"""
+    run_point(point, budget_bytes, previous, records, config, host, rng) -> BenchmarkRecord
+
+Measure `point` unless [`skip_reason`](@ref) applies and build its record. `previous`
+maps each series to its last measured `(N, minimum time [s])` and is updated; `records`
+holds the points measured so far, against which the speedups are taken.
+"""
+function run_point(
+    point::BenchmarkPoint,
+    budget_bytes::Real,
+    previous::AbstractDict,
+    records::AbstractVector{BenchmarkRecord},
+    config::BenchmarkConfig,
+    host::HostInfo,
+    rng::AbstractRNG,
+)
+    T, N, t = point.element_type, point.matrix_dim, point.blas_threads
+    on_host = point.device === nothing
+    backend = on_host ? CPU() : point.device.backend
+    key = series_key(point)
+    reason = skip_reason(
+        point,
+        budget_bytes,
+        get(previous, key, nothing),
+        config.sampling.max_point_seconds,
+    )
+    if reason === nothing
+        t > 0 && BLAS.set_num_threads(t)
+        summary, status = try_measure(point.engine, backend, T, N, rng, config.sampling)
+        summary === nothing || (previous[key] = (N, summary.min_s))
+    else
+        summary, status = nothing, reason
+    end
+    speedup_vs_1t = parallel_efficiency_pct = speedup_vs_cpu_1t = speedup_vs_cpu_maxt = NaN
+    if summary !== nothing
+        time_ms = 1e3 * summary.min_s
+        if point.stage === :thread_sweep
+            baseline_ms =
+                t == 1 ? time_ms : reference_time_ms(records, :thread_sweep, T, N, 1)
+            speedup_vs_1t = baseline_ms / time_ms
+            parallel_efficiency_pct = 100 * speedup_vs_1t / t
+        elseif point.stage === :accelerator
+            max_threads = last(reference_thread_counts(host, config))
+            speedup_vs_cpu_1t =
+                reference_time_ms(records, :element_types, T, N, 1) / time_ms
+            speedup_vs_cpu_maxt =
+                reference_time_ms(records, :element_types, T, N, max_threads) / time_ms
+        end
+    end
+    return BenchmarkRecord(;
+        stage = string(point.stage),
+        device_type = on_host ? "CPU" : "GPU",
+        backend = backend_label(backend),
+        engine = string(point.engine),
+        library = library_label(point.engine, backend, T),
+        device_name = on_host ? host.cpu_model : point.device.device_name,
+        data_type = string(T),
+        matrix_dim = N,
+        julia_threads = host.julia_threads,
+        blas_threads = t,
+        exceeds_physical_cores = t > host.physical_cores,
+        nominal_ops = nominal_ops(T, N),
+        summary,
+        speedup_vs_1t,
+        parallel_efficiency_pct,
+        speedup_vs_cpu_1t,
+        speedup_vs_cpu_maxt,
+        status,
     )
 end
 
@@ -351,339 +535,109 @@ function device_row(record::BenchmarkRecord)
 end
 
 """
-    run_cpu_thread_sweep(config, host, rng, reporter) -> Vector{BenchmarkRecord}
+    report_row(record::BenchmarkRecord) -> String
 
-Float32 dual GEMM through the BLAS engine over the thread counts of
-[`thread_sweep`](@ref); speedup and parallel efficiency refer to the one-thread point of
-the same problem size. Sizes beyond the memory budget, or predicted to exceed
-`max_point_seconds` from the previous size's one-thread time, are skipped and recorded
-as such at every thread count. `on_record` is called with every record as it is produced.
+Table line of `record` in the layout of its stage.
 """
-function run_cpu_thread_sweep(
-    config::BenchmarkConfig,
-    host::HostInfo,
-    rng::AbstractRNG,
-    reporter::Reporter;
-    on_record = Returns(nothing),
-)
-    T = Float32
-    cpu = CPU()
-    counts =
-        thread_sweep(host.physical_cores, host.logical_threads, config.thread_sweep_ceiling)
-    library = library_label(:blas, cpu, T)
-    budget = config.memory_safety_fraction * Sys.free_memory()
-    records = BenchmarkRecord[]
-    emit(reporter, "")
-    note =
-        any(>(host.physical_cores), counts) ?
-        "; * marks thread counts above the $(host.physical_cores) physical cores" : ""
-    emit(
-        reporter,
-        "CPU thread scaling: $T, engine blas ($library), threads $(join(counts, ", "))$note",
-    )
-    previous::Union{Nothing, Tuple{Int, Float64}} = nothing
-    original_threads = BLAS.get_num_threads()
-    try
-        for N in config.problem_sizes
-            reason = memory_reason(N, T, budget)
-            reason === nothing &&
-                (reason = prediction_reason(previous, N, config.sampling.max_point_seconds))
-            if reason !== nothing
-                advance!(reporter, "CPU sweep N = $N", length(counts))
-                emit(reporter, "  N = $N: $reason")
-                for t in counts
-                    record = BenchmarkRecord(;
-                        device_type = "CPU",
-                        backend = "CPU",
-                        engine = "blas",
-                        library,
-                        device_name = host.cpu_model,
-                        data_type = string(T),
-                        matrix_dim = N,
-                        julia_threads = host.julia_threads,
-                        blas_threads = t,
-                        exceeds_physical_cores = t > host.physical_cores,
-                        nominal_ops = nominal_ops(T, N),
-                        status = reason,
-                    )
-                    push!(records, record)
-                    on_record(record)
-                end
-                continue
-            end
-            emit(reporter, "")
-            emit(
-                reporter,
-                @sprintf("  N = %d, footprint %s", N, format_bytes(footprint_bytes(N, T)))
-            )
-            emit(reporter, SWEEP_HEADER)
-            baseline_s = NaN
-            for t in counts
-                advance!(reporter, "CPU blas $T N = $N, $t threads")
-                BLAS.set_num_threads(t)
-                summary, status = try_measure(:blas, cpu, T, N, rng, config.sampling)
-                speedup = NaN
-                efficiency = NaN
-                if summary !== nothing
-                    if t == 1
-                        baseline_s = summary.min_s
-                        previous = (N, baseline_s)
-                    end
-                    speedup = baseline_s / summary.min_s
-                    efficiency = 100 * speedup / t
-                end
-                record = BenchmarkRecord(;
-                    device_type = "CPU",
-                    backend = "CPU",
-                    engine = "blas",
-                    library,
-                    device_name = host.cpu_model,
-                    data_type = string(T),
-                    matrix_dim = N,
-                    julia_threads = host.julia_threads,
-                    blas_threads = t,
-                    exceeds_physical_cores = t > host.physical_cores,
-                    nominal_ops = nominal_ops(T, N),
-                    summary,
-                    speedup_vs_1t = speedup,
-                    parallel_efficiency_pct = efficiency,
-                    status,
-                )
-                push!(records, record)
-                on_record(record)
-                emit(reporter, sweep_row(record))
-            end
-        end
-    finally
-        BLAS.set_num_threads(original_threads)
-    end
-    return records
+function report_row(record::BenchmarkRecord)
+    record.stage == "thread_sweep" && return sweep_row(record)
+    record.stage == "element_types" && return type_row(record)
+    return device_row(record)
 end
 
 """
-    run_cpu_multitype(config, host, rng, reporter) -> Vector{BenchmarkRecord}
+    stage_banner(point::BenchmarkPoint, config, host) -> String
 
-Every configured element type on the host: the BLAS engine at the reference thread
-counts and the KernelAbstractions engines on the Julia thread pool. A type whose
-operands exceed the memory budget is recorded as skipped at every engine and thread
-count of the stage. `on_record` is called with every record as it is produced.
+Heading line of the stage that `point` opens.
 """
-function run_cpu_multitype(
-    config::BenchmarkConfig,
-    host::HostInfo,
-    rng::AbstractRNG,
-    reporter::Reporter;
-    on_record = Returns(nothing),
-)
-    cpu = CPU()
-    engines = config.engines
-    blas_counts = reference_thread_counts(host, config)
-    steps_per_type =
-        (:blas in engines ? length(blas_counts) : 0) + count(in(KERNEL_ENGINES), engines)
-    budget = config.memory_safety_fraction * Sys.free_memory()
-    previous = Dict{Tuple{Symbol, DataType, Int}, Tuple{Int, Float64}}()
-    records = BenchmarkRecord[]
-    emit(reporter, "")
-    emit(
-        reporter,
-        "CPU element types: engines $(join(engines, ", ")); blas threads $(join(blas_counts, ", ")); kernels on the $(host.julia_threads)-thread Julia pool",
-    )
-    original_threads = BLAS.get_num_threads()
-    try
-        for N in config.problem_sizes
-            emit(reporter, "")
-            emit(reporter, "  N = $N")
-            emit(reporter, TYPE_HEADER)
-            for T in config.target_types
-                reason = memory_reason(N, T, budget)
-                if reason !== nothing
-                    advance!(reporter, "CPU $T N = $N", steps_per_type)
-                    for engine in engines
-                        threads = engine === :blas ? blas_counts : [host.julia_threads]
-                        for t in threads
-                            record = BenchmarkRecord(;
-                                device_type = "CPU",
-                                backend = "CPU",
-                                engine = string(engine),
-                                library = library_label(engine, cpu, T),
-                                device_name = host.cpu_model,
-                                data_type = string(T),
-                                matrix_dim = N,
-                                julia_threads = host.julia_threads,
-                                blas_threads = engine === :blas ? t : 0,
-                                exceeds_physical_cores = engine === :blas &&
-                                                         t > host.physical_cores,
-                                nominal_ops = nominal_ops(T, N),
-                                status = reason,
-                            )
-                            push!(records, record)
-                            on_record(record)
-                            emit(reporter, type_row(record))
-                        end
-                    end
-                    continue
-                end
-                for engine in engines
-                    threads = engine === :blas ? blas_counts : [host.julia_threads]
-                    for t in threads
-                        advance!(reporter, "CPU $engine $T N = $N, $t threads")
-                        key = (engine, T, t)
-                        skip = prediction_reason(
-                            get(previous, key, nothing),
-                            N,
-                            config.sampling.max_point_seconds,
-                        )
-                        if skip === nothing
-                            engine === :blas && BLAS.set_num_threads(t)
-                            summary, status =
-                                try_measure(engine, cpu, T, N, rng, config.sampling)
-                            summary === nothing || (previous[key] = (N, summary.min_s))
-                        else
-                            summary, status = nothing, skip
-                        end
-                        record = BenchmarkRecord(;
-                            device_type = "CPU",
-                            backend = "CPU",
-                            engine = string(engine),
-                            library = library_label(engine, cpu, T),
-                            device_name = host.cpu_model,
-                            data_type = string(T),
-                            matrix_dim = N,
-                            julia_threads = host.julia_threads,
-                            blas_threads = engine === :blas ? t : 0,
-                            exceeds_physical_cores = engine === :blas &&
-                                                     t > host.physical_cores,
-                            nominal_ops = nominal_ops(T, N),
-                            summary,
-                            status,
-                        )
-                        push!(records, record)
-                        on_record(record)
-                        emit(reporter, type_row(record))
-                    end
-                end
-            end
-        end
-    finally
-        BLAS.set_num_threads(original_threads)
+function stage_banner(point::BenchmarkPoint, config::BenchmarkConfig, host::HostInfo)
+    if point.stage === :thread_sweep
+        counts = thread_sweep(
+            host.physical_cores,
+            host.logical_threads,
+            config.thread_sweep_ceiling,
+        )
+        note =
+            any(>(host.physical_cores), counts) ?
+            "; * marks thread counts above the $(host.physical_cores) physical cores" : ""
+        library = library_label(:blas, CPU(), Float32)
+        return "CPU thread scaling: Float32, engine blas ($library), threads $(join(counts, ", "))$note"
+    elseif point.stage === :element_types
+        blas_counts = join(reference_thread_counts(host, config), ", ")
+        return "CPU element types: engines $(join(config.engines, ", ")); blas threads $blas_counts; kernels on the $(host.julia_threads)-thread Julia pool"
     end
-    return records
+    device = point.device
+    max_threads = last(reference_thread_counts(host, config))
+    return "Accelerator: $(device.vendor_label), $(device.device_name) ($(backend_label(device.backend)) backend); engines $(join(config.engines, ", ")); CPU references at 1 and $max_threads BLAS threads"
 end
 
 """
-    cpu_reference_time_ms(records, ::Type{T}, N, blas_threads) -> Float64
+    size_header(point::BenchmarkPoint) -> Vector{String}
 
-Minimum time of the measured CPU BLAS point for `T`, `N` and `blas_threads`, or `NaN`.
+Lines that open the table of a problem size within the stage of `point`.
 """
-function cpu_reference_time_ms(
-    records::AbstractVector{BenchmarkRecord},
-    ::Type{T},
-    N::Int,
-    blas_threads::Int,
-) where {T}
-    for record in records
-        record.device_type == "CPU" &&
-            record.engine == "blas" &&
-            record.status == "ok" &&
-            record.data_type == string(T) &&
-            record.matrix_dim == N &&
-            record.blas_threads == blas_threads &&
-            return record.min_time_ms
-    end
-    return NaN
+function size_header(point::BenchmarkPoint)
+    N = point.matrix_dim
+    point.stage === :thread_sweep && return [
+        @sprintf("  N = %d, footprint %s", N, format_bytes(footprint_bytes(N, Float32))),
+        SWEEP_HEADER,
+    ]
+    return ["  N = $N", point.stage === :element_types ? TYPE_HEADER : DEVICE_HEADER]
+end
+
+function point_label(point::BenchmarkPoint)
+    target = point.device === nothing ? "CPU" : backend_label(point.device.backend)
+    threads = point.blas_threads > 0 ? ", $(point.blas_threads) threads" : ""
+    return "$target $(point.engine) $(point.element_type) N = $(point.matrix_dim)$threads"
 end
 
 """
-    run_accelerator_benchmarks(device, config, host, cpu_records, rng, reporter)
+    run_benchmark_plan(plan, config, host, rng, reporter; on_record = Returns(nothing))
         -> Vector{BenchmarkRecord}
 
-Every configured element type and size on one accelerator through the selected
-engines. Speedups compare against the CPU BLAS points at one thread and at the sweep
-ceiling. Points whose single operand exceeds the device's maximum allocation or whose
-footprint exceeds the device memory budget are skipped. `on_record` is called with every
-record as it is produced.
+Execute `plan` in order, one record per point ([`run_point`](@ref)). The host memory
+budget is taken when a stage begins. Thread-sweep rows carry the speedup and parallel
+efficiency against the one-thread point of their size; accelerator rows carry the
+speedup against the library points of the element-type stage at one thread and at the
+sweep ceiling. `on_record` is called with every record as it is produced; the BLAS
+thread count is restored on return.
 """
-function run_accelerator_benchmarks(
-    device::AcceleratorDevice,
+function run_benchmark_plan(
+    plan::AbstractVector{BenchmarkPoint},
     config::BenchmarkConfig,
     host::HostInfo,
-    cpu_records::AbstractVector{BenchmarkRecord},
     rng::AbstractRNG,
     reporter::Reporter;
     on_record = Returns(nothing),
 )
-    backend = device.backend
-    label = backend_label(backend)
-    engines = config.engines
-    max_threads = last(reference_thread_counts(host, config))
-    budget =
-        device.total_memory_bytes > 0 ?
-        config.memory_safety_fraction * device.total_memory_bytes : Inf
-    previous = Dict{Tuple{Symbol, DataType}, Tuple{Int, Float64}}()
     records = BenchmarkRecord[]
-    emit(reporter, "")
-    emit(
-        reporter,
-        "Accelerator: $(device.vendor_label), $(device.device_name) ($label backend); engines $(join(engines, ", ")); CPU references at 1 and $max_threads BLAS threads",
-    )
-    for N in config.problem_sizes
-        emit(reporter, "")
-        emit(reporter, "  N = $N")
-        emit(reporter, DEVICE_HEADER)
-        for T in config.target_types
-            reason = memory_reason(N, T, budget)
-            if reason === nothing &&
-               device.max_alloc_bytes > 0 &&
-               matrix_bytes(N, T) > device.max_alloc_bytes
-                reason = "skipped: one operand of $(format_bytes(matrix_bytes(N, T))) exceeds the maximum device allocation $(format_bytes(device.max_alloc_bytes))"
+    previous = Dict{SeriesKey, Tuple{Int, Float64}}()
+    budget = Inf
+    original_threads = BLAS.get_num_threads()
+    try
+        for (k, point) in enumerate(plan)
+            earlier = k == 1 ? nothing : plan[k - 1]
+            new_stage =
+                earlier === nothing ||
+                earlier.stage !== point.stage ||
+                earlier.device !== point.device
+            if new_stage
+                budget = memory_budget(point, config)
+                emit(reporter, "")
+                emit(reporter, stage_banner(point, config, host))
             end
-            for engine in engines
-                advance!(reporter, "$label $engine $T N = $N")
-                key = (engine, T)
-                skip = reason
-                skip === nothing && (
-                    skip = prediction_reason(
-                        get(previous, key, nothing),
-                        N,
-                        config.sampling.max_point_seconds,
-                    )
-                )
-                if skip === nothing
-                    summary, status =
-                        try_measure(engine, backend, T, N, rng, config.sampling)
-                    summary === nothing || (previous[key] = (N, summary.min_s))
-                else
-                    summary, status = nothing, skip
-                end
-                speedup_1t = NaN
-                speedup_max = NaN
-                if summary !== nothing
-                    speedup_1t =
-                        cpu_reference_time_ms(cpu_records, T, N, 1) / (1e3 * summary.min_s)
-                    speedup_max =
-                        cpu_reference_time_ms(cpu_records, T, N, max_threads) /
-                        (1e3 * summary.min_s)
-                end
-                record = BenchmarkRecord(;
-                    device_type = "GPU",
-                    backend = label,
-                    engine = string(engine),
-                    library = library_label(engine, backend, T),
-                    device_name = device.device_name,
-                    data_type = string(T),
-                    matrix_dim = N,
-                    julia_threads = host.julia_threads,
-                    nominal_ops = nominal_ops(T, N),
-                    summary,
-                    speedup_vs_cpu_1t = speedup_1t,
-                    speedup_vs_cpu_maxt = speedup_max,
-                    status,
-                )
-                push!(records, record)
-                on_record(record)
-                emit(reporter, device_row(record))
+            if new_stage || earlier.matrix_dim != point.matrix_dim
+                emit(reporter, "")
+                foreach(line -> emit(reporter, line), size_header(point))
             end
+            advance!(reporter, point_label(point))
+            record = run_point(point, budget, previous, records, config, host, rng)
+            push!(records, record)
+            on_record(record)
+            emit(reporter, report_row(record))
         end
+    finally
+        BLAS.set_num_threads(original_threads)
     end
     return records
 end

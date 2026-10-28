@@ -31,7 +31,7 @@ hardware-diagnostics/
 │   ├── config.jl                      # TOML schema, constraints, command line
 │   ├── host.jl                        # CPU topology, thread sweep, host report
 │   ├── reporting.jl                   # console and log sinks, progress line
-│   ├── benchmark.jl                   # the three benchmark stages
+│   ├── benchmark.jl                   # benchmark plan and its execution
 │   ├── export.jl                      # CSV dataset, TOML sidecar, collision-free paths
 │   └── driver.jl                      # orchestration
 └── test/
@@ -82,7 +82,9 @@ configured size: `Int8` is therefore not offered and `Int16` requires N ≤ 1023
 points through `mul!` run on the generic fallback of LinearAlgebra (host) or GPUArrays
 (device), as the `library` column states; `Float16` on the host likewise.
 
-**Stages.**
+**Stages.** The run is planned as one list of points and executed in order; the `stage`
+column of the dataset names the stage of each row (`thread_sweep`, `element_types`,
+`accelerator`).
 
 1. *CPU thread scaling*: Float32 through the library engine over the thread counts of
    the sweep, powers of two up to the ceiling plus the ceiling itself. The default
@@ -91,12 +93,13 @@ points through `mul!` run on the generic fallback of LinearAlgebra (host) or GPU
    thread count, and points above the physical count are marked (`*` in the report,
    `exceeds_physical_cores` in the dataset) because they oversubscribe hyper-threads.
    Speedup S(p) = T₁/T_p and parallel efficiency E(p) = S(p)/p, with T_p the time at p
-   threads, refer to the one-thread point of the same size.
+   threads, refer to the one-thread point of the same size and are empty when that
+   point was not measured.
 2. *CPU element types*: every configured type, the library engine at one thread and at
    the sweep ceiling, the kernel engines on the Julia thread pool. The pool size is fixed
    at process start (`julia run.jl --threads N ...`) and recorded in `julia_threads`.
 3. *Accelerators*: every functional device, every configured engine, with speedups
-   against the CPU library points at one thread and at the sweep ceiling.
+   against the CPU library points of stage 2 at one thread and at the sweep ceiling.
 
 ## Accelerator backends
 
@@ -202,8 +205,8 @@ completes, so an interrupted run keeps its provenance and every measured point.
 - `.log`: the report as printed to the console, without progress line or escape
   sequences: host and accelerator sections, verification, the three stages, summary.
 - `.csv`: one row per planned point, skipped and failed points included, with the
-  columns `device_type, backend, engine, library, device_name, data_type, matrix_dim,
-  julia_threads, blas_threads, exceeds_physical_cores, nominal_ops, samples,
+  columns `stage, device_type, backend, engine, library, device_name, data_type,
+  matrix_dim, julia_threads, blas_threads, exceeds_physical_cores, nominal_ops, samples,
   min_time_ms, median_time_ms, mad_time_ms, dispersion_pct, throughput_gops,
   throughput_median_gops, speedup_vs_1t, parallel_efficiency_pct, speedup_vs_cpu_1t,
   speedup_vs_cpu_maxt, status`. Undefined quantities and inapplicable thread counts are
@@ -227,6 +230,6 @@ julia --project=hardware-diagnostics -e 'using Pkg; Pkg.test()'
 The suite runs Aqua, ExplicitImports and JET on the package, then unit tests of both
 kernels (against `A*B + A*C`, including sizes that are not multiples of the tile), the
 sampling rule, the configuration constraints, the command line, the host topology, the
-backend probes, the three stages at N = 32, the accelerator stage on a host-backed
+backend probes, the benchmark plan at N = 32, the accelerator stage on a host-backed
 mock device (allocation-limit skip and speedup paths) and an end-to-end run into a
 temporary directory.

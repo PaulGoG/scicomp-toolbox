@@ -164,7 +164,8 @@ function run_diagnostics(
 
     devices = discover_accelerators(config.gpu_backend)
     rng = Xoshiro(config.seed)
-    reporter = Reporter(sinks; total = plan_total_steps(config, host, length(devices)))
+    plan = benchmark_plan(config, host, devices)
+    reporter = Reporter(sinks; total = length(plan))
     records = BenchmarkRecord[]
     wall_start = time()
     writer = nothing
@@ -239,24 +240,7 @@ function run_diagnostics(
             append!(backends, [device.backend for device in devices])
             run_verification(config, backends, rng, reporter)
         end
-        if config.run_cpu
-            append!(records, run_cpu_thread_sweep(config, host, rng, reporter; on_record))
-            append!(records, run_cpu_multitype(config, host, rng, reporter; on_record))
-        end
-        for device in devices
-            append!(
-                records,
-                run_accelerator_benchmarks(
-                    device,
-                    config,
-                    host,
-                    records,
-                    rng,
-                    reporter;
-                    on_record,
-                ),
-            )
-        end
+        append!(records, run_benchmark_plan(plan, config, host, rng, reporter; on_record))
         finish!(reporter)
 
         measured = count(record -> record.status == "ok", records)
