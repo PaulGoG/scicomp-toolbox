@@ -105,3 +105,14 @@ cp /tmp/figures/cross_host_*_N4096.png assets/               # the figures of th
 both cross-host figures at the largest problem size measured in every dataset (4096). An
 existing file is never overwritten, so the README figures are rendered elsewhere and
 copied over.
+
+In the accelerator figure the library leads the tiled kernel by 3.9 to 5.5× at `Float32`
+on the six discrete cards. The two integrated GPUs bracket that range: Apple's MPS is
+9.9× ahead of the portable kernel, while on the Intel Arc oneMKL is 6 % behind it. At
+`Float64` the portable kernel comes within 15 % of the library on five of the seven
+devices that have it and passes it on the RTX 5090 and RTX 5070 Ti, whose `Float64` rate
+is 1/64 of `Float32`. rocBLAS stays a factor two ahead on both AMD cards. Metal carries no
+double precision, and the M4 line has a gap there. Where `mul!` has no vendor GEMM and
+falls back to the generic GPUArrays path, the portable kernel leads by 1.05 to 8.1× on the
+seven devices other than the M4. On the M4, Metal routes `Float16` to an Apple GEMM (the
+filled marker), and at `Int32` the generic fallback beats the tiled kernel by 8 %.
