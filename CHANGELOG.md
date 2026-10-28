@@ -6,6 +6,15 @@ a change belongs to it.
 
 ## 2026-10-28
 
+### Added
+
+- `run-index`: catalogue of DrWatson-style run directories. For each run it reports the
+  commit, configuration, hardware, wall time and disk usage read from its TOML provenance
+  file through configurable key aliases, so earlier key layouts are understood. It flags
+  missing or unreadable provenance, commits that are unknown, dirty or off HEAD, seed
+  replicates and repeats, and lists the figures whose run directory has gone. Read-only;
+  tested against a synthetic workspace with real git history built at test time.
+
 ### Changed
 
 - `HardwareDiagnostics` 0.4.0: one module instead of eleven submodules, the source files

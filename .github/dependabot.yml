@@ -10,6 +10,7 @@ updates:
       - "/hardware-diagnostics/test"
       - "/formatter"
       - "/plot-benchmarks"
+      - "/run-index"
       - "/standalone"
     schedule:
       interval: "weekly"

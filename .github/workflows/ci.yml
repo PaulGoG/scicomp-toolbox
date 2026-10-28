@@ -40,6 +40,8 @@ jobs:
         run: |
           julia --color=yes run.jl sysinfo
           julia --color=yes run.jl workspace-audit --dirty-only
+      - name: run-index smoke test (the checkout holds no runs)
+        run: julia --color=yes run.jl run-index --no-csv
       - name: Dispatcher smoke test (CPU only, reduced sampling)
         run: >
           julia --color=yes run.jl hardware-diagnostics

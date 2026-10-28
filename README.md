@@ -75,14 +75,22 @@ scicomp-toolbox/
 │   ├── ext/                       # HardwareDiagnostics{CUDA,AMDGPU,Metal,oneAPI}Ext
 │   ├── src/
 │   └── test/
-└── plot-benchmarks/               # tier 1: figures from hardware-diagnostics datasets
+├── plot-benchmarks/               # tier 1: figures from hardware-diagnostics datasets
+│   ├── activate.jl
+│   ├── config.toml
+│   ├── plot-benchmarks.jl         # entry point
+│   ├── Manifest.toml
+│   ├── Project.toml
+│   ├── README.md
+│   └── test/
+└── run-index/                     # tier 1: catalogue of DrWatson-style run directories
     ├── activate.jl
     ├── config.toml
-    ├── plot-benchmarks.jl         # entry point
+    ├── run-index.jl               # entry point
     ├── Manifest.toml
     ├── Project.toml
     ├── README.md
-    └── test/
+    └── test/                      # synthetic DrWatson workspace built at test time
 ```
 
 ## Two tiers
@@ -120,6 +128,7 @@ julia run.jl workspace-audit ~/projects --depth 1       # areas that are themsel
 julia run.jl hardware-diagnostics --quick --cpu-only    # tool; arguments are forwarded
 julia run.jl plot-benchmarks --format png               # figures from the newest dataset
 julia run.jl plot-benchmarks --compare                  # cross-host figures from reference-runs/
+julia run.jl run-index ~/projects --flagged             # run directories that need attention
 julia run.jl --threads 8 hardware-diagnostics           # Julia threads of the child process
 julia test.jl                                           # every test suite
 julia test.jl hardware-diagnostics                      # one suite
@@ -147,6 +156,7 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 | [`workspace-audit`](standalone/workspace-audit.jl) | 2 | Branch, working-tree state, distance from upstream, stashes, untracked weight and regenerable backup artifacts of every repository under a workspace root, searched two levels deep; areas under no version control are named | `standalone/workspace-audit.jl` |
 | [`hardware-diagnostics`](hardware-diagnostics/) | 1 | Host and accelerator introspection; dual-GEMM throughput through the vendor library and two KernelAbstractions kernels (naive, tiled), with thread scaling and cross-engine verification | `hardware-diagnostics/hardware-diagnostics.jl` |
 | [`plot-benchmarks`](plot-benchmarks/) | 1 | Thread-scaling and throughput figures (CairoMakie) from one hardware-diagnostics dataset, or across the machines of several (`--compare`) | `plot-benchmarks/plot-benchmarks.jl` |
+| [`run-index`](run-index/) | 1 | Catalogue of DrWatson-style run directories: commit and configuration, hardware, wall time, disk usage; flags missing or unreproducible provenance, seed replicates and repeats, and figures whose run is gone | `run-index/run-index.jl` |
 
 ## Status
 
@@ -161,6 +171,7 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 | `hardware-diagnostics`, oneAPI extension | run on an Intel Arc integrated GPU (Meteor Lake), all three engines, verification passed |
 | `hardware-diagnostics`, Metal extension | run on an Apple M4, all three engines, verification passed for the four element types Metal carries; `Float64` is refused per point |
 | `plot-benchmarks` | tested on synthetic datasets; figures inspected on the eight reference runs |
+| `run-index` | new; tested against a synthetic DrWatson workspace with real git history, not yet run on a real project |
 
 ## Conventions
 
