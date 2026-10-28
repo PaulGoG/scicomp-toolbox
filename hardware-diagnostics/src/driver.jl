@@ -1,29 +1,5 @@
-"""
-Top-level orchestration: configuration, discovery, verification, benchmark stages and
-exports.
-"""
-module Driver
-
-using Dates: Dates, now
-using KernelAbstractions: KernelAbstractions, CPU
-using Printf: @sprintf
-using Random: Xoshiro
-using ..Backends: backend_label, discover_accelerators
-using ..Benchmark:
-    BenchmarkRecord,
-    plan_total_steps,
-    run_accelerator_benchmarks,
-    run_cpu_multitype,
-    run_cpu_thread_sweep
-using ..Config: BenchmarkConfig, first_line, parse_cli_args, usage_text
-using ..Export:
-    DatasetWriter, export_metadata_to_toml, repository_commit, safe_filepath, write_record!
-using ..Formatting: format_bytes, format_seconds
-using ..Host: host_info, print_host_report
-using ..Kernels: KERNEL_ENGINES, verify_engines
-using ..Reporting: Reporter, emit, finish!
-
-export configure, run_diagnostics, print_accelerator_report, run_verification
+# Top-level orchestration: configuration, discovery, verification, benchmark stages and
+# exports.
 
 """
     configure(args, base_dir) -> Union{BenchmarkConfig, Nothing}
@@ -299,6 +275,4 @@ function run_diagnostics(
         log_io === nothing || close(log_io)
     end
     return records
-end
-
 end

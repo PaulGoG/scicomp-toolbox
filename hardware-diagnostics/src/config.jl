@@ -1,22 +1,5 @@
-"""
-Validated configuration: TOML tables merged with command-line options into a
-[`BenchmarkConfig`](@ref). Every constraint stated in `config.toml` is enforced here.
-"""
-module Config
-
-using TOML: TOML
-using ..Backends: BACKEND_NAMES
-using ..Kernels: ENGINES, integer_accumulation_bound, integer_range_safe
-using ..Sampling: SamplingPolicy
-
-export BenchmarkConfig,
-    validate_config,
-    load_config,
-    parse_cli_args,
-    usage_text,
-    first_line,
-    PRESET_SIZES,
-    SUPPORTED_TYPES
+# Validated configuration: TOML tables merged with command-line options into a
+# [`BenchmarkConfig`](@ref). Every constraint stated in `config.toml` is enforced here.
 
 """
 Element types accepted in `target_types`.
@@ -540,6 +523,4 @@ function parse_cli_args(args::AbstractVector{<:AbstractString}, base_dir::Abstra
         i += 1
     end
     return validate_config(raw; preset)
-end
-
 end

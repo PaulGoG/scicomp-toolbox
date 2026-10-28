@@ -1,12 +1,4 @@
-"""
-Report sinks (console and log file) and the in-terminal progress line.
-"""
-module Reporting
-
-using Printf: @sprintf
-using ..Formatting: format_seconds
-
-export Reporter, emit, advance!, finish!
+# Report sinks (console and log file) and the in-terminal progress line.
 
 mutable struct ProgressState
     current::Int
@@ -102,6 +94,4 @@ function render_progress(reporter::Reporter)
     )
     flush(reporter.console)
     return nothing
-end
-
 end

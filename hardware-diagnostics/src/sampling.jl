@@ -1,11 +1,4 @@
-"""
-Time-budgeted repetition of one benchmark evaluation and robust summary statistics.
-"""
-module Sampling
-
-using Statistics: median
-
-export SamplingPolicy, TimingSummary, sample_timings, summarize_timings
+# Time-budgeted repetition of one benchmark evaluation and robust summary statistics.
 
 """
     SamplingPolicy(; min_sampling_time_s, min_samples, max_samples, max_point_seconds)
@@ -97,6 +90,4 @@ function summarize_timings(times::AbstractVector{<:Real})
     center = median(values)
     mad_s = length(values) >= 2 ? median(abs.(values .- center)) : NaN
     return TimingSummary(length(values), minimum(values), center, mad_s)
-end
-
 end

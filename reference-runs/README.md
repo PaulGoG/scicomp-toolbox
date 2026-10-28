@@ -82,7 +82,7 @@ Metal device were written `GPUArrays generic` by a defect in the version that pr
 them: vendor coverage came from one fixed type set that assumed every backend serves the
 BLAS types and only those. Metal does not: `MPS_VALID_MATMUL_TYPES` and
 `MPSGRAPH_VALID_MATMUL_TYPES` both carry the `(Float16, Float16)` pair, so `mul!` reached
-an Apple GEMM, consistent with the measured 3.45 TOP/s. `Backends.vendor_blas_types` asks
+an Apple GEMM, consistent with the measured 3.45 TOP/s. `vendor_blas_types` asks
 the backend since 0.3.2, and those three fields now read `Metal Performance Shaders`, as
 the fixed code writes them.
 

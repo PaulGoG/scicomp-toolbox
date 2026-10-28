@@ -67,39 +67,10 @@ end
         @test ExplicitImports.check_no_implicit_imports(HardwareDiagnostics) === nothing
         @test ExplicitImports.check_no_stale_explicit_imports(HardwareDiagnostics) ===
               nothing
-        for submodule in (
-            HD.Backends,
-            HD.Formatting,
-            HD.Kernels,
-            HD.Sampling,
-            HD.Config,
-            HD.Host,
-            HD.Reporting,
-            HD.Benchmark,
-            HD.Export,
-            HD.Driver,
-        )
-            @test ExplicitImports.check_no_implicit_imports(submodule) === nothing
-            @test ExplicitImports.check_no_stale_explicit_imports(submodule) === nothing
-        end
         @test ExplicitImports.check_all_explicit_imports_via_owners(HardwareDiagnostics) ===
               nothing
-        report = JET.report_package(
-            HardwareDiagnostics;
-            target_modules = (
-                HardwareDiagnostics,
-                HD.Backends,
-                HD.Formatting,
-                HD.Kernels,
-                HD.Sampling,
-                HD.Config,
-                HD.Host,
-                HD.Reporting,
-                HD.Benchmark,
-                HD.Export,
-                HD.Driver,
-            ),
-        )
+        report =
+            JET.report_package(HardwareDiagnostics; target_modules = (HardwareDiagnostics,))
         # The launch of a KernelAbstractions kernel on a GPU backend has no method until a
         # GPU package is loaded (the backend packages define it), so JET reports the GPU
         # branch of the `Kernel{<:Backend}` union split in `launch_dual_gemm!` as a missing
@@ -113,7 +84,7 @@ end
         end
         isempty(reports) || show(stdout, MIME"text/plain"(), report)
         @test isempty(reports)
-        @test length(JET.get_reports(report)) <= length(HD.Kernels.KERNEL_ENGINES)
+        @test length(JET.get_reports(report)) <= length(HD.KERNEL_ENGINES)
     end
 
     @testset "Formatting" begin
@@ -141,7 +112,7 @@ end
         @test nominal_ops(ComplexF32, 512) == 16.0 * 512^3
         @test footprint_bytes(1024, Float32) == 4 * 1024 * 1024 * 4
         @test footprint_bytes(512, Int8) == 4 * 512 * 512
-        @test HD.Kernels.integer_accumulation_bound(1000) == 32_000
+        @test HD.integer_accumulation_bound(1000) == 32_000
         @test integer_range_safe(Int16, 1023)
         @test !integer_range_safe(Int16, 1024)
         @test integer_range_safe(Int8, 3)
@@ -176,8 +147,8 @@ end
             @test [r.engine for r in results] == [:ka, :ka_tiled]
             @test all(r -> r.passed && r.max_relative_deviation <= r.tolerance, results)
         end
-        @test HD.Kernels.verification_tolerance(Int32) == 0.0
-        @test HD.Kernels.TILE == 16
+        @test HD.verification_tolerance(Int32) == 0.0
+        @test HD.TILE == 16
         @test_throws ArgumentError verify_engines(cpu, Float32, 32, rng; engines = (:blas,))
         @test_throws ArgumentError evaluate_engine!(
             :cublas,
@@ -188,8 +159,8 @@ end
             zeros(2, 2),
         )
         @test length(verify_engines(cpu, Float64, 40, rng; engines = (:ka_tiled,))) == 1
-        @test HD.Kernels.verification_tolerance(Float64) ≈ 8 * sqrt(eps(Float64))
-        @test HD.Kernels.verification_tolerance(ComplexF32) ≈ 8 * sqrt(eps(Float32))
+        @test HD.verification_tolerance(Float64) ≈ 8 * sqrt(eps(Float64))
+        @test HD.verification_tolerance(ComplexF32) ≈ 8 * sqrt(eps(Float32))
         @test all(1 .<= create_matrix(rng, Int8, 16) .<= 4)
         @test eltype(create_matrix(rng, ComplexF64, 4)) === ComplexF64
     end
@@ -407,8 +378,8 @@ end
         @test_throws ArgumentError parse_cli_args(["--unknown-flag"], TOOL_DIR)
         @test_throws ArgumentError parse_cli_args(["--sizes"], TOOL_DIR)
         @test_throws ArgumentError parse_cli_args(["--sizes", "abc"], TOOL_DIR)
-        @test_throws ArgumentError HD.Config.option_value(Int, "--seed", "abc")
-        @test_throws "--seed" HD.Config.option_value(Int, "--seed", "abc")
+        @test_throws ArgumentError HD.option_value(Int, "--seed", "abc")
+        @test_throws "--seed" HD.option_value(Int, "--seed", "abc")
         @test_throws ArgumentError parse_cli_args(["--sizes", "1024,"], TOOL_DIR)
         @test_throws "--sizes" parse_cli_args(["--sizes", "1024,"], TOOL_DIR)
         @test_throws ArgumentError parse_cli_args(["--sizes", "1024,1024"], TOOL_DIR)
@@ -468,11 +439,11 @@ end
         @test host.julia_threads == Threads.nthreads()
         @test host.total_memory_bytes > 0
         @test host.kernel_abstractions_version == string(pkgversion(KernelAbstractions))
-        report = sprint(HD.Host.print_host_report, host)
+        report = sprint(HD.print_host_report, host)
         @test occursin("Physical cores", report)
         @test occursin("BLAS", report)
         @test !occursin("Hostname", report)
-        @test occursin("Hostname", sprint(HD.Host.print_host_report, host_info()))
+        @test occursin("Hostname", sprint(HD.print_host_report, host_info()))
     end
 
     @testset "Backends" begin
@@ -485,34 +456,32 @@ end
             @test (@test_logs (:warn, r"not installed") load_accelerator_packages(:cuda)) ==
                   Symbol[]
         end
-        @test HD.Backends.backend_label(CPU()) == "CPU"
-        @test occursin("(", HD.Backends.blas_library_label())
-        @test HD.Backends.library_label(:ka, CPU(), Float32) == "KernelAbstractions naive"
-        @test HD.Backends.library_label(:ka_tiled, CPU(), Float32) ==
-              "KernelAbstractions tiled"
-        @test HD.Backends.library_label(:blas, CPU(), Float32) ==
-              HD.Backends.vendor_blas_label(CPU())
-        @test HD.Backends.library_label(:blas, CPU(), Int32) == "LinearAlgebra generic"
-        @test HD.Backends.library_label(:blas, CPU(), Float16) == "LinearAlgebra generic"
+        @test HD.backend_label(CPU()) == "CPU"
+        @test occursin("(", HD.blas_library_label())
+        @test HD.library_label(:ka, CPU(), Float32) == "KernelAbstractions naive"
+        @test HD.library_label(:ka_tiled, CPU(), Float32) == "KernelAbstractions tiled"
+        @test HD.library_label(:blas, CPU(), Float32) == HD.vendor_blas_label(CPU())
+        @test HD.library_label(:blas, CPU(), Int32) == "LinearAlgebra generic"
+        @test HD.library_label(:blas, CPU(), Float16) == "LinearAlgebra generic"
         # vendor coverage is a backend property; the host follows the BLAS type set
-        @test HD.Backends.vendor_blas_types(CPU()) == HD.Backends.BLAS_ELEMENT_TYPES
-        @test Float16 ∉ HD.Backends.vendor_blas_types(CPU())
-        @test HD.Backends.blas_vendor("libopenblas64_.so") == "OpenBLAS"
-        @test HD.Backends.blas_vendor("libmkl_rt.so") == "MKL"
-        @test HD.Backends.blas_vendor("libcustom.so") == "libcustom.so"
+        @test HD.vendor_blas_types(CPU()) == HD.BLAS_ELEMENT_TYPES
+        @test Float16 ∉ HD.vendor_blas_types(CPU())
+        @test HD.blas_vendor("libopenblas64_.so") == "OpenBLAS"
+        @test HD.blas_vendor("libmkl_rt.so") == "MKL"
+        @test HD.blas_vendor("libcustom.so") == "libcustom.so"
         x = rand(Float32, 4, 4)
-        @test HD.Backends.to_device(x, CPU()) === x
-        @test HD.Backends.to_device(view(x, 1:2, 1:2), CPU()) isa Matrix{Float32}
-        @test HD.Backends.device_fingerprint(CPU()) == ""
-        @test HD.Backends.reclaim_device_memory!(CPU()) === nothing
-        @test HD.Backends.applies_to_os(:metal) == Sys.isapple()
+        @test HD.to_device(x, CPU()) === x
+        @test HD.to_device(view(x, 1:2, 1:2), CPU()) isa Matrix{Float32}
+        @test HD.device_fingerprint(CPU()) == ""
+        @test HD.reclaim_device_memory!(CPU()) === nothing
+        @test HD.applies_to_os(:metal) == Sys.isapple()
     end
 
     @testset "Benchmark stages on the host (N = 32)" begin
         config = validate_config(base_config_dict())
         host = host_info(; record_hostname = false)
         rng = Xoshiro(config.seed)
-        total = HD.Benchmark.plan_total_steps(config, host, 0)
+        total = HD.plan_total_steps(config, host, 0)
         reporter = Reporter(IO[devnull]; total, console = devnull)
         counts = thread_sweep(host.physical_cores, host.logical_threads, :physical)
         reference = unique([1, last(counts)])
@@ -556,14 +525,14 @@ end
             r -> isnan(r.speedup_vs_1t) && isnan(r.parallel_efficiency_pct),
             multitype,
         )
-        @test HD.Benchmark.cpu_reference_time_ms(multitype, Float32, 32, 1) > 0
-        @test isnan(HD.Benchmark.cpu_reference_time_ms(multitype, Float64, 32, 1))
+        @test HD.cpu_reference_time_ms(multitype, Float32, 32, 1) > 0
+        @test isnan(HD.cpu_reference_time_ms(multitype, Float64, 32, 1))
         @test reporter.progress.current == total
 
         tight = validate_config(altered(d -> d["safety"]["memory_safety_fraction"] = 1e-12))
         tight_reporter = Reporter(
             IO[devnull];
-            total = HD.Benchmark.plan_total_steps(tight, host, 0),
+            total = HD.plan_total_steps(tight, host, 0),
             console = devnull,
         )
         skipped = run_cpu_thread_sweep(tight, host, rng, tight_reporter)
@@ -579,15 +548,14 @@ end
         @test [r.blas_threads for r in skipped_types if r.engine == "blas"] == vcat(reference, reference)
         @test all(r -> r.blas_threads == 0, filter(r -> r.engine != "blas", skipped_types))
         @test tight_reporter.progress.current == tight_reporter.progress.total
-        @test HD.Benchmark.prediction_reason((32, 2.0), 64, 10.0) !== nothing
-        @test HD.Benchmark.prediction_reason((32, 1.0), 64, 10.0) === nothing
-        @test HD.Benchmark.prediction_reason(nothing, 64, 10.0) === nothing
-        @test HD.Benchmark.memory_reason(32, Float32, 1.0) !== nothing
-        @test HD.Benchmark.memory_reason(32, Float32, Inf) === nothing
-        summary, status =
-            HD.Benchmark.try_measure(:ka, CPU(), Float32, 16, rng, config.sampling)
+        @test HD.prediction_reason((32, 2.0), 64, 10.0) !== nothing
+        @test HD.prediction_reason((32, 1.0), 64, 10.0) === nothing
+        @test HD.prediction_reason(nothing, 64, 10.0) === nothing
+        @test HD.memory_reason(32, Float32, 1.0) !== nothing
+        @test HD.memory_reason(32, Float32, Inf) === nothing
+        summary, status = HD.try_measure(:ka, CPU(), Float32, 16, rng, config.sampling)
         @test summary isa TimingSummary && status == "ok"
-        @test_throws ArgumentError HD.Benchmark.measure_point(
+        @test_throws ArgumentError HD.measure_point(
             :none,
             CPU(),
             Float32,
@@ -603,7 +571,7 @@ end
             max_samples = 4,
             max_point_seconds = 0.05,
         )
-        warm = HD.Benchmark.warm_up_and_sample(() -> sleep(0.1), slow)
+        warm = HD.warm_up_and_sample(() -> sleep(0.1), slow)
         @test warm.samples == 1 && warm.min_s > 0.05 && isnan(warm.mad_s)
         tiny = SamplingPolicy(;
             min_sampling_time_s = 1e-3,
@@ -611,7 +579,7 @@ end
             max_samples = 4,
             max_point_seconds = 1e-9,
         )
-        @test HD.Benchmark.measure_point(:blas, CPU(), Float32, 32, rng, tiny).samples == 1
+        @test HD.measure_point(:blas, CPU(), Float32, 32, rng, tiny).samples == 1
 
         # accelerator stage on host-backed mock devices
         cpu_records = vcat(sweep, multitype)
@@ -633,7 +601,7 @@ end
             Dict{String, String}(),
         )
         limited = mock_device(0, 1024)
-        @test 1024 < HD.Kernels.matrix_bytes(32, Float32)
+        @test 1024 < HD.matrix_bytes(32, Float32)
         device_reporter = Reporter(IO[devnull]; total = n_device_points, console = devnull)
         limited_records = run_accelerator_benchmarks(
             limited,
@@ -676,13 +644,13 @@ end
         @test device_reporter.progress.current == 2 * n_device_points
 
         # discovery through a registered probe
-        HD.Backends.register_backend!(:mock, () -> ample)
+        HD.register_backend!(:mock, () -> ample)
         try
             discovered = discover_accelerators(:auto)
             @test count(d -> d.name === :mock, discovered) == 1
             @test isempty(discover_accelerators(:none))
         finally
-            filter!(p -> first(p) !== :mock, HD.Backends.BACKEND_PROBES)
+            filter!(p -> first(p) !== :mock, HD.BACKEND_PROBES)
         end
     end
 
@@ -729,13 +697,13 @@ end
             @test occursin(",,", lines[3])
             @test !occursin("NaN", lines[3])
             @test count(==(','), lines[3]) == length(fieldnames(BenchmarkRecord)) - 1
-            @test HD.Export.csv_row(measured) == lines[2]
+            @test HD.csv_row(measured) == lines[2]
 
             streamed = joinpath(dir, "streamed.csv")
-            writer = HD.Export.DatasetWriter(streamed)
+            writer = HD.DatasetWriter(streamed)
             @test readlines(streamed) == [lines[1]]
-            HD.Export.write_record!(writer, measured)
-            @test HD.Export.write_record!(writer, skipped) === nothing
+            HD.write_record!(writer, measured)
+            @test HD.write_record!(writer, skipped) === nothing
             close(writer)
             @test read(streamed, String) == read(path, String)
 
@@ -768,8 +736,8 @@ end
             @test safe_filepath(existing) == joinpath(dir, "run#2.log")
             @test safe_filepath(joinpath(dir, "fresh.log")) == joinpath(dir, "fresh.log")
         end
-        @test HD.Export.repository_commit(TOOL_DIR) isa String
-        @test HD.Export.repository_commit(tempdir()) == "unavailable"
+        @test HD.repository_commit(TOOL_DIR) isa String
+        @test HD.repository_commit(tempdir()) == "unavailable"
     end
 
     @testset "End-to-end run on the host (N = 32)" begin

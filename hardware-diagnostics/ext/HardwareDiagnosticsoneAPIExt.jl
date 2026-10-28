@@ -1,10 +1,10 @@
 module HardwareDiagnosticsoneAPIExt
 
 using oneAPI: oneAPI, oneAPIBackend, oneArray
-using HardwareDiagnostics.Backends: Backends, AcceleratorDevice
+using HardwareDiagnostics: HardwareDiagnostics, AcceleratorDevice
 
 function __init__()
-    Backends.register_backend!(:oneapi, probe_oneapi)
+    HardwareDiagnostics.register_backend!(:oneapi, probe_oneapi)
     return nothing
 end
 
@@ -45,10 +45,10 @@ function probe_oneapi()
     )
 end
 
-Backends.to_device(x::AbstractArray, ::oneAPIBackend) = oneArray(x)
-Backends.backend_label(::oneAPIBackend) = "oneAPI"
-Backends.vendor_blas_label(::oneAPIBackend) = "oneMKL"
-Backends.device_fingerprint(::oneAPIBackend) =
+HardwareDiagnostics.to_device(x::AbstractArray, ::oneAPIBackend) = oneArray(x)
+HardwareDiagnostics.backend_label(::oneAPIBackend) = "oneAPI"
+HardwareDiagnostics.vendor_blas_label(::oneAPIBackend) = "oneMKL"
+HardwareDiagnostics.device_fingerprint(::oneAPIBackend) =
     oneAPI.functional() ? sprint(io -> oneAPI.versioninfo(io)) : ""
 
 end

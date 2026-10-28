@@ -1,24 +1,4 @@
-"""
-Tidy CSV dataset, TOML provenance sidecar and collision-free output paths.
-"""
-module Export
-
-using Dates: Dates, now
-using Printf: @sprintf
-using TOML: TOML
-using ..Backends: backend_label, device_fingerprint
-using ..Benchmark: BenchmarkRecord
-using ..Config: BenchmarkConfig
-using ..Host: HostInfo
-
-export export_records_to_csv,
-    export_metadata_to_toml,
-    safe_filepath,
-    repository_commit,
-    csv_header,
-    csv_row,
-    DatasetWriter,
-    write_record!
+# Tidy CSV dataset, TOML provenance sidecar and collision-free output paths.
 
 """
     csv_header() -> String
@@ -225,6 +205,4 @@ function repository_commit(dir::AbstractString)
     ) || return "unavailable"
     revision = String(strip(String(take!(commit))))
     return isempty(strip(String(take!(status)))) ? revision : revision * "-dirty"
-end
-
 end

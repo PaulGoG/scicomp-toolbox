@@ -1,36 +1,5 @@
-"""
-Benchmark stages: the CPU thread-scaling sweep, the CPU element-type suite and the
-accelerator suite, all producing [`BenchmarkRecord`](@ref)s.
-"""
-module Benchmark
-
-using KernelAbstractions: KernelAbstractions, CPU
-using LinearAlgebra: BLAS
-using Printf: @sprintf
-using Random: AbstractRNG
-using ..Backends:
-    AcceleratorDevice, backend_label, library_label, reclaim_device_memory!, to_device
-using ..Config: BenchmarkConfig, SUPPORTED_TYPES, first_line
-using ..Formatting: format_bytes, format_throughput
-using ..Host: HostInfo, thread_sweep
-using ..Kernels:
-    KERNEL_ENGINES,
-    create_matrix,
-    evaluate_engine!,
-    footprint_bytes,
-    matrix_bytes,
-    nominal_ops
-using ..Reporting: Reporter, advance!, emit
-using ..Sampling: SamplingPolicy, TimingSummary, sample_timings, summarize_timings
-
-export BenchmarkRecord,
-    reference_thread_counts,
-    plan_total_steps,
-    measure_point,
-    run_cpu_thread_sweep,
-    run_cpu_multitype,
-    run_accelerator_benchmarks,
-    cpu_reference_time_ms
+# Benchmark stages: the CPU thread-scaling sweep, the CPU element-type suite and the
+# accelerator suite, all producing [`BenchmarkRecord`](@ref)s.
 
 """
     BenchmarkRecord
@@ -717,6 +686,4 @@ function run_accelerator_benchmarks(
         end
     end
     return records
-end
-
 end

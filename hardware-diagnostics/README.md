@@ -23,17 +23,17 @@ hardware-diagnostics/
 │   ├── HardwareDiagnosticsMetalExt.jl
 │   └── HardwareDiagnosticsoneAPIExt.jl
 ├── src/
-│   ├── HardwareDiagnostics.jl         # module, exports
-│   ├── Backends.jl                    # backend registry, accelerator loading and labels
-│   ├── Formatting.jl                  # bytes, durations, throughputs
-│   ├── Kernels.jl                     # the operation on every engine, operands, verification
-│   ├── Sampling.jl                    # time-budgeted sampling, min/median/MAD
-│   ├── Config.jl                      # TOML schema, constraints, command line
-│   ├── Host.jl                        # CPU topology, thread sweep, host report
-│   ├── Reporting.jl                   # console and log sinks, progress line
-│   ├── Benchmark.jl                   # the three benchmark stages
-│   ├── Export.jl                      # CSV dataset, TOML sidecar, collision-free paths
-│   └── Driver.jl                      # orchestration
+│   ├── HardwareDiagnostics.jl         # module, imports, exports, includes
+│   ├── backends.jl                    # accelerator probes and loading, labels
+│   ├── formatting.jl                  # bytes, durations, throughputs
+│   ├── kernels.jl                     # the operation on every engine, operands, verification
+│   ├── sampling.jl                    # time-budgeted sampling, min/median/MAD
+│   ├── config.jl                      # TOML schema, constraints, command line
+│   ├── host.jl                        # CPU topology, thread sweep, host report
+│   ├── reporting.jl                   # console and log sinks, progress line
+│   ├── benchmark.jl                   # the three benchmark stages
+│   ├── export.jl                      # CSV dataset, TOML sidecar, collision-free paths
+│   └── driver.jl                      # orchestration
 └── test/
     ├── Project.toml                   # Aqua, ExplicitImports, JET, Test
     └── runtests.jl
@@ -133,7 +133,7 @@ The datasets are in `reference-runs/`, whose README records the hardware, the
 configuration and the outcome of each run.
 
 Which element types reach the vendor library depends on the backend, so
-`Backends.vendor_blas_types` is a method the extensions override. The BLAS-class
+`vendor_blas_types` is a method the extensions override. The BLAS-class
 backends cover `Float32`, `Float64`, `ComplexF32` and `ComplexF64`; Metal dispatches
 `Float16` to an Apple GEMM and has no `Float64`.
 

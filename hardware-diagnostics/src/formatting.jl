@@ -1,11 +1,4 @@
-"""
-Human-readable formatting of byte counts, durations and throughputs.
-"""
-module Formatting
-
-using Printf: @sprintf
-
-export format_bytes, format_seconds, format_throughput
+# Human-readable formatting of byte counts, durations and throughputs.
 
 """
     format_bytes(bytes::Real) -> String
@@ -48,6 +41,4 @@ function format_throughput(gops::Real, ::Type{T}) where {T}
     unit = is_float ? "FLOP/s" : "OP/s"
     gops >= 1000.0 && return @sprintf("%.2f T%s", gops / 1000.0, unit)
     return @sprintf("%.2f G%s", gops, unit)
-end
-
 end

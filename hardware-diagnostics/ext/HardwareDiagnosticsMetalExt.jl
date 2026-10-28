@@ -1,10 +1,10 @@
 module HardwareDiagnosticsMetalExt
 
 using Metal: Metal, MetalBackend, MtlArray
-using HardwareDiagnostics.Backends: Backends, AcceleratorDevice
+using HardwareDiagnostics: HardwareDiagnostics, AcceleratorDevice
 
 function __init__()
-    Backends.register_backend!(:metal, probe_metal)
+    HardwareDiagnostics.register_backend!(:metal, probe_metal)
     return nothing
 end
 
@@ -34,17 +34,17 @@ function probe_metal()
     )
 end
 
-Backends.to_device(x::AbstractArray, ::MetalBackend) = MtlArray(x)
-Backends.backend_label(::MetalBackend) = "Metal"
-Backends.vendor_blas_label(::MetalBackend) = "Metal Performance Shaders"
+HardwareDiagnostics.to_device(x::AbstractArray, ::MetalBackend) = MtlArray(x)
+HardwareDiagnostics.backend_label(::MetalBackend) = "Metal"
+HardwareDiagnostics.vendor_blas_label(::MetalBackend) = "Metal Performance Shaders"
 
 """
 Element types that Metal.jl's `mul!` routes to MPS or MPSGraph (`MPS_VALID_MATMUL_TYPES`,
 `MPSGRAPH_VALID_MATMUL_TYPES`): Float16, Float32, ComplexF32. Metal has no Float64; such
 points fail.
 """
-Backends.vendor_blas_types(::MetalBackend) = (Float16, Float32, ComplexF32)
-Backends.device_fingerprint(::MetalBackend) =
+HardwareDiagnostics.vendor_blas_types(::MetalBackend) = (Float16, Float32, ComplexF32)
+HardwareDiagnostics.device_fingerprint(::MetalBackend) =
     Metal.functional() ? sprint(io -> Metal.versioninfo(io)) : ""
 
 end

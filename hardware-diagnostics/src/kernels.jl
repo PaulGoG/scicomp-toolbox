@@ -1,34 +1,5 @@
-"""
-The benchmark operation D = A·B + A·C on every engine, operand generation, operation
-counts and the cross-engine verification.
-"""
-module Kernels
-
-using KernelAbstractions:
-    KernelAbstractions, @Const, @index, @kernel, @localmem, @private, @synchronize, @uniform
-using LinearAlgebra: mul!
-using Random: AbstractRNG
-using ..Backends: to_device
-
-export dual_gemm_kernel!,
-    dual_gemm_tiled_kernel!,
-    launch_dual_gemm!,
-    launch_dual_gemm_tiled!,
-    dual_gemm_blas!,
-    evaluate_engine!,
-    nominal_ops,
-    matrix_bytes,
-    footprint_bytes,
-    create_matrix,
-    integer_accumulation_bound,
-    integer_range_safe,
-    verification_tolerance,
-    verify_engines,
-    INTEGER_ENTRY_RANGE,
-    WORKGROUP_SIZE,
-    TILE,
-    ENGINES,
-    KERNEL_ENGINES
+# The benchmark operation D = A·B + A·C on every engine, operand generation, operation
+# counts and the cross-engine verification.
 
 """
 Value range of integer operand entries; bounds the accumulated sums (see
@@ -291,6 +262,4 @@ function relative_deviation(x::AbstractArray, reference::AbstractArray)
     scale = Float64(maximum(abs, reference))
     difference = Float64(maximum(abs, x .- reference))
     return scale == 0 ? difference : difference / scale
-end
-
 end

@@ -1,16 +1,5 @@
-"""
-Host introspection: CPU topology (physical and logical), thread pools, memory, BLAS
-library and the thread counts of the scaling sweep.
-"""
-module Host
-
-using KernelAbstractions: KernelAbstractions
-using LinearAlgebra: BLAS
-using ..Backends: blas_library_label
-using ..Formatting: format_bytes
-
-export HostInfo,
-    host_info, physical_core_count, thread_sweep, print_host_report, cpu_isa_features
+# Host introspection: CPU topology (physical and logical), thread pools, memory, BLAS
+# library and the thread counts of the scaling sweep.
 
 """
     HostInfo
@@ -234,6 +223,4 @@ function print_host_report(io::IO, host::HostInfo)
     )
     println(io, "  KernelAbstractions    : v", host.kernel_abstractions_version)
     return nothing
-end
-
 end

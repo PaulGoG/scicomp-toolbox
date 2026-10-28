@@ -10,16 +10,25 @@ corresponding package is loaded in the session.
 """
 module HardwareDiagnostics
 
-include("Backends.jl")
-using .Backends
+using Dates: Dates, now
+using KernelAbstractions:
+    KernelAbstractions,
+    CPU,
+    @Const,
+    @index,
+    @kernel,
+    @localmem,
+    @private,
+    @synchronize,
+    @uniform
+using LinearAlgebra: BLAS, mul!
+using Printf: @sprintf
+using Random: AbstractRNG, Xoshiro
+using Statistics: median
+using TOML: TOML
+
 export AcceleratorDevice, discover_accelerators, load_accelerator_packages
-
-include("Formatting.jl")
-using .Formatting
 export format_bytes, format_seconds, format_throughput
-
-include("Kernels.jl")
-using .Kernels
 export dual_gemm_kernel!,
     dual_gemm_tiled_kernel!,
     launch_dual_gemm!,
@@ -31,34 +40,24 @@ export dual_gemm_kernel!,
     create_matrix,
     integer_range_safe,
     verify_engines
-
-include("Sampling.jl")
-using .Sampling
 export SamplingPolicy, TimingSummary, sample_timings, summarize_timings
-
-include("Config.jl")
-using .Config
 export BenchmarkConfig, validate_config, load_config, parse_cli_args, usage_text
-
-include("Host.jl")
-using .Host
 export HostInfo, host_info, physical_core_count, thread_sweep
-
-include("Reporting.jl")
-using .Reporting
 export Reporter
-
-include("Benchmark.jl")
-using .Benchmark
 export BenchmarkRecord, run_cpu_thread_sweep, run_cpu_multitype, run_accelerator_benchmarks
-
-include("Export.jl")
-using .Export
 export export_records_to_csv, export_metadata_to_toml, safe_filepath
 export DatasetWriter, write_record!, csv_row
-
-include("Driver.jl")
-using .Driver
 export configure, run_diagnostics
+
+include("backends.jl")
+include("formatting.jl")
+include("kernels.jl")
+include("sampling.jl")
+include("config.jl")
+include("host.jl")
+include("reporting.jl")
+include("benchmark.jl")
+include("export.jl")
+include("driver.jl")
 
 end

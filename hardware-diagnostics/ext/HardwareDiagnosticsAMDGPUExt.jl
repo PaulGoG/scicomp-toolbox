@@ -1,10 +1,10 @@
 module HardwareDiagnosticsAMDGPUExt
 
 using AMDGPU: AMDGPU, ROCBackend, ROCArray
-using HardwareDiagnostics.Backends: Backends, AcceleratorDevice
+using HardwareDiagnostics: HardwareDiagnostics, AcceleratorDevice
 
 function __init__()
-    Backends.register_backend!(:amdgpu, probe_amdgpu)
+    HardwareDiagnostics.register_backend!(:amdgpu, probe_amdgpu)
     return nothing
 end
 
@@ -38,10 +38,10 @@ function probe_amdgpu()
     )
 end
 
-Backends.to_device(x::AbstractArray, ::ROCBackend) = ROCArray(x)
-Backends.backend_label(::ROCBackend) = "AMDGPU"
-Backends.vendor_blas_label(::ROCBackend) = "rocBLAS"
-Backends.device_fingerprint(::ROCBackend) =
+HardwareDiagnostics.to_device(x::AbstractArray, ::ROCBackend) = ROCArray(x)
+HardwareDiagnostics.backend_label(::ROCBackend) = "AMDGPU"
+HardwareDiagnostics.vendor_blas_label(::ROCBackend) = "rocBLAS"
+HardwareDiagnostics.device_fingerprint(::ROCBackend) =
     AMDGPU.functional() ? sprint(io -> AMDGPU.versioninfo(io)) : ""
 
 end

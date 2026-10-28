@@ -1,10 +1,10 @@
 module HardwareDiagnosticsCUDAExt
 
 using CUDA: CUDA, CUDABackend, CuArray
-using HardwareDiagnostics.Backends: Backends, AcceleratorDevice
+using HardwareDiagnostics: HardwareDiagnostics, AcceleratorDevice
 
 function __init__()
-    Backends.register_backend!(:cuda, probe_cuda)
+    HardwareDiagnostics.register_backend!(:cuda, probe_cuda)
     return nothing
 end
 
@@ -43,15 +43,15 @@ function probe_cuda()
     )
 end
 
-Backends.to_device(x::AbstractArray, ::CUDABackend) = CuArray(x)
-Backends.backend_label(::CUDABackend) = "CUDA"
-Backends.vendor_blas_label(::CUDABackend) = "cuBLAS"
-function Backends.reclaim_device_memory!(::CUDABackend)
+HardwareDiagnostics.to_device(x::AbstractArray, ::CUDABackend) = CuArray(x)
+HardwareDiagnostics.backend_label(::CUDABackend) = "CUDA"
+HardwareDiagnostics.vendor_blas_label(::CUDABackend) = "cuBLAS"
+function HardwareDiagnostics.reclaim_device_memory!(::CUDABackend)
     GC.gc(false)
     CUDA.reclaim()
     return nothing
 end
-Backends.device_fingerprint(::CUDABackend) =
+HardwareDiagnostics.device_fingerprint(::CUDABackend) =
     CUDA.functional() ? sprint(io -> CUDA.versioninfo(io)) : ""
 
 end

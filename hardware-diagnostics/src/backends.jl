@@ -1,26 +1,5 @@
-"""
-Compute-backend registry: the host CPU backend plus the accelerator probes registered
-by the package extensions when their GPU package is loaded in the session.
-"""
-module Backends
-
-using KernelAbstractions: KernelAbstractions, CPU
-using LinearAlgebra: BLAS
-
-export AcceleratorDevice,
-    register_backend!,
-    discover_accelerators,
-    load_accelerator_packages,
-    to_device,
-    reclaim_device_memory!,
-    device_fingerprint,
-    backend_label,
-    vendor_blas_label,
-    vendor_blas_types,
-    library_label,
-    blas_library_label,
-    ACCELERATOR_PACKAGES,
-    BACKEND_NAMES
+# Compute-backend registry: the host CPU backend plus the accelerator probes registered
+# by the package extensions when their GPU package is loaded in the session.
 
 """
 Backend identifiers accepted by the configuration, mapped to the package that provides
@@ -244,6 +223,4 @@ function library_label(
     engine === :ka_tiled && return "KernelAbstractions tiled"
     T in vendor_blas_types(backend) && return vendor_blas_label(backend)
     return backend isa CPU ? "LinearAlgebra generic" : "GPUArrays generic"
-end
-
 end
