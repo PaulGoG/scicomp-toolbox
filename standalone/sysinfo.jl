@@ -7,30 +7,27 @@ using LinearAlgebra: BLAS
 using Printf: @printf
 
 """
-    physical_core_count() -> Tuple{Int, String}
+    physical_core_count(cpu_root = "/sys/devices/system/cpu") -> Tuple{Int, String}
 
-Number of physical cores and the source of the figure. On Linux the unique
-(physical id, core id) pairs of `/proc/cpuinfo` are counted; elsewhere the logical
-thread count is returned and the source string says so.
+Number of physical cores and the source of the figure. On Linux each online logical CPU
+under `cpu_root` lists the logical CPUs of its core in `topology/core_cpus_list`
+(`thread_siblings_list` before kernel 5.3), and the distinct lists are counted, which
+holds on x86 and arm64 alike. Elsewhere, or without that topology, the logical thread
+count is returned and the source string says so.
 """
-function physical_core_count()
-    if Sys.islinux() && isfile("/proc/cpuinfo")
-        pairs = Set{Tuple{Int, Int}}()
-        physical = -1
-        core = -1
-        for line in eachline("/proc/cpuinfo")
-            if startswith(line, "physical id")
-                physical = parse(Int, strip(last(split(line, ':'))))
-            elseif startswith(line, "core id")
-                core = parse(Int, strip(last(split(line, ':'))))
-            elseif isempty(strip(line))
-                physical >= 0 && core >= 0 && push!(pairs, (physical, core))
-                physical = -1
-                core = -1
+function physical_core_count(cpu_root::AbstractString = "/sys/devices/system/cpu")
+    if Sys.islinux() && isdir(cpu_root)
+        cores = Set{String}()
+        for entry in readdir(cpu_root)
+            occursin(r"^cpu[0-9]+$", entry) || continue
+            for name in ("core_cpus_list", "thread_siblings_list")
+                path = joinpath(cpu_root, entry, "topology", name)
+                isfile(path) || continue
+                push!(cores, String(strip(read(path, String))))
+                break
             end
         end
-        physical >= 0 && core >= 0 && push!(pairs, (physical, core))
-        isempty(pairs) || return (length(pairs), "/proc/cpuinfo")
+        isempty(cores) || return (length(cores), "sysfs CPU topology")
     end
     return (Sys.CPU_THREADS, "logical thread count; physical topology unavailable")
 end

@@ -362,8 +362,30 @@ end
         @test count >= 1
         @test count <= Sys.CPU_THREADS
         @test !isempty(source)
-        if Sys.islinux() && isfile("/proc/cpuinfo")
-            @test source == "/proc/cpuinfo"
+        if Sys.islinux()
+            # synthetic sysfs trees: one directory per logical CPU listing its core
+            function cpu_tree(dir, siblings; file = "core_cpus_list")
+                for (cpu, list) in enumerate(siblings)
+                    topology = joinpath(dir, "cpu$(cpu - 1)", "topology")
+                    mkpath(topology)
+                    write(joinpath(topology, file), list * "\n")
+                end
+                mkpath(joinpath(dir, "cpufreq"))
+                mkpath(joinpath(dir, "cpu$(length(siblings))"))  # offline: no topology
+                return dir
+            end
+            smt = ["0,4", "1,5", "2,6", "3,7", "0,4", "1,5", "2,6", "3,7"]
+            @test physical_core_count(cpu_tree(mktempdir(), smt)) ==
+                  (4, "sysfs CPU topology")
+            arm = string.(0:5)
+            @test first(
+                physical_core_count(
+                    cpu_tree(mktempdir(), arm; file = "thread_siblings_list"),
+                ),
+            ) == 6
+            @test physical_core_count(mktempdir()) ==
+                  (Sys.CPU_THREADS, "logical thread count; physical topology unavailable")
+            @test source == "sysfs CPU topology"
         end
     end
 

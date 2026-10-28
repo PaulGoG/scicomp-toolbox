@@ -100,8 +100,8 @@ column of the dataset names the stage of each row (`thread_sweep`, `element_type
 
 1. *CPU thread scaling*: Float32 through the library engine over the thread counts of
    the sweep, powers of two up to the ceiling plus the ceiling itself. The default
-   ceiling is the physical core count read from `/proc/cpuinfo` (Linux; the logical count
-   elsewhere). With `thread_sweep_ceiling = "logical"` the sweep continues to the logical
+   ceiling is the physical core count, the number of distinct cores in the sysfs CPU
+   topology (Linux, x86 and arm64; the logical count elsewhere). With `thread_sweep_ceiling = "logical"` the sweep continues to the logical
    thread count, and points above the physical count are marked (`*` in the report,
    `exceeds_physical_cores` in the dataset) because they oversubscribe hyper-threads.
    Speedup S(p) = T₁/T_p and parallel efficiency E(p) = S(p)/p, with T_p the time at p
