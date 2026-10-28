@@ -4,6 +4,48 @@ Notable changes to the workbench. The repository itself carries no version; the
 `HardwareDiagnostics` package follows semantic versioning and its version is given where
 a change belongs to it.
 
+## 2026-10-28
+
+### Changed
+
+- `HardwareDiagnostics` 0.4.0: one module instead of eleven submodules, the source files
+  being plain includes. The extensions add `probe_accelerator(::Val{name})` methods
+  instead of registering closures from `__init__`; a backend requested by name that
+  yields no device is reported as not loaded or not functional.
+- `HardwareDiagnostics` 0.4.0: the benchmark is a plan of `BenchmarkPoint`s
+  (`benchmark_plan`) executed by `run_benchmark_plan`, which replace
+  `run_cpu_thread_sweep`, `run_cpu_multitype` and `run_accelerator_benchmarks`. The
+  dataset gains a leading `stage` column (`thread_sweep`, `element_types`,
+  `accelerator`). Every point is extrapolated from the previous size of its own series,
+  so the sweep no longer drops a size at every thread count when only its one-thread
+  point is predicted too slow. Accelerator speedups refer to the element-type stage for
+  every type, `Float32` included.
+- `HardwareDiagnostics` 0.4.0: integer operands are ±1, which bounds the partial sums by
+  2N instead of 32N and admits `Int16` up to N = 16383. The operands come from one
+  generator per element type and size, derived from the seed, so they do not depend on
+  the size list and are the same on every engine and device.
+- `HardwareDiagnostics` 0.4.0: the cross-engine verification requires each kernel to
+  agree with `mul!` within twice the componentwise rounding-error bound
+  γ(2N+2)·|A|(|B| + |C|), with √2 for complex types (Higham 2002,
+  doi:10.1137/1.9780898718027), instead of a normwise 8·√eps(T). The log reports the
+  deviation as a fraction of the bound. `verification_size` is at most 1022 with
+  `Float16`.
+- `hardware-diagnostics` and `sysinfo` count physical cores from the sysfs CPU topology
+  (`core_cpus_list`, or `thread_siblings_list` before Linux 5.3), which covers arm64.
+- `plot-benchmarks` classifies rows by the `stage` column when the dataset has one.
+- `plot-benchmarks` on CSV 1.1 and CairoMakie 0.15.16; `standalone` declares its
+  `Printf` and `Test` compat.
+- The device-level reading of the accelerator figure moved from the README to
+  `reference-runs/README.md`.
+
+### Fixed
+
+- `HardwareDiagnostics` 0.4.0: the device operands of a point or a verification that
+  fails are released at once, through `release_device_array!` and each package's
+  `unsafe_free!`, instead of being left to the finalizers.
+- `reference-runs`: the three failed `Float64` library rows of `apple-m4` read
+  `GPUArrays generic`, as the code writes them since 0.3.2; no other field changed.
+
 ## 2026-10-26
 
 ### Added
