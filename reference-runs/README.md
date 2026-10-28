@@ -59,9 +59,9 @@ need is in the `.csv`; the table above was compiled from the sidecars.
 The cross-engine verification passed everywhere it could run: **158 comparisons, none
 failed**. Both kernel engines are checked against `mul!` for every element type on the
 host and on the accelerator: 20 comparisons per machine, and 18 on the M4, whose GPU has
-no `Float64`. Integers agree exactly and floating-point types stay within
-8·√eps(T); the largest deviations observed are 3.5·10⁻³ for `Float16`, 3.8·10⁻⁷ for
-`Float32` and 8.0·10⁻¹⁶ for `Float64`.
+no `Float64`. Integers agree exactly and floating-point types stay within 8·√eps(T),
+the tolerance of the version that ran them; the largest deviations observed are
+3.5·10⁻³ for `Float16`, 3.8·10⁻⁷ for `Float32` and 8.0·10⁻¹⁶ for `Float64`.
 
 Every benchmark point carries `status = "ok"` apart from three groups:
 
@@ -77,22 +77,21 @@ Every benchmark point carries `status = "ok"` apart from three groups:
   120, and the M4 host contributes to the thread-scaling figure but not to the throughput
   panels above N = 1024.
 
-**One label was corrected in `apple-m4` after the run.** The three `Float16` rows of the
+**Two labels were corrected in `apple-m4` after the run.** The three `Float16` rows of the
 Metal device were written `GPUArrays generic` by a defect in the version that produced
 them: vendor coverage came from one fixed type set that assumed every backend serves the
 BLAS types and only those. Metal does not: `MPS_VALID_MATMUL_TYPES` and
 `MPSGRAPH_VALID_MATMUL_TYPES` both carry the `(Float16, Float16)` pair, so `mul!` reached
 an Apple GEMM, consistent with the measured 3.45 TOP/s. `vendor_blas_types` asks
 the backend since 0.3.2, and those three fields now read `Metal Performance Shaders`, as
-the fixed code writes them.
+the fixed code writes them. The same defect labelled the three failed `Float64` library
+rows `Metal Performance Shaders`, which has no double precision; they now read
+`GPUArrays generic`, as 0.3.2 and later write them.
 
-The correction touches only the `library` annotation, a pure function of engine, backend
-and element type that carries no measurement. The three failed `Float64` rows of the
-Metal device keep the label the run wrote, `Metal Performance Shaders`; 0.3.2 writes
-`GPUArrays generic` for them. Every other field
-of the file, timings and throughputs included, is byte-identical to what the run wrote,
-and the untouched original is kept outside this repository with the run's `.toml` and
-`.log`.
+The corrections touch only the `library` annotation, a pure function of engine, backend
+and element type that carries no measurement. Every other field of the file, timings and
+throughputs included, is byte-identical to what the run wrote, and the untouched original
+is kept outside this repository with the run's `.toml` and `.log`.
 
 ## Figures
 
