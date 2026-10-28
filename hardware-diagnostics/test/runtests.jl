@@ -145,9 +145,9 @@ end
             results = verify_engines(cpu, T, 64, rng)
             @test length(results) == 2
             @test [r.engine for r in results] == [:ka, :ka_tiled]
-            @test all(r -> r.passed && r.max_relative_deviation <= r.tolerance, results)
+            @test all(r -> r.passed && 0 <= r.bound_ratio <= 1, results)
         end
-        @test HD.verification_tolerance(Int32) == 0.0
+        @test HD.rounding_error_bound(Int32, 64) == 0.0
         @test HD.TILE == 16
         @test_throws ArgumentError verify_engines(cpu, Float32, 32, rng; engines = (:blas,))
         @test_throws ArgumentError evaluate_engine!(
@@ -159,8 +159,23 @@ end
             zeros(2, 2),
         )
         @test length(verify_engines(cpu, Float64, 40, rng; engines = (:ka_tiled,))) == 1
-        @test HD.verification_tolerance(Float64) ≈ 8 * sqrt(eps(Float64))
-        @test HD.verification_tolerance(ComplexF32) ≈ 8 * sqrt(eps(Float32))
+        @test HD.rounding_error_bound(Float64, 72) ≈ 146 * eps(Float64) / 2 rtol = 1e-12
+        @test HD.rounding_error_bound(ComplexF32, 72) ≈
+              sqrt(2) * HD.rounding_error_bound(Float32, 72)
+        @test HD.rounding_error_bound(Float16, 1022) > 0
+        @test_throws ArgumentError HD.rounding_error_bound(Float16, 1023)
+        # an error far above rounding level fails, a rounding-level error passes
+        rng16 = HD.operand_rng(1, Float32, 16)
+        A, B, C = (create_matrix(rng16, Float32, 16) for _ in 1:3)
+        exact = Float64.(A) * Float64.(B) + Float64.(A) * Float64.(C)
+        scale = 2 * HD.rounding_error_bound(Float32, 16) .* (abs.(A) * (abs.(B) .+ abs.(C)))
+        rounded = A * B + A * C
+        @test HD.bound_ratio(rounded, Float32.(exact), scale) <= 1
+        corrupted = copy(rounded)
+        corrupted[3, 5] += 1.0f-2 * abs(corrupted[3, 5]) + 1.0f-3
+        @test HD.bound_ratio(corrupted, rounded, scale) > 1
+        @test HD.bound_ratio([1, 2], [1, 3], [0.0, 0.0]) == Inf
+        @test HD.bound_ratio([1, 2], [1, 2], [0.0, 0.0]) == 0.0
         @test all(in((-1, 1)), create_matrix(rng, Int8, 16))
         same = HD.operand_rng(7, Float32, 32)
         @test create_matrix(same, Float32, 32) ==
@@ -288,6 +303,14 @@ end
         @test_throws ArgumentError validate_config(
             altered(d -> d["hardware"]["verification_size"] = 4),
         )
+        half(size, verify) = altered(d -> begin
+            d["benchmark"]["target_types"] = ["Float16", "Float32"]
+            d["hardware"]["verification_size"] = size
+            d["hardware"]["verify_kernels"] = verify
+        end)
+        @test_throws "at most 1022" validate_config(half(1023, true))
+        @test validate_config(half(1022, true)).verification_size == 1022
+        @test validate_config(half(1023, false)).verification_size == 1023
         @test_throws ArgumentError validate_config(
             altered(d -> d["hardware"]["run_cpu"] = false),
         )

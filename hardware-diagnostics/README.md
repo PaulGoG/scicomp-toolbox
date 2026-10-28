@@ -54,13 +54,22 @@ algorithmic class and a tuned library, not compiler quality.
 
 **Verification.** Before benchmarking, every configured kernel engine and the `mul!`
 reference run on the same operands of size `verification_size` for every element type on
-every device, and each kernel result is compared with the reference: relative deviation
-at most 8·√eps(T) for floating-point types, exact equality for integers. A deviation
-above tolerance aborts the run. Element types the library cannot multiply on a device are
-reported as unverifiable and fail as individual points. The default
-`verification_size = 72` is not a multiple of the 16 × 16 tile, so the padded edge tiles
-of the tiled kernel and the partial work-groups of the naive kernel are part of the
-check.
+every device, and each kernel result is compared with the reference entry by entry. In
+the standard model of floating-point arithmetic each result lies within
+γₘ·|A|(|B| + |C|) of the exact D, with γₘ = mu/(1 − mu), m = 2N + 2 and u the unit
+roundoff of T, and within √2 times that for complex types (Higham 2002, §3.1 and §3.6,
+doi:[10.1137/1.9780898718027](https://doi.org/10.1137/1.9780898718027)); the bound holds
+for any summation order and with fused multiply-adds. Two correct results therefore
+differ by at most twice the bound, and the log reports the largest deviation as a
+fraction of it; integers must agree exactly. A deviation above the bound aborts the run.
+The bound is a worst case. Observed deviations are about 1 % of it at N = 72, and for
+`Float16` it is comparable to the entries of D themselves, so there the check detects
+only gross errors. No bound of this form exists once (2N + 2)·u ≥ 1, which limits
+`verification_size` to 1022 when `Float16` is configured. Element types the library
+cannot multiply on a device are reported as unverifiable and fail as individual points.
+The default `verification_size = 72` is not a multiple of the 16 × 16 tile, so the
+padded edge tiles of the tiled kernel and the partial work-groups of the naive kernel
+are part of the check.
 
 **Sampling.** Each point is evaluated once for compilation and first touch, then
 repeatedly until at least `min_samples` evaluations have consumed `min_sampling_time_s`
@@ -184,8 +193,8 @@ max_point_seconds = 60.0  # float > 0 [s]; a point predicted above this per eval
 run_cpu = true  # boolean
 gpu_backend = "auto"  # one of: "none" | "auto" | "oneapi" | "cuda" | "amdgpu" | "metal"
 thread_sweep_ceiling = "physical"  # one of: "physical" | "logical"
-verify_kernels = true  # boolean; cross-engine check against mul! before benchmarking (tolerance 8·sqrt(eps(T)); exact for integers)
-verification_size = 72  # integer in [8, 1024]; not a multiple of 16, so the tiled kernel's padded edge tiles are exercised
+verify_kernels = true  # boolean; cross-engine check against mul! before benchmarking (componentwise rounding-error bound; exact for integers)
+verification_size = 72  # integer in [8, 1024], at most 1022 with Float16; not a multiple of 16, so the tiled kernel's padded edge tiles are exercised
 
 [safety]
 memory_safety_fraction = 0.75  # float in (0.0, 0.95]; usable fraction of free host memory or of device memory

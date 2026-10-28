@@ -16,8 +16,8 @@ max_point_seconds = 60.0  # float > 0 [s]; a point predicted above this per eval
 run_cpu = true  # boolean
 gpu_backend = "auto"  # one of: "none" | "auto" | "oneapi" | "cuda" | "amdgpu" | "metal"
 thread_sweep_ceiling = "physical"  # one of: "physical" | "logical"
-verify_kernels = true  # boolean; cross-engine check against mul! before benchmarking (tolerance 8·sqrt(eps(T)); exact for integers)
-verification_size = 72  # integer in [8, 1024]; not a multiple of 16, so the tiled kernel's padded edge tiles are exercised
+verify_kernels = true  # boolean; cross-engine check against mul! before benchmarking (componentwise rounding-error bound; exact for integers)
+verification_size = 72  # integer in [8, 1024], at most 1022 with Float16; not a multiple of 16, so the tiled kernel's padded edge tiles are exercised
 
 [safety]
 memory_safety_fraction = 0.75  # float in (0.0, 0.95]; usable fraction of free host memory or of device memory

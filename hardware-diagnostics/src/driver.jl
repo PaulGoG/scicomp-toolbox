@@ -74,8 +74,8 @@ end
 
 Compare every configured kernel engine with the `mul!` reference on every backend and
 element type at `verification_size`. Element types the library cannot multiply on a
-backend are reported as unverifiable; a deviation above tolerance aborts the run with
-an error.
+backend are reported as unverifiable; a deviation above the rounding-error bound of
+[`verify_engines`](@ref) aborts the run with an error.
 """
 function run_verification(
     config::BenchmarkConfig,
@@ -113,19 +113,19 @@ function run_verification(
             emit(
                 reporter,
                 @sprintf(
-                    "  %-8s %-10s %-9s max relative deviation %.3e (tolerance %.3e) %s",
+                    "  %-8s %-10s %-9s deviation %.3g of the rounding-error bound (max relative %.3e) %s",
                     backend_label(backend),
                     string(T),
                     result.engine,
+                    result.bound_ratio,
                     result.max_relative_deviation,
-                    result.tolerance,
                     result.passed ? "passed" : "FAILED"
                 )
             )
             result.passed || begin
                 finish!(reporter)
                 error(
-                    "cross-engine verification failed for $T with $(result.engine) on $(backend_label(backend)): deviation $(result.max_relative_deviation) exceeds tolerance $(result.tolerance)",
+                    "cross-engine verification failed for $T with $(result.engine) on $(backend_label(backend)): deviation $(result.bound_ratio) times the rounding-error bound",
                 )
             end
         end

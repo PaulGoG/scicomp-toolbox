@@ -298,6 +298,17 @@ function validate_config(raw::AbstractDict; preset::String = "config")
     verify_kernels = get_boolean(hardware, "verify_kernels", true, "hardware")
     verification_size =
         get_integer(hardware, "verification_size", 72, "hardware"; low = 8, high = 1024)
+    for T in target_types
+        (
+            !verify_kernels ||
+            T <: Integer ||
+            accumulation_roundoff(T, verification_size) < 1
+        ) || throw(
+            ArgumentError(
+                "[hardware].verification_size = $verification_size admits no rounding-error bound for $T ((2N + 2)·u ≥ 1); at most $(floor(Int, 1 / eps(real(T))) - 2) for this type",
+            ),
+        )
+    end
     (run_cpu || gpu_backend !== :none) || throw(
         ArgumentError(
             "[hardware]: run_cpu = false together with gpu_backend = \"none\" leaves nothing to run",

@@ -210,24 +210,51 @@ integer_range_safe(::Type{T}, N::Integer) where {T <: Integer} =
 integer_range_safe(::Type, N::Integer) = true
 
 """
-    verification_tolerance(::Type{T}) -> Float64
+    accumulation_roundoff(::Type{T}, N::Integer) -> Float64
 
-Relative tolerance of the cross-engine comparison: `8·√eps(T)` for floating-point and
-complex types (summation-order differences), exact equality for integers.
+m·u for one evaluation of D = A·B + A·C in the precision of `T`: m = 2N + 2 accumulated
+terms per entry (2N products and the addition of the two `mul!` results) and the unit
+roundoff u = eps/2 of the real type underlying `T`.
 """
-verification_tolerance(::Type{T}) where {T <: AbstractFloat} = 8 * sqrt(Float64(eps(T)))
-verification_tolerance(::Type{Complex{T}}) where {T <: AbstractFloat} =
-    8 * sqrt(Float64(eps(T)))
-verification_tolerance(::Type{T}) where {T <: Integer} = 0.0
+accumulation_roundoff(::Type{T}, N::Integer) where {T} =
+    (2 * Int(N) + 2) * Float64(eps(real(T))) / 2
+
+"""
+    rounding_error_bound(::Type{T}, N::Integer) -> Float64
+
+Coefficient c of the componentwise bound |D̂ − D| ≤ c·|A|(|B| + |C|) on one evaluation of
+D = A·B + A·C in precision `T`, in Higham's standard model without underflow: the
+inner-product constant γₘ = m·u/(1 − m·u) of [`accumulation_roundoff`](@ref), times √2
+for complex types (Higham 2002, §3.1 and §3.6, doi:10.1137/1.9780898718027). The bound
+holds for any summation order and with fused multiply-adds. Zero for integers, whose
+arithmetic is exact within [`integer_accumulation_bound`](@ref); `ArgumentError` when
+m·u ≥ 1, where no bound of this form exists.
+"""
+function rounding_error_bound(
+    ::Type{T},
+    N::Integer,
+) where {T <: Union{AbstractFloat, Complex}}
+    mu = accumulation_roundoff(T, N)
+    mu < 1 || throw(
+        ArgumentError("no rounding-error bound for $T at N = $N: (2N + 2)·u = $mu ≥ 1"),
+    )
+    γ = mu / (1 - mu)
+    return T <: Complex ? sqrt(2) * γ : γ
+end
+rounding_error_bound(::Type{T}, N::Integer) where {T <: Integer} = 0.0
 
 """
     verify_engines(backend, ::Type{T}, N::Integer, rng::AbstractRNG;
                    engines = KERNEL_ENGINES)
-        -> Vector{@NamedTuple{engine, max_relative_deviation, tolerance, passed}}
+        -> Vector{@NamedTuple{engine, bound_ratio, max_relative_deviation, passed}}
 
 Run the `mul!` reference and every kernel engine in `engines` on the same operands and
-compare each result with the reference on the host:
-`max|D_engine − D_blas| / max|D_blas|` against [`verification_tolerance`](@ref).
+compare each result with the reference on the host. Each result lies within
+c·|A|(|B| + |C|) of the exact D, entry by entry ([`rounding_error_bound`](@ref)), so the
+two may differ by at most twice that. `bound_ratio` is the largest
+|D_engine − D_blas| / (2c·|A|(|B| + |C|)) over the entries, and an engine passes when it
+is at most 1; for integers this is exact equality. `max_relative_deviation`,
+max|D_engine − D_blas| / max|D_blas|, is reported alongside.
 """
 function verify_engines(
     backend::KernelAbstractions.Backend,
@@ -236,15 +263,16 @@ function verify_engines(
     rng::AbstractRNG;
     engines = KERNEL_ENGINES,
 ) where {T}
-    A = to_device(create_matrix(rng, T, N), backend)
-    B = to_device(create_matrix(rng, T, N), backend)
-    C = to_device(create_matrix(rng, T, N), backend)
+    Ah, Bh, Ch = (create_matrix(rng, T, N) for _ in 1:3)
+    A, B, C = (to_device(X, backend) for X in (Ah, Bh, Ch))
     reference = Array(dual_gemm_blas!(backend, similar(A), A, B, C))
-    tolerance = verification_tolerance(T)
+    modulus(X) = Float64.(abs.(X))
+    tolerance =
+        2 * rounding_error_bound(T, N) .* (modulus(Ah) * (modulus(Bh) .+ modulus(Ch)))
     results = @NamedTuple{
         engine::Symbol,
+        bound_ratio::Float64,
         max_relative_deviation::Float64,
-        tolerance::Float64,
         passed::Bool,
     }[]
     for engine in engines
@@ -254,22 +282,44 @@ function verify_engines(
             ),
         )
         result = Array(evaluate_engine!(engine, backend, similar(A), A, B, C))
-        deviation = relative_deviation(result, reference)
+        ratio = bound_ratio(result, reference, tolerance)
         push!(
             results,
             (;
                 engine,
-                max_relative_deviation = deviation,
-                tolerance,
-                passed = deviation <= tolerance,
+                bound_ratio = ratio,
+                max_relative_deviation = relative_deviation(result, reference),
+                passed = ratio <= 1,
             ),
         )
     end
     return results
 end
 
+widen_entry(x::Real) = Float64(x)
+widen_entry(x::Complex) = ComplexF64(x)
+
+"""
+    bound_ratio(x, reference, tolerance) -> Float64
+
+Largest |x − reference| / tolerance over the entries, differences taken in double
+precision; entries that agree exactly count as 0, and a nonzero difference against a zero
+tolerance as `Inf`.
+"""
+function bound_ratio(x::AbstractArray, reference::AbstractArray, tolerance::AbstractArray)
+    ratio = 0.0
+    for i in eachindex(x, reference, tolerance)
+        difference = abs(widen_entry(x[i]) - widen_entry(reference[i]))
+        difference == 0 || (ratio = max(ratio, difference / tolerance[i]))
+    end
+    return ratio
+end
+
 function relative_deviation(x::AbstractArray, reference::AbstractArray)
-    scale = Float64(maximum(abs, reference))
-    difference = Float64(maximum(abs, x .- reference))
+    scale = maximum(r -> abs(widen_entry(r)), reference)
+    difference = maximum(
+        i -> abs(widen_entry(x[i]) - widen_entry(reference[i])),
+        eachindex(x, reference),
+    )
     return scale == 0 ? difference : difference / scale
 end
