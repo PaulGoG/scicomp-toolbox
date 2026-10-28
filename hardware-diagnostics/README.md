@@ -109,7 +109,8 @@ julia -e 'using Pkg; Pkg.add("oneAPI")'
 
 The entry point loads the packages selected by `gpu_backend` when they are present in
 the load path (`auto` tries every backend applicable to the operating system), the
-corresponding extension registers a device probe, and functional devices enter the run.
+corresponding extension adds the device probe of its backend, and functional devices
+enter the run.
 A backend requested by name that is missing or not functional produces a warning and
 the run continues on the remaining devices. Because the GPU package comes from the
 default environment, its version is not pinned by this tool's manifest; the provenance
@@ -226,6 +227,6 @@ julia --project=hardware-diagnostics -e 'using Pkg; Pkg.test()'
 The suite runs Aqua, ExplicitImports and JET on the package, then unit tests of both
 kernels (against `A*B + A*C`, including sizes that are not multiples of the tile), the
 sampling rule, the configuration constraints, the command line, the host topology, the
-backend registry, the three stages at N = 32, the accelerator stage on a host-backed
+backend probes, the three stages at N = 32, the accelerator stage on a host-backed
 mock device (allocation-limit skip and speedup paths) and an end-to-end run into a
 temporary directory.

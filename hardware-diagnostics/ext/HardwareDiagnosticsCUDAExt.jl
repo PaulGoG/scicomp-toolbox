@@ -3,17 +3,12 @@ module HardwareDiagnosticsCUDAExt
 using CUDA: CUDA, CUDABackend, CuArray
 using HardwareDiagnostics: HardwareDiagnostics, AcceleratorDevice
 
-function __init__()
-    HardwareDiagnostics.register_backend!(:cuda, probe_cuda)
-    return nothing
-end
-
 """
-    probe_cuda() -> Union{AcceleratorDevice, Nothing}
+    probe_accelerator(::Val{:cuda}) -> Union{AcceleratorDevice, Nothing}
 
 Profile the current CUDA device when the CUDA runtime is functional.
 """
-function probe_cuda()
+function HardwareDiagnostics.probe_accelerator(::Val{:cuda})
     CUDA.functional() || return nothing
     device = CUDA.device()
     multiprocessors =

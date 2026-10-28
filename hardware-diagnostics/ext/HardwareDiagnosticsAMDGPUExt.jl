@@ -3,17 +3,12 @@ module HardwareDiagnosticsAMDGPUExt
 using AMDGPU: AMDGPU, ROCBackend, ROCArray
 using HardwareDiagnostics: HardwareDiagnostics, AcceleratorDevice
 
-function __init__()
-    HardwareDiagnostics.register_backend!(:amdgpu, probe_amdgpu)
-    return nothing
-end
-
 """
-    probe_amdgpu() -> Union{AcceleratorDevice, Nothing}
+    probe_accelerator(::Val{:amdgpu}) -> Union{AcceleratorDevice, Nothing}
 
 Profile the current HIP device when the ROCm runtime is functional.
 """
-function probe_amdgpu()
+function HardwareDiagnostics.probe_accelerator(::Val{:amdgpu})
     AMDGPU.functional() || return nothing
     device = AMDGPU.device()
     properties = AMDGPU.HIP.properties(device)

@@ -3,19 +3,14 @@ module HardwareDiagnosticsMetalExt
 using Metal: Metal, MetalBackend, MtlArray
 using HardwareDiagnostics: HardwareDiagnostics, AcceleratorDevice
 
-function __init__()
-    HardwareDiagnostics.register_backend!(:metal, probe_metal)
-    return nothing
-end
-
 """
-    probe_metal() -> Union{AcceleratorDevice, Nothing}
+    probe_accelerator(::Val{:metal}) -> Union{AcceleratorDevice, Nothing}
 
 Profile the default Metal device when the framework is functional. Metal exposes no
 compute-unit count or clock; the unified memory working set stands in for device
 memory.
 """
-function probe_metal()
+function HardwareDiagnostics.probe_accelerator(::Val{:metal})
     Metal.functional() || return nothing
     device = Metal.device()
     attributes = Dict{String, String}("unified_memory" => string(device.hasUnifiedMemory))

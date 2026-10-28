@@ -1,5 +1,5 @@
-# Compute-backend registry: the host CPU backend plus the accelerator probes registered
-# by the package extensions when their GPU package is loaded in the session.
+# Compute backends: the host CPU and the accelerators whose probe methods the package
+# extensions add when their GPU package is loaded in the session.
 
 """
 Backend identifiers accepted by the configuration, mapped to the package that provides
@@ -41,20 +41,13 @@ struct AcceleratorDevice{B <: KernelAbstractions.Backend}
 end
 
 """
-Registry of accelerator probes, populated by the extensions' `__init__`. Each probe is
-a zero-argument function returning an [`AcceleratorDevice`](@ref) or `nothing`.
-"""
-const BACKEND_PROBES = Vector{Pair{Symbol, Function}}()
+    probe_accelerator(::Val{name}) -> Union{AcceleratorDevice, Nothing}
 
+Profile of the device that backend `name` runs on, or `nothing` when the backend is not
+functional. This fallback answers `nothing`; the package extension of each backend adds
+the method for its `Val{name}`.
 """
-    register_backend!(name::Symbol, probe::Function)
-
-Register an accelerator probe under `name`. Called from the package extensions.
-"""
-function register_backend!(name::Symbol, probe::Function)
-    any(p -> first(p) === name, BACKEND_PROBES) || push!(BACKEND_PROBES, name => probe)
-    return nothing
-end
+probe_accelerator(::Val) = nothing
 
 """
     load_accelerator_packages(requested::Symbol) -> Vector{Symbol}
@@ -98,9 +91,10 @@ applies_to_os(name::Symbol) = name === :metal ? Sys.isapple() : !Sys.isapple()
 """
     discover_accelerators(requested::Symbol) -> Vector{AcceleratorDevice}
 
-Functional accelerators among the registered probes: all of them for `:auto`, the
-named one otherwise, none for `:none`. A backend requested by name that is not
-functional produces a warning.
+Functional accelerators found by [`probe_accelerator`](@ref): every backend for
+`:auto`, the named one otherwise, none for `:none`. A backend requested by name that is
+unavailable produces a warning saying whether its extension is not loaded or the device
+is not functional.
 """
 function discover_accelerators(requested::Symbol)
     requested in BACKEND_NAMES || throw(
@@ -108,14 +102,17 @@ function discover_accelerators(requested::Symbol)
     )
     devices = AcceleratorDevice[]
     requested === :none && return devices
-    for (name, probe) in BACKEND_PROBES
-        (requested === :auto || requested === name) || continue
-        device = probe()
+    names = requested === :auto ? sort(collect(keys(ACCELERATOR_PACKAGES))) : [requested]
+    for name in names
+        device = probe_accelerator(Val(name))
         device === nothing || push!(devices, device)
     end
     if requested !== :auto && isempty(devices)
-        @warn "Requested accelerator backend '$requested' is not functional or its package extension is not active." registered_probes =
-            first.(BACKEND_PROBES)
+        extension = Symbol(:HardwareDiagnostics, ACCELERATOR_PACKAGES[requested], :Ext)
+        reason =
+            Base.get_extension(@__MODULE__, extension) === nothing ?
+            "its package extension is not loaded" : "the device is not functional"
+        @warn "Requested accelerator backend '$requested' is unavailable: $reason."
     end
     return devices
 end

@@ -449,6 +449,11 @@ end
     @testset "Backends" begin
         @test discover_accelerators(:none) == AcceleratorDevice[]
         @test discover_accelerators(:auto) isa Vector{AcceleratorDevice}
+        if Base.get_extension(HD, :HardwareDiagnosticsCUDAExt) === nothing
+            @test (@test_logs (:warn, r"extension is not loaded") discover_accelerators(
+                :cuda,
+            )) == AcceleratorDevice[]
+        end
         @test_throws ArgumentError discover_accelerators(:all)
         @test load_accelerator_packages(:none) == Symbol[]
         @test_throws ArgumentError load_accelerator_packages(:all)
@@ -643,15 +648,18 @@ end
         )
         @test device_reporter.progress.current == 2 * n_device_points
 
-        # discovery through a registered probe
-        HD.register_backend!(:mock, () -> ample)
+        # discovery dispatches on the backend name; the test environment never loads
+        # Metal, so its probe method can stand in for an extension
+        @eval HD.probe_accelerator(::Val{:metal}) = $ample
         try
-            discovered = discover_accelerators(:auto)
+            discovered = Base.invokelatest(discover_accelerators, :auto)
             @test count(d -> d.name === :mock, discovered) == 1
+            @test only(Base.invokelatest(discover_accelerators, :metal)).name === :mock
             @test isempty(discover_accelerators(:none))
         finally
-            filter!(p -> first(p) !== :mock, HD.BACKEND_PROBES)
+            Base.delete_method(which(HD.probe_accelerator, (Val{:metal},)))
         end
+        @test HD.probe_accelerator(Val(:metal)) === nothing
     end
 
     @testset "Export" begin

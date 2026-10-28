@@ -3,17 +3,12 @@ module HardwareDiagnosticsoneAPIExt
 using oneAPI: oneAPI, oneAPIBackend, oneArray
 using HardwareDiagnostics: HardwareDiagnostics, AcceleratorDevice
 
-function __init__()
-    HardwareDiagnostics.register_backend!(:oneapi, probe_oneapi)
-    return nothing
-end
-
 """
-    probe_oneapi() -> Union{AcceleratorDevice, Nothing}
+    probe_accelerator(::Val{:oneapi}) -> Union{AcceleratorDevice, Nothing}
 
 Profile the default Level Zero device when the oneAPI runtime is functional.
 """
-function probe_oneapi()
+function HardwareDiagnostics.probe_accelerator(::Val{:oneapi})
     oneAPI.functional() || return nothing
     device = oneAPI.device()
     properties = oneAPI.oneL0.properties(device)
