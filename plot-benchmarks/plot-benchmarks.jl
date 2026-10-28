@@ -311,14 +311,27 @@ names the vendor through the backend.
 drop_vendor(name::AbstractString) = replace(String(name), r"^(?:NVIDIA|AMD|Intel)\s+" => "")
 
 """
+    in_sweep_stage(row) -> Bool
+
+Whether a dataset row belongs to the CPU thread sweep. Datasets that carry a `stage`
+column say so directly; in earlier datasets the sweep rows are the CPU library rows with
+a speedup, which the element-type rows never carry.
+"""
+in_sweep_stage(row) =
+    hasproperty(row, :stage) ? row.stage == "thread_sweep" :
+    row.device_type == "CPU" &&
+    row.engine == REFERENCE_ENGINE &&
+    !ismissing(row.speedup_vs_1t)
+
+"""
     sweep_rows(df::DataFrame) -> DataFrame
 
 Rows of the CPU thread-scaling stage: measured, library engine, with a defined speedup.
 """
 function sweep_rows(df::DataFrame)
-    keep =
-        (df.device_type .== "CPU") .& (df.engine .== "blas") .& (df.status .== "ok") .&
-        .!ismissing.(df.speedup_vs_1t) .& .!ismissing.(df.blas_threads)
+    keep = map(eachrow(df)) do row
+        is_sweep_row(row) && row.status == "ok" && !ismissing(row.blas_threads)
+    end
     return sort(df[keep, :], [:matrix_dim, :blas_threads])
 end
 
@@ -489,14 +502,9 @@ function throughput_rows(df::DataFrame, N::Integer)
     # sweep row of the same element type
     staged = Set(
         row.data_type for row in eachrow(rows) if
-        row.device_type == "CPU" && row.engine == "blas" && ismissing(row.speedup_vs_1t)
+        row.device_type == "CPU" && row.engine == "blas" && !in_sweep_stage(row)
     )
-    superseded = map(eachrow(rows)) do row
-        row.device_type == "CPU" &&
-            row.engine == "blas" &&
-            !ismissing(row.speedup_vs_1t) &&
-            row.data_type in staged
-    end
+    superseded = map(row -> in_sweep_stage(row) && row.data_type in staged, eachrow(rows))
     return rows[.!superseded, :]
 end
 
@@ -645,10 +653,7 @@ function comparison_datasets(root::AbstractString)
 end
 
 is_accelerator_row(row) = row.device_type == "GPU"
-is_sweep_row(row) =
-    row.device_type == "CPU" &&
-    row.engine == REFERENCE_ENGINE &&
-    !ismissing(row.speedup_vs_1t)
+is_sweep_row(row) = in_sweep_stage(row) && !ismissing(row.speedup_vs_1t)
 
 """
     shared_size(frames::Vector{DataFrame}, select) -> Union{Int, Nothing}

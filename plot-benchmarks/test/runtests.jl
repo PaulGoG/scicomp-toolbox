@@ -194,6 +194,20 @@ end
         lone = throughput_rows(pair[1:1, :], 256)
         @test nrow(lone) == 1
         @test only(lone.speedup_vs_1t) == 2.0
+        # with a stage column, a sweep row without speedup (its one-thread point was not
+        # measured) is still a sweep row: superseded, and absent from the scaling rows
+        staged = copy(pair)
+        staged.speedup_vs_1t = [missing, missing]
+        staged.stage = ["thread_sweep", "element_types"]
+        @test only(throughput_rows(staged, 256).stage) == "element_types"
+        @test nrow(sweep_rows(staged)) == 0
+        labelled = copy(df)
+        labelled.stage = map(eachrow(df)) do row
+            row.device_type == "GPU" && return "accelerator"
+            return ismissing(row.speedup_vs_1t) ? "element_types" : "thread_sweep"
+        end
+        @test isequal(sweep_rows(labelled)[:, names(sweep)], sweep)
+        @test throughput_rows(labelled, 512).data_type == throughput_rows(df, 512).data_type
         @test thread_scaling_figure(df, settings) isa Figure
         @test throughput_figure(df, settings) isa Figure
         @test throughput_figure(df, settings; matrix_dim = 256) isa Figure
