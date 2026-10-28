@@ -39,6 +39,7 @@ function HardwareDiagnostics.probe_accelerator(::Val{:cuda})
 end
 
 HardwareDiagnostics.to_device(x::AbstractArray, ::CUDABackend) = CuArray(x)
+HardwareDiagnostics.release_device_array!(x::CuArray) = CUDA.unsafe_free!(x)
 HardwareDiagnostics.backend_label(::CUDABackend) = "CUDA"
 HardwareDiagnostics.vendor_blas_label(::CUDABackend) = "cuBLAS"
 function HardwareDiagnostics.reclaim_device_memory!(::CUDABackend)

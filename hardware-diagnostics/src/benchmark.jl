@@ -206,7 +206,8 @@ end
     measure_point(engine::Symbol, backend, ::Type{T}, N::Int, rng, policy) -> TimingSummary
 
 One benchmark point: generate the operands, move them to `backend`, then warm up and
-sample the evaluation under `policy` ([`warm_up_and_sample`](@ref)).
+sample the evaluation under `policy` ([`warm_up_and_sample`](@ref)). The device
+operands are released on return and on failure alike.
 """
 function measure_point(
     engine::Symbol,
@@ -216,15 +217,22 @@ function measure_point(
     rng::AbstractRNG,
     policy::SamplingPolicy,
 ) where {T}
-    A = to_device(create_matrix(rng, T, N), backend)
-    B = to_device(create_matrix(rng, T, N), backend)
-    C = to_device(create_matrix(rng, T, N), backend)
-    D = similar(A)
-    evaluate = () -> evaluate_engine!(engine, backend, D, A, B, C)
-    summary = warm_up_and_sample(evaluate, policy)
-    reclaim_device_memory!(backend)
-    return summary
+    allocated = AbstractArray[]
+    try
+        A = track!(allocated, to_device(create_matrix(rng, T, N), backend))
+        B = track!(allocated, to_device(create_matrix(rng, T, N), backend))
+        C = track!(allocated, to_device(create_matrix(rng, T, N), backend))
+        D = track!(allocated, similar(A))
+        return sample_engine(engine, backend, D, A, B, C, policy)
+    finally
+        foreach(release_device_array!, allocated)
+        reclaim_device_memory!(backend)
+    end
 end
+
+# A function barrier: the timed closure captures concretely typed operands.
+sample_engine(engine::Symbol, backend, D, A, B, C, policy::SamplingPolicy) =
+    warm_up_and_sample(() -> evaluate_engine!(engine, backend, D, A, B, C), policy)
 
 """
     try_measure(engine, backend, T, N, rng, policy) -> (summary, status)

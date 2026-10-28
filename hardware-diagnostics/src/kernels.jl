@@ -264,8 +264,6 @@ function verify_engines(
     engines = KERNEL_ENGINES,
 ) where {T}
     Ah, Bh, Ch = (create_matrix(rng, T, N) for _ in 1:3)
-    A, B, C = (to_device(X, backend) for X in (Ah, Bh, Ch))
-    reference = Array(dual_gemm_blas!(backend, similar(A), A, B, C))
     modulus(X) = Float64.(abs.(X))
     tolerance =
         2 * rounding_error_bound(T, N) .* (modulus(Ah) * (modulus(Bh) .+ modulus(Ch)))
@@ -275,23 +273,32 @@ function verify_engines(
         max_relative_deviation::Float64,
         passed::Bool,
     }[]
-    for engine in engines
-        engine in KERNEL_ENGINES || throw(
-            ArgumentError(
-                "verification applies to the kernel engines $(join(KERNEL_ENGINES, ", ")), got :$engine",
-            ),
-        )
-        result = Array(evaluate_engine!(engine, backend, similar(A), A, B, C))
-        ratio = bound_ratio(result, reference, tolerance)
-        push!(
-            results,
-            (;
-                engine,
-                bound_ratio = ratio,
-                max_relative_deviation = relative_deviation(result, reference),
-                passed = ratio <= 1,
-            ),
-        )
+    allocated = AbstractArray[]
+    try
+        A, B, C = (track!(allocated, to_device(X, backend)) for X in (Ah, Bh, Ch))
+        reference = Array(dual_gemm_blas!(backend, track!(allocated, similar(A)), A, B, C))
+        for engine in engines
+            engine in KERNEL_ENGINES || throw(
+                ArgumentError(
+                    "verification applies to the kernel engines $(join(KERNEL_ENGINES, ", ")), got :$engine",
+                ),
+            )
+            D = track!(allocated, similar(A))
+            result = Array(evaluate_engine!(engine, backend, D, A, B, C))
+            ratio = bound_ratio(result, reference, tolerance)
+            push!(
+                results,
+                (;
+                    engine,
+                    bound_ratio = ratio,
+                    max_relative_deviation = relative_deviation(result, reference),
+                    passed = ratio <= 1,
+                ),
+            )
+        end
+    finally
+        foreach(release_device_array!, allocated)
+        reclaim_device_memory!(backend)
     end
     return results
 end

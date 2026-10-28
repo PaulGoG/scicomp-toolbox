@@ -30,6 +30,7 @@ function HardwareDiagnostics.probe_accelerator(::Val{:metal})
 end
 
 HardwareDiagnostics.to_device(x::AbstractArray, ::MetalBackend) = MtlArray(x)
+HardwareDiagnostics.release_device_array!(x::MtlArray) = Metal.unsafe_free!(x)
 HardwareDiagnostics.backend_label(::MetalBackend) = "Metal"
 HardwareDiagnostics.vendor_blas_label(::MetalBackend) = "Metal Performance Shaders"
 

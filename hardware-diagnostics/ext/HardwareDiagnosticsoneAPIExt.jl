@@ -41,6 +41,7 @@ function HardwareDiagnostics.probe_accelerator(::Val{:oneapi})
 end
 
 HardwareDiagnostics.to_device(x::AbstractArray, ::oneAPIBackend) = oneArray(x)
+HardwareDiagnostics.release_device_array!(x::oneArray) = oneAPI.unsafe_free!(x)
 HardwareDiagnostics.backend_label(::oneAPIBackend) = "oneAPI"
 HardwareDiagnostics.vendor_blas_label(::oneAPIBackend) = "oneMKL"
 HardwareDiagnostics.device_fingerprint(::oneAPIBackend) =

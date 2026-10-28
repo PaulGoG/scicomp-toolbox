@@ -34,6 +34,7 @@ function HardwareDiagnostics.probe_accelerator(::Val{:amdgpu})
 end
 
 HardwareDiagnostics.to_device(x::AbstractArray, ::ROCBackend) = ROCArray(x)
+HardwareDiagnostics.release_device_array!(x::ROCArray) = AMDGPU.unsafe_free!(x)
 HardwareDiagnostics.backend_label(::ROCBackend) = "AMDGPU"
 HardwareDiagnostics.vendor_blas_label(::ROCBackend) = "rocBLAS"
 HardwareDiagnostics.device_fingerprint(::ROCBackend) =

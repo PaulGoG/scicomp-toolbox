@@ -139,6 +139,22 @@ function reclaim_device_memory!(::KernelAbstractions.Backend)
 end
 
 """
+    release_device_array!(x::AbstractArray)
+
+Free the device memory of `x` now instead of at its finalizer, so that a point that
+fails part-way does not leave its operands allocated. A no-op for host arrays;
+extensions add the method of their array type.
+"""
+release_device_array!(::AbstractArray) = nothing
+
+"""
+    track!(allocated::Vector, x) -> x
+
+Record `x` in `allocated` for a later [`release_device_array!`](@ref) and return it.
+"""
+track!(allocated::Vector, x) = (push!(allocated, x); x)
+
+"""
     device_fingerprint(backend) -> String
 
 Driver, runtime and device inventory as reported by the GPU package's `versioninfo`,

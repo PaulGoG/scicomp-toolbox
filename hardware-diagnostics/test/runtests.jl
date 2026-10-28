@@ -509,6 +509,9 @@ end
         @test HD.to_device(view(x, 1:2, 1:2), CPU()) isa Matrix{Float32}
         @test HD.device_fingerprint(CPU()) == ""
         @test HD.reclaim_device_memory!(CPU()) === nothing
+        @test HD.release_device_array!(x) === nothing
+        tracked = AbstractArray[]
+        @test HD.track!(tracked, x) === x && only(tracked) === x
         @test HD.applies_to_os(:metal) == Sys.isapple()
     end
 
