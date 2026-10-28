@@ -135,7 +135,9 @@ The submission record sits beside the run so that a queue job can be joined to i
 directory: job id, backend, cluster and partition, the project here and on the target,
 script, log, output directory, run configuration and its SHA-256, commit and whether
 tracked files were modified, submission time, dependency, number of cases, and the
-request. `submit` refuses an output directory that already holds one.
+request. `submit` refuses an output directory that already holds one. `run-index` reads
+the record inside a run directory and lists its `job_id`; an array job has one record, in
+the directory of its cases.
 
 ## States
 

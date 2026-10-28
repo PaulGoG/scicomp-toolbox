@@ -36,8 +36,9 @@ one row per run, to `run-index/data/run_index_<stamp>.csv` unless `--csv FILE` o
 
 A directory whose whole name matches `run_id_pattern` (by default `run_` and eight hex
 digits, with an optional `_r<k>` for a rerun), or one that holds a provenance file
-(`provenance.toml`, `metadata.toml` or `run.toml`, the first present in that order), so
-savename-style directories count when they carry provenance. The search does not descend
+(`provenance.toml` or `metadata.toml`, the first present in that order), so
+savename-style directories count when they carry provenance. `run.toml` is not among
+the defaults because run configurations often carry that name. The search does not descend
 into a run, into hidden directories or through symbolic links, and stops `max_depth`
 levels below each root. The project of a run is the nearest directory above it with a
 `Project.toml`, else the top level of its git repository, else the root searched.
@@ -53,6 +54,12 @@ writes them, and the keys of DrWatson's `tagsave` (`gitcommit`, `gitpatch`, `scr
 Start and finish are TOML date-times or ISO 8601 strings, the clock time taken as written;
 the wall time is a field in seconds or the difference of the two. Metadata stored only
 inside JLD2 or BSON result files is not read, and such runs are flagged `no-provenance`.
+
+Inside a run directory, the supplementary files of `supplementary_names` are read as
+well; by default that is `submission.toml`, the record `slurm-launch` writes beside a
+run when it queues the job. They do not make a directory a run. A field is taken from
+the first file that has it, the run's own provenance file first, so the record adds the
+`job_id` that joins the run to its queue job in the CSV index.
 
 A recorded commit is resolved with `git rev-parse` in the repository of the project, so
 hashes, tags and `git describe` output (DrWatson's `gitcommit`) are all understood. A
@@ -82,22 +89,22 @@ share one.
 The synthetic workspace of the tests, generated under `<root>`:
 
 ```
-14 runs in 2 projects, 10.77 KiB, 12 flagged
+14 runs in 2 projects, 10.90 KiB, 12 flagged
 
-Curvature  <root>/Curvature  (git main at dab27861; 13 runs, 10.69 KiB, 11 flagged)
+Curvature  <root>/Curvature  (git main at 040fe03b; 13 runs, 10.83 KiB, 11 flagged)
  run                           started              wall  commit        host        size  group  flags
 -----------------------------------------------------------------------------------------------------------------------
- data/run_f954868c             2026-08-02 09:15  12m 05s  9ea1b069      node03     131 B  G1     dirty, repeat
- data/run_f954868c_r2          2026-08-03 10:00  12m 05s  9ea1b069      node03     131 B  G1     dirty, repeat
- data/run_51c2a7e0             2026-08-04 12:00   1h 00m  9ea1b069      node07     277 B
- data/run_513e903b             2026-08-05 14:02   1h 00m  57f71efa      node07  4.33 KiB  G2     seed-replicate
- data/run_513e903b_r2          2026-08-06 09:00   1h 00m  9ea1b069      node07  4.30 KiB  G2     seed-replicate
- data/run_77aa88bb             2026-08-07 11:00   1h 00m  562f36dc      node07     310 B         off-head
+ data/run_f954868c             2026-08-02 09:15  12m 05s  00b893f9      node03     131 B  G1     dirty, repeat
+ data/run_f954868c_r2          2026-08-03 10:00  12m 05s  00b893f9      node03     131 B  G1     dirty, repeat
+ data/run_51c2a7e0             2026-08-04 12:00   1h 00m  00b893f9      node07     412 B
+ data/run_513e903b             2026-08-05 14:02   1h 00m  73d88df7      node07  4.33 KiB  G2     seed-replicate
+ data/run_513e903b_r2          2026-08-06 09:00   1h 00m  00b893f9      node07  4.30 KiB  G2     seed-replicate
+ data/run_77aa88bb             2026-08-07 11:00   1h 00m  02271aa4      node07     310 B         off-head
  data/run_deadbeef             2026-08-08 08:00   1h 00m  0123456789a…  node07     310 B         unknown-commit
  data/run_9e8d7c6b             2026-08-09 08:00        -  -             -           68 B         no-commit
- data/sims/N=64_seed=1         2026-09-01 08:00   1h 30m  f2c81be9      laptop     368 B  G3     dirty, seed-replicate
- data/sims/N=64_seed=2         2026-09-01 08:00   1h 30m  f2c81be9      laptop     368 B  G3     dirty, seed-replicate
- data/deep/a/b/c/run_0000ffff  -                       -  dab27861      -           20 B
+ data/sims/N=64_seed=1         2026-09-01 08:00   1h 30m  fcf38080      laptop     368 B  G3     dirty, seed-replicate
+ data/sims/N=64_seed=2         2026-09-01 08:00   1h 30m  fcf38080      laptop     368 B  G3     dirty, seed-replicate
+ data/deep/a/b/c/run_0000ffff  -                       -  040fe03b      -           20 B
  data/run_0a1b2c3d             -                       -  -             -          100 B         no-provenance
  data/run_1234abcd             -                       -  -             -           23 B         unreadable-provenance
 

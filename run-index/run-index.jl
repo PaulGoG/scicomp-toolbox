@@ -24,6 +24,7 @@ const FIELDS = (
     commit = :text,
     patch = :text,
     script = :text,
+    job_id = :scalar,
     started = :time,
     finished = :time,
     wall_time_s = :number,
@@ -39,6 +40,7 @@ const DEFAULT_ALIASES = Dict(
     :commit => ["gitcommit", "commit", "git_commit", "toolbox_commit"],
     :patch => ["gitpatch"],
     :script => ["script"],
+    :job_id => ["job_id"],
     :started => ["timestamp", "started", "start_time", "created"],
     :finished => ["finished", "end_time", "completed"],
     :wall_time_s => ["wall_time_s", "elapsed_s", "runtime_s", "duration_s"],
@@ -56,14 +58,16 @@ const DEFAULT_RUN_ID = "run_[0-9a-f]{8}(?:_r[0-9]+)?"
     IndexSettings
 
 Validated configuration: the run-id pattern (`run_id` unanchored, for figure names;
-`run_name` anchored, for directory names), the provenance file names, the figure
-directories and extensions, the search depth, the key aliases of every field of
-[`FIELDS`](@ref) as key paths, and the directory of the CSV index.
+`run_name` anchored, for directory names), the provenance file names, the names of the
+supplementary files read inside a run (submission records), the figure directories and
+extensions, the search depth, the key aliases of every field of [`FIELDS`](@ref) as key
+paths, and the directory of the CSV index.
 """
 struct IndexSettings
     run_id::Regex
     run_name::Regex
     sidecar_names::Vector{String}
+    supplementary_names::Vector{String}
     figure_directories::Vector{String}
     figure_extensions::Vector{String}
     max_depth::Int
@@ -118,6 +122,7 @@ function validate_settings(raw::AbstractDict)
         (
             "run_id_pattern",
             "sidecar_names",
+            "supplementary_names",
             "figure_directories",
             "figure_extensions",
             "max_depth",
@@ -143,10 +148,12 @@ function validate_settings(raw::AbstractDict)
     sidecar_names = string_list(
         discovery,
         "sidecar_names",
-        ["provenance.toml", "metadata.toml", "run.toml"],
+        ["provenance.toml", "metadata.toml"],
         "[discovery]";
         nonempty = true,
     )
+    supplementary_names =
+        string_list(discovery, "supplementary_names", ["submission.toml"], "[discovery]")
     figure_directories =
         string_list(discovery, "figure_directories", ["plots"], "[discovery]")
     figure_extensions = lowercase.(
@@ -186,6 +193,7 @@ function validate_settings(raw::AbstractDict)
         run_id,
         run_name,
         sidecar_names,
+        supplementary_names,
         figure_directories,
         figure_extensions,
         Int(max_depth),
@@ -303,23 +311,39 @@ end
 # --- provenance ------------------------------------------------------------------------
 
 """
-    read_provenance(dir, settings) -> (file, table, problem)
+    read_provenance(dir, settings) -> Vector{@NamedTuple{name, table, problem}}
 
-The first provenance file of `dir` in the order of `sidecar_names`: its name, its parsed
-table (`nothing` when absent or unreadable) and the first line of the parse error.
+The provenance files of the run `dir`, in the order they are consulted: the first file
+of `sidecar_names` present, then every supplementary file present (a submission record
+written when the job was queued). Each comes with its parsed table (`nothing` when it is
+not valid TOML) and the first line of the parse error.
 """
 function read_provenance(dir::AbstractString, settings::IndexSettings)
-    for name in settings.sidecar_names
-        path = joinpath(dir, name)
-        isfile(path) || continue
+    primary = findfirst(name -> isfile(joinpath(dir, name)), settings.sidecar_names)
+    names = primary === nothing ? String[] : [settings.sidecar_names[primary]]
+    for name in settings.supplementary_names
+        (isfile(joinpath(dir, name)) && !(name in names)) && push!(names, name)
+    end
+    files = @NamedTuple{
+        name::String,
+        table::Union{Dict{String, Any}, Nothing},
+        problem::String,
+    }[]
+    for name in names
         try
-            return (name, TOML.parsefile(path), "")
+            push!(
+                files,
+                (; name, table = TOML.parsefile(joinpath(dir, name)), problem = ""),
+            )
         catch err
             err isa TOML.ParserError || rethrow()
-            return (name, nothing, first_line(sprint(showerror, err)))
+            push!(
+                files,
+                (; name, table = nothing, problem = first_line(sprint(showerror, err))),
+            )
         end
     end
-    return ("", nothing, "")
+    return files
 end
 
 is_table_array(value) =
@@ -507,8 +531,8 @@ end
     RunRecord
 
 One indexed run directory: its project, its path relative to the project root and in
-full, what its provenance file states, what git says about its commit, its disk usage,
-its replicate group and its flags. Absent text is empty, an absent wall time `NaN`;
+full, what its provenance files state (`provenance` lists them, separated by `;`), what
+git says about its commit, its disk usage, its replicate group and its flags. Absent text is empty, an absent wall time `NaN`;
 `on_head` is `nothing` when the ancestry of the commit was not decided.
 """
 struct RunRecord
@@ -525,6 +549,7 @@ struct RunRecord
     dirty::Bool
     on_head::Union{Bool, Nothing}
     script::String
+    job_id::String
     hostname::String
     cpu::String
     gpu::String
@@ -630,18 +655,25 @@ function build_index(
     for run in sort!(collect(keys(located)))
         root = project_root(run, located[run])
         repo = get!(() -> repository(run), repositories, root)
-        file, table, _ = read_provenance(run, settings)
+        sources = read_provenance(run, settings)
         flags = String[]
-        isempty(file) && push!(flags, "no-provenance")
-        (!isempty(file) && table === nothing) && push!(flags, "unreadable-provenance")
-        entries = table === nothing ? Pair{Vector{String}, Any}[] : flatten(table)
-        field(name) = lookup(entries, settings.aliases[name], FIELDS[name])
+        isempty(sources) && push!(flags, "no-provenance")
+        any(f -> f.table === nothing, sources) && push!(flags, "unreadable-provenance")
+        entry_sets = [flatten(f.table) for f in sources if f.table !== nothing]
+        # a field comes from the first provenance file that has it
+        function field(name)
+            for entries in entry_sets
+                value = lookup(entries, settings.aliases[name], FIELDS[name])
+                value === nothing || return value
+            end
+            return nothing
+        end
         commit = text_value(field(:commit))
         revision, dirty = commit_reference(commit)
         dirty |= !isempty(text_value(field(:patch)))
         hash = ""
         head = nothing
-        if table !== nothing
+        if !isempty(entry_sets)
             if isempty(commit)
                 push!(flags, "no-commit")
             elseif repo === nothing
@@ -678,7 +710,7 @@ function build_index(
                 project_root = root,
                 run = relpath(run, root),
                 path = run,
-                provenance = file,
+                provenance = join((f.name for f in sources), ";"),
                 started,
                 finished,
                 wall_time_s,
@@ -687,6 +719,7 @@ function build_index(
                 dirty,
                 on_head = head,
                 script = text_value(field(:script)),
+                job_id = text_value(field(:job_id)),
                 hostname = text_value(field(:hostname)),
                 cpu = text_value(field(:cpu)),
                 gpu = text_value(field(:gpu)),
@@ -751,6 +784,7 @@ function build_index(
             d.dirty,
             d.on_head,
             d.script,
+            d.job_id,
             d.hostname,
             d.cpu,
             d.gpu,
@@ -914,6 +948,8 @@ function print_report(io::IO, index; flagged_only::Bool = false)
             column_labels = COLUMN_LABELS,
             alignment = ALIGNMENT,
             table_format = TABLE_FORMAT,
+            fit_table_in_display_horizontally = false,
+            fit_table_in_display_vertically = false,
         )
     end
     labels = unique(r.group for r in records if !isempty(r.group))

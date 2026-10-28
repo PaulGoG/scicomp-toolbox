@@ -2,7 +2,8 @@
 
 [discovery]
 run_id_pattern = "run_[0-9a-f]{8}(?:_r[0-9]+)?"  # regex; a directory whose whole name matches is a run, a figure whose file name contains a match belongs to that run
-sidecar_names = ["provenance.toml", "metadata.toml", "run.toml"]  # non-empty list of file names; the first present in a run directory is its provenance file, and a directory holding one is a run whatever its name
+sidecar_names = ["provenance.toml", "metadata.toml"]  # non-empty list of file names; the first present in a run directory is its provenance file, and a directory holding one is a run whatever its name
+supplementary_names = ["submission.toml"]  # list of file names read in addition inside a run directory (submission records); they do not make a directory a run
 figure_directories = ["plots"]  # list of directory paths relative to a project root, searched recursively for figures
 figure_extensions = [".pdf", ".png", ".svg"]  # list of file extensions, each starting with "."
 max_depth = 8  # integer in [1, 64]; directory levels searched below each root
@@ -11,6 +12,7 @@ max_depth = 8  # integer in [1, 64]; directory levels searched below each root
 commit = ["gitcommit", "commit", "git_commit", "toolbox_commit"]  # each entry: list of keys, matched against the trailing components of a dotted key path in the provenance file; the first key with a match wins, the shallowest match first
 patch = ["gitpatch"]
 script = ["script"]
+job_id = ["job_id"]
 started = ["timestamp", "started", "start_time", "created"]
 finished = ["finished", "end_time", "completed"]
 wall_time_s = ["wall_time_s", "elapsed_s", "runtime_s", "duration_s"]

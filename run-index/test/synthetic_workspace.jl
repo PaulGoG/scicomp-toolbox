@@ -149,12 +149,13 @@ function synthetic_workspace(root::AbstractString)
     write_run(
         joinpath(data, "run_51c2a7e0"),
         "provenance.toml" => nested("v0.1.0", "2026-08-04T12:00:00", 3; L = 1024),
+        "submission.toml" => "job_id = \"4242\"\nbackend = \"slurm\"\ncluster = \"lisa\"\ncommit = \"$c1\"\nsubmitted = 2026-08-04T11:58:00\n",
     )
     write_run(joinpath(data, "sims", "N=64_seed=1"), "metadata.toml" => tagsave(1))
     write_run(joinpath(data, "sims", "N=64_seed=2"), "metadata.toml" => tagsave(2))
     write_run(
         joinpath(data, "deep", "a", "b", "c", "run_0000ffff"),
-        "run.toml" => "commit = \"$(first(c5, 8))\"\n",
+        "provenance.toml" => "commit = \"$(first(c5, 8))\"\n",
     )
     write_run(joinpath(data, "cache"), "interpolant.bin" => zeros(UInt8, 10))
     write(joinpath(data, "notes.txt"), "scratch\n")
@@ -179,7 +180,7 @@ function synthetic_workspace(root::AbstractString)
     write(joinpath(lone, "Project.toml"), "name = \"Lone\"\n")
     write_run(
         joinpath(lone, "data", "run_aaaa1111"),
-        "run.toml" => "commit = \"abc1234\"\nstarted = 2026-09-02T08:00:00\nfinished = 2026-09-02T08:20:00\n",
+        "provenance.toml" => "commit = \"abc1234\"\nstarted = 2026-09-02T08:00:00\nfinished = 2026-09-02T08:20:00\n",
     )
     symlink(repo, joinpath(root, "link"))
     return (; repo, lone, c1, c2, c3, c4, c5)

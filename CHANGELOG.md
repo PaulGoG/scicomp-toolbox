@@ -17,6 +17,20 @@ a change belongs to it.
   dependencies are supported. Tested with stub Slurm commands, golden scripts and real
   local jobs; not yet submitted to a cluster.
 
+### Changed
+
+- `run-index` also reads the submission record (`submission.toml`) inside a run
+  directory, without treating it as a reason to call a directory a run, and lists the
+  `job_id` it holds in a new CSV column; fields come from the first provenance file that
+  has them.
+
+### Fixed
+
+- `run-index` no longer counts `run.toml` as a provenance file by default: run
+  configurations carry that name, so a `config/` directory was reported as a run.
+- `run-index` prints its tables in full when the output is not a terminal; written to a
+  pipe or a file they were cropped to 80 columns.
+
 ## 2026-10-28
 
 ### Added

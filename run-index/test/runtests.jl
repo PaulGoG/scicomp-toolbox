@@ -96,6 +96,30 @@ record_of(index, run) = only(filter(r -> r.run == run, index.records))
         @test format_bytes(4096) == "4.00 KiB"
     end
 
+    @testset "Submission records" begin
+        settings = load_settings(joinpath(TOOL_DIR, "config.toml"))
+        mktempdir() do dir
+            write(
+                mkpath(joinpath(dir, "data", "run_abcdef01")) * "/submission.toml",
+                "job_id = \"77\"\ncommit = \"abc1234\"\n",
+            )
+            write(
+                mkpath(joinpath(dir, "data", "run_abcdef02")) * "/submission.toml",
+                "job_id = [\n",
+            )
+            write(
+                mkpath(joinpath(dir, "data", "queued")) * "/submission.toml",
+                "job_id = \"78\"\n",
+            )
+            index = build_index([dir], settings)
+            @test [r.run for r in index.records] == ["data/run_abcdef01", "data/run_abcdef02"]
+            queued = record_of(index, "data/run_abcdef01")
+            @test queued.job_id == "77" && queued.provenance == "submission.toml"
+            @test queued.flags == ["no-repository"]
+            @test record_of(index, "data/run_abcdef02").flags == ["unreadable-provenance"]
+        end
+    end
+
     mktempdir() do root
         ws = synthetic_workspace(root)
         settings = load_settings(joinpath(TOOL_DIR, "config.toml"))
@@ -169,6 +193,11 @@ record_of(index, run) = only(filter(r -> r.run == run, index.records))
             @test tagged.wall_time_s == 5430.0
             @test record_of(index, "data/run_77aa88bb").on_head === false
             @test record_of(index, "data/run_51c2a7e0").resolved_commit == ws.c2
+            # the submission record adds the job id; the provenance file keeps precedence
+            submitted = record_of(index, "data/run_51c2a7e0")
+            @test submitted.job_id == "4242"
+            @test submitted.provenance == "provenance.toml;submission.toml"
+            @test isempty(nested.job_id)
             @test record_of(index, "data/deep/a/b/c/run_0000ffff").resolved_commit == ws.c5
             lone = record_of(index, "data/run_aaaa1111")
             @test lone.project == "Lone" &&
@@ -262,12 +291,15 @@ record_of(index, run) = only(filter(r -> r.run == run, index.records))
                 @test main(["--help"]; io) === nothing
                 @test occursin("--flagged", String(take!(io)))
                 custom = joinpath(dir, "custom.toml")
-                write(custom, "[discovery]\nsidecar_names = [\"run.toml\"]\n")
-                only_run_toml = main(
+                # a custom provenance name: the run is still found by its name, but its
+                # provenance.toml is no longer read
+                write(custom, "[discovery]\nsidecar_names = [\"notes.toml\"]\n")
+                customised = main(
                     ["--no-csv", "--config", custom, joinpath(root, "Lone")];
                     io = IOBuffer(),
                 )
-                @test only(only_run_toml.records).run == "data/run_aaaa1111"
+                @test only(customised.records).run == "data/run_aaaa1111"
+                @test only(customised.records).flags == ["no-provenance"]
             end
             @test_throws "unknown command-line argument" main(["--bogus"]; io = IOBuffer())
             @test_throws "--depth" main(["--depth", "0"]; io = IOBuffer())
