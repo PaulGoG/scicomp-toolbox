@@ -11,6 +11,7 @@ updates:
       - "/formatter"
       - "/plot-benchmarks"
       - "/run-index"
+      - "/slurm-launch"
       - "/standalone"
     schedule:
       interval: "weekly"

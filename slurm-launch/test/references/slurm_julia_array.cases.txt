@@ -1,0 +1,3 @@
+runs/sweep/001_threads=1	1	2G
+runs/sweep/002_threads=4	4	1536M
+runs/sweep/003_threads=16	16	8G

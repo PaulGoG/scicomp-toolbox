@@ -83,14 +83,22 @@ scicomp-toolbox/
 │   ├── Project.toml
 │   ├── README.md
 │   └── test/
-└── run-index/                     # tier 1: catalogue of DrWatson-style run directories
+├── run-index/                     # tier 1: catalogue of DrWatson-style run directories
+│   ├── activate.jl
+│   ├── config.toml
+│   ├── run-index.jl               # entry point
+│   ├── Manifest.toml
+│   ├── Project.toml
+│   ├── README.md
+│   └── test/                      # synthetic DrWatson workspace built at test time
+└── slurm-launch/                  # tier 1: job scripts with derived resource requests
     ├── activate.jl
-    ├── config.toml
-    ├── run-index.jl               # entry point
+    ├── config.toml                # no cluster defined: site settings are never guessed
+    ├── slurm-launch.jl            # entry point
     ├── Manifest.toml
     ├── Project.toml
     ├── README.md
-    └── test/                      # synthetic DrWatson workspace built at test time
+    └── test/                      # golden job scripts, stub scheduler, local jobs
 ```
 
 ## Two tiers
@@ -129,6 +137,7 @@ julia run.jl hardware-diagnostics --quick --cpu-only    # tool; arguments are fo
 julia run.jl plot-benchmarks --format png               # figures from the newest dataset
 julia run.jl plot-benchmarks --compare                  # cross-host figures from reference-runs/
 julia run.jl run-index ~/projects --flagged             # run directories that need attention
+julia run.jl slurm-launch --help                        # job scripts; run from the project to launch
 julia run.jl --threads 8 hardware-diagnostics           # Julia threads of the child process
 julia test.jl                                           # every test suite
 julia test.jl hardware-diagnostics                      # one suite
@@ -157,6 +166,7 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 | [`hardware-diagnostics`](hardware-diagnostics/) | 1 | Host and accelerator introspection; dual-GEMM throughput through the vendor library and two KernelAbstractions kernels (naive, tiled), with thread scaling and cross-engine verification | `hardware-diagnostics/hardware-diagnostics.jl` |
 | [`plot-benchmarks`](plot-benchmarks/) | 1 | Thread-scaling and throughput figures (CairoMakie) from one hardware-diagnostics dataset, or across the machines of several (`--compare`) | `plot-benchmarks/plot-benchmarks.jl` |
 | [`run-index`](run-index/) | 1 | Catalogue of DrWatson-style run directories: commit and configuration, hardware, wall time, disk usage; flags missing or unreproducible provenance, seed replicates and repeats, and figures whose run is gone | `run-index/run-index.jl` |
+| [`slurm-launch`](slurm-launch/) | 1 | Job scripts for Julia pipelines and wrapped native launch scripts, resources derived from the run configuration; submit, status, cancel and fetch on Slurm or as detached local runs | `slurm-launch/slurm-launch.jl` |
 
 ## Status
 
@@ -172,6 +182,7 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 | `hardware-diagnostics`, Metal extension | run on an Apple M4, all three engines, verification passed for the four element types Metal carries; `Float64` is refused per point |
 | `plot-benchmarks` | tested on synthetic datasets; figures inspected on the eight reference runs |
 | `run-index` | new; tested against a synthetic DrWatson workspace with real git history, not yet run on a real project |
+| `slurm-launch` | new; local backend run end to end, Slurm verbs tested against stub commands and golden scripts; no submission to a real cluster yet |
 
 ## Conventions
 

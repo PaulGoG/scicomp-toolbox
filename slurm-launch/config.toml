@@ -1,0 +1,27 @@
+# Configuration of the slurm-launch tool
+
+[defaults]
+backend = "local"  # one of: "local" | "slurm"
+cluster = ""  # name of a [clusters.<name>] table; required by the slurm backend unless --cluster is given
+julia = "julia"  # command that starts Julia where the job runs; a cluster table may override it
+job_directory = "jobs"  # path relative to the project root; job scripts, case lists and Slurm logs
+log_directory = "data/logs"  # path relative to the project root; logs of local jobs
+memory_margin = 0.2  # float in [0, 1]; fraction added to the memory derived from the run configuration
+fetch_command = ""  # template printed by fetch, {project} and {output_directory} substituted; empty prints the paths only
+
+[derivation.julia]
+threads = "hardware.max_threads"  # dotted key of the run configuration; integer >= 1, or "auto" (local backend only)
+heap_size_hint_gb = "hardware.heap_size_hint_gb"  # dotted key; number > 0 [GB]
+memory_gb = ["hardware.heap_size_hint_gb", "safety.max_ram_gb"]  # dotted keys; the largest present value [GB] sets --mem
+gpu_backend = "hardware.gpu_backend"  # dotted key; any value other than "none" requests one GPU
+max_vram_gb = "safety.max_vram_gb"  # dotted key; number > 0 [GB]; selects a GPU type when the cluster lists gpu_types
+
+[derivation.launcher]
+mpi = "build.enable_mpi"  # dotted key; boolean
+tasks = "simulation.mpi_ranks"  # dotted key; integer >= 1, read when mpi is true
+threads = "simulation.omp_threads"  # dotted key; integer >= 1
+gpu = "build.enable_gpu"  # dotted key; boolean; true requests one GPU
+memory_gb = ["safety.max_ram_gb"]  # dotted keys; the largest present value [GB] sets --mem
+
+# one table [clusters.<name>] per Slurm cluster; its keys are listed in the README
+[clusters]

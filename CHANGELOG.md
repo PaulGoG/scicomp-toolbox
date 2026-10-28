@@ -4,6 +4,19 @@ Notable changes to the workbench. The repository itself carries no version; the
 `HardwareDiagnostics` package follows semantic versioning and its version is given where
 a change belongs to it.
 
+## 2026-10-29
+
+### Added
+
+- `slurm-launch`: job scripts for Julia pipelines and for wrapped native launch scripts,
+  with CPUs, tasks, memory and GPUs derived from the run configuration and the site
+  settings taken from a `[clusters.<name>]` table, of which none is shipped. `generate`
+  prints the script; `submit` queues it with `sbatch` or starts it as a detached local
+  process group and writes a submission record beside the run; `status`, `cancel` and
+  `fetch` act on such records. Array jobs over case directories and `afterok`
+  dependencies are supported. Tested with stub Slurm commands, golden scripts and real
+  local jobs; not yet submitted to a cluster.
+
 ## 2026-10-28
 
 ### Added
