@@ -1,0 +1,15 @@
+# Configuration of the figure-audit tool
+
+[columns]
+default = "double"  # column whose width is the target unless --column or --width is given; one of: "single" | "double"
+single_mm = 86.0  # single-column width [mm]; in [40, 400]
+double_mm = 178.0  # double-column width [mm]; in [40, 400]
+tolerance_mm = 1.0  # largest deviation of the exported width from the target [mm]; >= 0
+max_height_mm = 230.0  # largest printed height [mm]; in (0, 500]
+
+[typography]
+min_font_pt = 7.0  # smallest text size at the printed size [pt]; in (0, 72]
+require_subset = false  # whether a font embedded without subsetting fails rather than warns; true | false
+
+[raster]
+min_dpi = 300  # smallest resolution of raster content at the printed size [dpi]; integer in [1, 10000]
