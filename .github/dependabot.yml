@@ -17,6 +17,10 @@ updates:
       interval: "weekly"
     ignore:
       # KernelAbstractions 0.10 moves the CPU backend to PoCL; adopting it is a
-      # deliberate migration, not a version bump
+      # deliberate migration, not a version bump. The GPU packages are bounded to
+      # the series that still accept KernelAbstractions 0.9 for the same reason.
       - dependency-name: "KernelAbstractions"
-        update-types: ["version-update:semver-minor"]
+      - dependency-name: "CUDA"
+      - dependency-name: "AMDGPU"
+      - dependency-name: "oneAPI"
+      - dependency-name: "Metal"
