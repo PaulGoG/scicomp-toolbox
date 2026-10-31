@@ -13,7 +13,7 @@ figure-audit/
 ├── activate.jl                  # environment activation
 ├── config.toml                  # column widths, typographic and raster limits; validated on load
 ├── figure-audit.jl              # entry point, readers and checks
-├── Manifest.toml                # pinned dependencies
+├── Manifest.toml                # resolved with Julia 1.12, the compat floor (see Tests)
 ├── Project.toml                 # Poppler_jll; Cairo and Test serve the test suite only
 ├── README.md
 └── test/
@@ -93,6 +93,12 @@ unknown keys and out-of-range values are rejected with a message naming the key.
 ```bash
 julia test.jl figure-audit
 ```
+
+The manifest is resolved with Julia 1.12 rather than the current stable release:
+`Zstd_jll` became a standard library in 1.13 and a manifest resolved there records it
+without a tree hash, which 1.12 cannot load, and Poppler reaches it through Libtiff at
+load time. Resolved on 1.12 the manifest pins the registered `Zstd_jll`, which both
+versions load.
 
 The suite draws its fixtures with Cairo in `mktempdir()`, so none is committed: a PDF at
 double-column width with text at 9 and 7.5 pt, a narrower one, a tall two-page one, one

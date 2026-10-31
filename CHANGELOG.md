@@ -22,7 +22,8 @@ a change belongs to it.
   text size after scaling, the resolution of rasters and the colour space, one line per
   figure and a non-zero exit status on failure. Poppler comes through `Poppler_jll`, so
   nothing is installed on the system. The suite draws its fixtures with Cairo at test
-  time.
+  time. Its manifest is resolved with Julia 1.12: `Zstd_jll` is a standard library in
+  1.13 only, and Poppler reaches it through Libtiff.
 - `bib-hygiene`: validation of a BibTeX file before submission. Offline it checks
   duplicate keys and entries, required fields per entry type, the form of DOIs, journal
   names written in several ways, encoding and escaping, unprotected capitals in titles,

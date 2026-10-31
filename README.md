@@ -144,8 +144,10 @@ never needs it, and the dispatcher does not list `standalone/` as a tool.
 
 Julia 1.12 or later through [juliaup](https://github.com/JuliaLang/juliaup); the declared
 floor of every environment is `julia = "1.12"` and the committed manifests are resolved
-with the current stable release (1.13). Linux is the primary platform and the one CI
-covers; `hardware-diagnostics` has also been run on macOS/arm64, where the Metal backend
+with the current stable release (1.13), except that of `figure-audit`, resolved with 1.12:
+`Zstd_jll` is a standard library in 1.13 only, and a manifest that records it as such
+cannot be loaded by 1.12 where Poppler reaches it through Libtiff. Linux is the primary
+platform and the one CI covers; `hardware-diagnostics` has also been run on macOS/arm64, where the Metal backend
 was exercised. GPU packages (`CUDA`, `AMDGPU`, `Metal`, `oneAPI`) are not dependencies of
 any tool: install the one matching the hardware into the default environment and the tool
 resolves it through the load path (see `hardware-diagnostics/README.md`).
