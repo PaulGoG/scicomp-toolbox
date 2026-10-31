@@ -1,0 +1,19 @@
+# Configuration of the convergence tool
+
+[fit]
+confidence_level = 0.95  # float in (0, 1); coverage of the t-interval of the order
+skip_coarsest = 0  # integer >= 0; coarsest levels left out of the least-squares fit
+safety_factor = 1.25  # float >= 1; safety factor of the grid convergence index
+
+[figures]
+format = "pdf"  # one of: "pdf" | "png" | "svg"
+width_mm = 86.0  # float in [60, 300] [mm]; printed figure width
+px_per_unit = 5  # integer >= 1 [px/pt]; raster export only
+fontsize_pt = 9.0  # float in [6, 14] [pt]
+reference_orders = []  # list of reals > 0; slopes of the reference lines
+xlabel = "Step size h"  # non-empty string; x-axis label
+ylabel = "Error"  # non-empty string; y-axis label of the error panel
+output_directory = "plots"  # path; relative to this tool
+
+[output]
+csv_directory = "data"  # path; relative to this tool
