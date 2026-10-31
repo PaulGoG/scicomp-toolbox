@@ -1,0 +1,12 @@
+# Configuration of the bib-hygiene tool
+
+[checks]
+disabled = []  # list of check names to skip; each one of: duplicate_key | duplicate_entry | missing_field | doi_prefix | doi_syntax | doi_missing | journal_spelling | non_ascii | unescaped | title_case | pages_dash | year | duplicate_field | uncited | undefined_citation | doi_unresolved | arxiv_published
+
+[network]
+contact_email = ""  # e-mail address sent in the User-Agent of online requests; empty or containing "@"
+cache_file = "data/lookup_cache.toml"  # non-empty path of the lookup cache; relative to this tool unless absolute
+cache_ttl_days = 30  # integer >= 0 [d]; age beyond which a cached lookup is repeated
+doi_delay_s = 0.5  # float >= 0 [s]; pause between doi.org requests
+arxiv_delay_s = 3.0  # float >= 0 [s]; pause between arXiv API requests
+arxiv_batch = 20  # integer in [1, 100]; arXiv identifiers per API request
