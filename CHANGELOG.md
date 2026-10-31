@@ -4,6 +4,40 @@ Notable changes to the workbench. The repository itself carries no version; the
 `HardwareDiagnostics` package follows semantic versioning and its version is given where
 a change belongs to it.
 
+## 2026-10-31
+
+### Added
+
+- `convergence`: the package `Convergence` and its command line. From a table of errors
+  against the step size it gives the pairwise orders, the least-squares order with a
+  Student-t interval and the levels left out of the fit, and, for a quantity of interest
+  without an exact value, the three-grid procedure of Celik et al. with Richardson
+  extrapolation and the grid convergence index. It writes the levels to a CSV file and
+  draws a two-panel figure (errors with the fitted power laws, pairwise orders). The
+  suite validates the fit on forward Euler, the classical Runge-Kutta scheme, central
+  differences and the trapezoidal rule, and the three-grid procedure on exact power laws.
+- `figure-audit`: exported figures checked against a printed column width before they
+  reach a manuscript. For each PDF, PNG or SVG it reports the printed size and the
+  scaling LaTeX would apply, the page count, font embedding and subsetting, the smallest
+  text size after scaling, the resolution of rasters and the colour space, one line per
+  figure and a non-zero exit status on failure. Poppler comes through `Poppler_jll`, so
+  nothing is installed on the system. The suite draws its fixtures with Cairo at test
+  time.
+- `bib-hygiene`: validation of a BibTeX file before submission. Offline it checks
+  duplicate keys and entries, required fields per entry type, the form of DOIs, journal
+  names written in several ways, encoding and escaping, unprotected capitals in titles,
+  page ranges, years, and the citations of the manuscript against the entries. With
+  `--online` it resolves DOIs at doi.org and asks the arXiv API for published versions
+  of preprints, rate-limited and cached in a TOML file. A corrected copy with the two
+  mechanical fixes (bare DOIs, `--` in page ranges) is written beside the input, which
+  is never rewritten.
+
+### Changed
+
+- Dependabot ignores `KernelAbstractions`, `CUDA`, `AMDGPU`, `oneAPI` and `Metal`: the
+  bounds it proposed all belong to the migration to KernelAbstractions 0.10, which is
+  a deliberate decision rather than a version bump.
+
 ## 2026-10-29
 
 ### Added

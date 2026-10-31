@@ -12,6 +12,10 @@ updates:
       - "/plot-benchmarks"
       - "/run-index"
       - "/slurm-launch"
+      - "/convergence"
+      - "/convergence/test"
+      - "/figure-audit"
+      - "/bib-hygiene"
       - "/standalone"
     schedule:
       interval: "weekly"

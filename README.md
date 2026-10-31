@@ -91,14 +91,39 @@ scicomp-toolbox/
 │   ├── Project.toml
 │   ├── README.md
 │   └── test/                      # synthetic DrWatson workspace built at test time
-└── slurm-launch/                  # tier 1: job scripts with derived resource requests
+├── slurm-launch/                  # tier 1: job scripts with derived resource requests
+│   ├── activate.jl
+│   ├── config.toml                # no cluster defined: site settings are never guessed
+│   ├── slurm-launch.jl            # entry point
+│   ├── Manifest.toml
+│   ├── Project.toml
+│   ├── README.md
+│   └── test/                      # golden job scripts, stub scheduler, local jobs
+├── convergence/                   # tier 1: Convergence package, observed order of accuracy
+│   ├── activate.jl
+│   ├── config.toml
+│   ├── convergence.jl             # entry point
+│   ├── Manifest.toml
+│   ├── Project.toml
+│   ├── README.md
+│   ├── src/
+│   └── test/                      # schemes of known order, static QA
+├── figure-audit/                  # tier 1: exported figures against a column width
+│   ├── activate.jl
+│   ├── config.toml
+│   ├── figure-audit.jl            # entry point
+│   ├── Manifest.toml
+│   ├── Project.toml
+│   ├── README.md
+│   └── test/                      # fixtures drawn with Cairo at test time
+└── bib-hygiene/                   # tier 1: BibTeX validation before submission
     ├── activate.jl
-    ├── config.toml                # no cluster defined: site settings are never guessed
-    ├── slurm-launch.jl            # entry point
+    ├── bib-hygiene.jl             # entry point
+    ├── config.toml
     ├── Manifest.toml
     ├── Project.toml
     ├── README.md
-    └── test/                      # golden job scripts, stub scheduler, local jobs
+    └── test/                      # fixture bib and tex, stub fetcher
 ```
 
 ## Two tiers
@@ -138,6 +163,9 @@ julia run.jl plot-benchmarks --format png               # figures from the newes
 julia run.jl plot-benchmarks --compare                  # cross-host figures from reference-runs/
 julia run.jl run-index ~/projects --flagged             # run directories that need attention
 julia run.jl slurm-launch --help                        # job scripts; run from the project to launch
+julia run.jl convergence errors.csv --reference-orders 1,2  # order of accuracy from a table of errors
+julia run.jl figure-audit paper/figures --column double  # exported figures against the column width
+julia run.jl bib-hygiene paper/refs.bib --tex paper/     # BibTeX checks and the citations of a manuscript
 julia run.jl --threads 8 hardware-diagnostics           # Julia threads of the child process
 julia test.jl                                           # every test suite
 julia test.jl hardware-diagnostics                      # one suite
@@ -167,6 +195,9 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 | [`plot-benchmarks`](plot-benchmarks/) | 1 | Thread-scaling and throughput figures (CairoMakie) from one hardware-diagnostics dataset, or across the machines of several (`--compare`) | `plot-benchmarks/plot-benchmarks.jl` |
 | [`run-index`](run-index/) | 1 | Catalogue of DrWatson-style run directories: commit and configuration, hardware, wall time, disk usage; flags missing or unreproducible provenance, seed replicates and repeats, and figures whose run is gone | `run-index/run-index.jl` |
 | [`slurm-launch`](slurm-launch/) | 1 | Job scripts for Julia pipelines and wrapped native launch scripts, resources derived from the run configuration; submit, status, cancel and fetch on Slurm or as detached local runs | `slurm-launch/slurm-launch.jl` |
+| [`convergence`](convergence/) | 1 | Observed order of accuracy from a table of errors against the step size: pairwise orders, least-squares order with a Student-t interval, the three-grid procedure with Richardson extrapolation and the grid convergence index, a CSV and a two-panel figure; usable as the package `Convergence` | `convergence/convergence.jl` |
+| [`figure-audit`](figure-audit/) | 1 | Exported PDF, PNG and SVG figures checked against a column width: printed size and the scaling LaTeX would apply, page count, font embedding and subsetting, smallest text size after scaling, raster resolution, colour space; non-zero exit on failure | `figure-audit/figure-audit.jl` |
+| [`bib-hygiene`](bib-hygiene/) | 1 | BibTeX validation before submission: duplicate keys and entries, required fields, DOI form, journal names written in several ways, encoding and escaping, unprotected capitals, page ranges, years, citations of the manuscript; optional cached DOI and arXiv lookups; corrected copy beside the input | `bib-hygiene/bib-hygiene.jl` |
 
 ## Status
 
@@ -183,6 +214,9 @@ julia -i -e 'include("hardware-diagnostics/activate.jl")'
 | `plot-benchmarks` | tested on synthetic datasets; figures inspected on the eight reference runs |
 | `run-index` | new; tested against a synthetic DrWatson workspace with real git history, not yet run on a real project |
 | `slurm-launch` | new; local backend run end to end, Slurm verbs tested against stub commands and golden scripts; no submission to a real cluster yet |
+| `convergence` | new; the fit validated on forward Euler, the classical Runge-Kutta scheme, central differences and the trapezoidal rule, the three-grid procedure on exact power laws; static QA with Aqua, JET and ExplicitImports; figure inspected |
+| `figure-audit` | new; tested on PDF, PNG and SVG fixtures drawn with Cairo at test time, Poppler through `Poppler_jll`; not yet run on a manuscript's figure set |
+| `bib-hygiene` | new; every check tested on a fixture, the online checks and the cache against a stub fetcher, then exercised once live against doi.org and the arXiv API |
 
 ## Conventions
 

@@ -44,6 +44,11 @@ jobs:
         run: julia --color=yes run.jl run-index --no-csv
       - name: slurm-launch smoke test
         run: julia --color=yes run.jl slurm-launch --help
+      - name: convergence, figure-audit and bib-hygiene smoke tests
+        run: |
+          julia --color=yes run.jl convergence --help
+          julia --color=yes run.jl figure-audit --help
+          julia --color=yes run.jl bib-hygiene --help
       - name: Dispatcher smoke test (CPU only, reduced sampling)
         run: >
           julia --color=yes run.jl hardware-diagnostics
