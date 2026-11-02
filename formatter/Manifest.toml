@@ -41,10 +41,10 @@ version = "1.11.0"
 
 [[deps.JuliaFormatter]]
 deps = ["CommonMark", "Glob", "JuliaSyntax", "PrecompileTools", "TOML", "Test"]
-git-tree-sha1 = "4a25454bfd37ad800d20017fe59243e41163fed9"
+git-tree-sha1 = "e693ac7e4c56e8fefa94100048c9cc74f670cb5c"
 registries = "General"
 uuid = "98e50ef6-434e-11e9-1051-2b60c6c9e899"
-version = "2.14.0"
+version = "2.14.2"
 
 [[deps.JuliaSyntax]]
 git-tree-sha1 = "0d4b3dab95018bcf3925204475693d9f09dc45b8"
