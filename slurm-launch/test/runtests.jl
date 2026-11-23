@@ -996,6 +996,56 @@ end
             )
             @test wait_for(sweep.record, ("COMPLETED", "FAILED", "TERMINATED")) == "FAILED"
             @test isfile(joinpath(failing, "runs", "002_pass", "marker"))
+
+            # k) array tasks are listed one per line
+            with_stubs(review) do log
+                job_state(Dict{String, Any}("job_id" => "4245", "backend" => "slurm"))
+                calls = read(log, String)
+                @test occursin(r"squeue -h -r -j 4245", calls)
+                @test occursin(r"sacct .*--array.* -j 4245", calls)
+            end
+
+            # l) records of an earlier layout are refused with their missing key
+            mktempdir() do dir
+                old = joinpath(dir, "submission.toml")
+                write(
+                    old,
+                    """
+                    job_id = "1"
+                    backend = "local"
+                    name = "x"
+                    project = "$dir"
+                    target_project = "$dir"
+                    output_directory = "."
+                    exit_file = "jobs/x.exit"
+                    script = "jobs/x.sh"
+                    """,
+                )
+                @test_throws "lacks 'job_script'" read_record(old)
+            end
+
+            # m) characters that sbatch reads by its own rules in a directive
+            @test_throws "no #, quote or backslash" build_spec(
+                merge(
+                    options,
+                    Dict(
+                        "backend" => "slurm",
+                        "cluster" => "testsite",
+                        "remote-project" => "/scratch/a#b",
+                    ),
+                ),
+                site;
+                timestamp = STAMP,
+            )
+            @test_throws "control character" build_spec(
+                Dict(
+                    "project" => spaced,
+                    "cases" => joinpath(spaced, "runs"),
+                    "run-config" => "run\nconfig.toml",
+                ),
+                settings;
+                timestamp = STAMP,
+            )
         end
     end
 end

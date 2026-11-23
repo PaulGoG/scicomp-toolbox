@@ -147,7 +147,7 @@ the directory of its cases.
 
 Slurm jobs report the `squeue` state while queued or running and the `sacct` state
 afterwards; an array reports the state its tasks share, or `MIXED` with the count of
-each. A local job is `RUNNING` while the process that runs its script lives, then
+each, which covers the tasks still in the queue while the job runs. A local job is `RUNNING` while the process that runs its script lives, then
 `COMPLETED` or `FAILED` from the exit status the script records, or `TERMINATED` after a
 signal.
 `fetch` prints where the output of the job lies and, with `fetch_command` set, the
@@ -159,7 +159,8 @@ transfer command for it; it moves no data itself.
 log directories, memory margin, fetch template), the keys of every derived quantity
 (`[derivation.julia]`, `[derivation.launcher]`) and the clusters. Unknown keys, malformed
 time limits, mail types or directives, and paths outside the project are rejected with a
-message naming the key.
+message naming the key. With the slurm backend the project path on the cluster may hold
+no `#`, quote or backslash, which `sbatch` reads by rules of its own in a directive.
 
 ## Tests
 

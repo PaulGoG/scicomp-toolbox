@@ -739,6 +739,12 @@ function build_spec(
             "the project path on the target must be absolute and free of whitespace, got '$target'",
         ),
     )
+    # sbatch reads quotes, backslashes and # in a directive by rules of its own
+    (cluster !== nothing && occursin(r"[#'\"\\]", target)) && throw(
+        ArgumentError(
+            "with the slurm backend the project path on the target may hold no #, quote or backslash, got '$target'",
+        ),
+    )
 
     haskey(options, "run-config") || throw(ArgumentError("--run-config is required"))
     cases = Pair{String, Resources}[]
@@ -752,6 +758,8 @@ function build_spec(
                 "with --cases, --run-config is a file name inside each case directory",
             ),
         )
+        occursin(r"[[:cntrl:]]", config_name) &&
+            throw(ArgumentError("--run-config holds a control character"))
         if payload == "launcher"
             script = get(options, "script", "_launch.sh")
             basename(script) == script || throw(
@@ -1116,8 +1124,9 @@ function read_record(path::AbstractString)
     file = isdir(path) ? joinpath(path, RECORD_NAME) : path
     isfile(file) || throw(ArgumentError("no submission record at $path"))
     record = parse_toml(file)
-    required = ["job_id", "backend", "name", "project", "output_directory"]
-    get(record, "backend", nothing) == "local" && push!(required, "exit_file")
+    required =
+        ["job_id", "backend", "name", "project", "target_project", "output_directory"]
+    get(record, "backend", nothing) == "local" && push!(required, "job_script", "exit_file")
     for key in required
         haskey(record, key) ||
             throw(ArgumentError("$file lacks '$key'; not a submission record"))
@@ -1213,7 +1222,8 @@ function job_state(record::AbstractDict)
     id = string(record["job_id"])
     if record["backend"] == "slurm"
         if Sys.which("squeue") !== nothing
-            ok, out, _ = capture(`squeue -h -j $id -o "%T|%M|%R"`)
+            # -r: one line per array task, pending ones included
+            ok, out, _ = capture(`squeue -h -r -j $id -o "%T|%M|%R"`)
             if ok && !isempty(out)
                 lines = filter(!isempty, strip.(split(out, '\n')))
                 state, counts =
@@ -1224,7 +1234,7 @@ function job_state(record::AbstractDict)
             end
         end
         if Sys.which("sacct") !== nothing
-            ok, out, _ = capture(`sacct -n -X -P -j $id -o State,ExitCode,Elapsed`)
+            ok, out, _ = capture(`sacct -n -X -P --array -j $id -o State,ExitCode,Elapsed`)
             if ok && !isempty(out)
                 lines = filter(!isempty, strip.(split(out, '\n')))
                 # "CANCELLED by 1000" reads CANCELLED
@@ -1238,7 +1248,8 @@ function job_state(record::AbstractDict)
         end
         return ("UNKNOWN", "neither squeue nor sacct reports job $id here")
     end
-    exit_path = joinpath(record["project"], record["exit_file"])
+    # the script records its status where it runs
+    exit_path = joinpath(record["target_project"], record["exit_file"])
     if isfile(exit_path)
         code = tryparse(Int, strip(read(exit_path, String)))
         code === nothing && return ("UNKNOWN", "unreadable exit status in $exit_path")
