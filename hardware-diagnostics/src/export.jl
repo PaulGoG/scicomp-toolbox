@@ -17,8 +17,8 @@ csv_cell(value::AbstractFloat) = isfinite(value) ? @sprintf("%.10g", value) : ""
 
 One CSV line of the dataset: the fields of `record` in order, strings quoted, undefined
 quantities (`NaN`) and inapplicable thread counts (0) as empty cells. `nominal_ops`, an
-exact integer count stored as `Float64`, is written in full rather than to ten
-significant digits.
+integer count stored as `Float64` (exact while N³ < 2⁵³), is written with all its digits
+rather than to ten significant ones.
 """
 function csv_row(record::BenchmarkRecord)
     cells = String[]
@@ -27,7 +27,7 @@ function csv_row(record::BenchmarkRecord)
         cell = if name === :blas_threads && value == 0
             ""
         elseif name === :nominal_ops && isfinite(record.nominal_ops)
-            string(round(Int, record.nominal_ops))
+            @sprintf("%.0f", record.nominal_ops)
         else
             csv_cell(value)
         end

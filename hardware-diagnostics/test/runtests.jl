@@ -981,5 +981,20 @@ end
             nominal_ops = 4 * 4096^3,
         )
         @test occursin("274877906944", csv_row(record))
+        # 16 N³ at N = 900000 exceeds Int64 and is written with the digits of its Float64
+        beyond = BenchmarkRecord(;
+            stage = "element_types",
+            device_type = "CPU",
+            backend = "CPU",
+            engine = "blas",
+            library = "OpenBLAS (ILP64)",
+            device_name = "Mock",
+            data_type = "ComplexF64",
+            matrix_dim = 900_000,
+            julia_threads = 1,
+            nominal_ops = 16 * 900_000.0^3,
+            status = "skipped: footprint",
+        )
+        @test occursin("11664000000000000000", csv_row(beyond))
     end
 end

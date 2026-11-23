@@ -188,10 +188,10 @@ target_types = ["Float16", "Float32", "Float64", "Int32", "Int64"]  # subset of:
 seed = 20260907  # integer >= 0; seeds the operand generator
 
 [sampling]
-min_sampling_time_s = 0.5  # float > 0 [s]; sampling continues until this budget and min_samples are both met
+min_sampling_time_s = 0.5  # finite float > 0 [s]; sampling continues until this budget and min_samples are both met
 min_samples = 3  # integer in [1, 10000]
 max_samples = 30  # integer in [min_samples, 10000]
-max_point_seconds = 60.0  # float > 0 [s]; a point predicted above this per evaluation is skipped; also caps the sampling time of a point, overriding min_samples
+max_point_seconds = 60.0  # finite float > 0 [s]; a point predicted above this per evaluation is skipped; also caps the sampling time of a point, overriding min_samples
 
 [hardware]
 run_cpu = true  # boolean

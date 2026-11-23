@@ -133,10 +133,12 @@ function get_real(
     value = get(table, key, default)
     (value isa Real && !(value isa Bool)) ||
         throw(ArgumentError("[$context].$key must be a number, got $(repr(value))"))
-    inside = isfinite(value) && (low_open ? (low < value <= high) : (low <= value <= high))
+    isfinite(value) ||
+        throw(ArgumentError("[$context].$key must be a finite number, got $value"))
+    inside = low_open ? (low < value <= high) : (low <= value <= high)
     inside || throw(
         ArgumentError(
-            "[$context].$key must be in $(low_open ? "(" : "[")$low, $high], got $value",
+            "[$context].$key must be in $(low_open ? "(" : "[")$low, $high$(isfinite(high) ? "]" : ")"), got $value",
         ),
     )
     return Float64(value)
