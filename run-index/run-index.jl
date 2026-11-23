@@ -445,8 +445,8 @@ const TIME_FORMATS = (
 
 A TOML date-time or date, or a string in ISO 8601 form (`T` or a space between date and
 time, optional fraction; a trailing `Z` or UTC offset is dropped and the clock time
-taken as written) or in the `yyyy-mm-dd_HH-MM-SS` form of file-name stamps; `nothing`
-for anything else.
+taken as written) or in the `yyyy-mm-dd_HH-MM-SS` form of file-name stamps, with a
+four-digit year; `nothing` for anything else.
 """
 parse_time(value::DateTime) = value
 parse_time(value::Date) = DateTime(value)
@@ -455,7 +455,8 @@ function parse_time(value::AbstractString)
     text = replace(strip(value), r"(?:Z|[+-]\d{2}:?\d{2})$" => "")
     for format in TIME_FORMATS
         parsed = tryparse(DateTime, text, format)
-        parsed === nothing || return parsed
+        # Dates reads a year of any width: an epoch count is not a date
+        (parsed === nothing || !(1000 <= Dates.year(parsed) <= 9999)) || return parsed
     end
     return nothing
 end
@@ -847,15 +848,18 @@ function orphan_figures(
 )
     orphans = OrphanFigure[]
     for project in projects
-        # every run of the project counts, not only those under the indexed roots
+        tops =
+            filter(isdir, [joinpath(project.root, d) for d in settings.figure_directories])
+        isempty(tops) && continue
+        # the indexed runs of the project, which a symbolic link may reach from outside
+        # it, and every run found below its root, indexed or not
         ids = Set{String}()
-        for run in find_runs(project.root, settings; max_depth = 64)
+        known = String[r.path for r in records if r.project_root == project.root]
+        for run in vcat(known, find_runs(project.root, settings))
             m = match(settings.run_id, basename(run))
             m === nothing || push!(ids, String(m.match))
         end
-        for directory in settings.figure_directories
-            top = joinpath(project.root, directory)
-            isdir(top) || continue
+        for top in tops
             for (dir, _, names) in
                 walkdir(top; follow_symlinks = false, onerror = warn_unreadable)
                 for name in sort(names)

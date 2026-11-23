@@ -315,17 +315,60 @@ record_of(index, run) = only(filter(r -> r.run == run, index.records))
         end
 
         @testset "Review fixes" begin
+            # a root narrower than the project: only the figures of the deleted run are
+            # orphans, although the runs of the other figures were not indexed
             sims = joinpath(root, "Curvature", "data", "sims")
             narrow = main(["--no-csv", sims]; io = IOBuffer())
-            @test all(f -> f.run_id == "run_dcf44792", narrow.orphans)
+            @test sort([f.path for f in narrow.orphans]) == [
+                "plots/residuals/run_dcf44792_residuals.png",
+                "plots/run_dcf44792_spectrum.pdf",
+            ]
 
-            curvature = joinpath(root, "Curvature")
-            plain = main(["--no-csv", curvature]; io = IOBuffer())
-            slash = main(["--no-csv", curvature * "/"]; io = IOBuffer())
-            @test length(slash.records) == length(plain.records)
-            @test [p.name for p in slash.projects] ==
-                  [p.name for p in plain.projects] ==
-                  ["Curvature"]
+            mktempdir() do dir
+                # runs outside any project or repository: the root names the project, with
+                # or without a trailing separator
+                bare = mkpath(joinpath(dir, "bare"))
+                write(
+                    joinpath(mkpath(joinpath(bare, "run_0badc0d1")), "provenance.toml"),
+                    "started = \"2026-08-01T12:00:00\"\n",
+                )
+                @test only(main(["--no-csv", bare * "/"]; io = IOBuffer()).projects).name ==
+                      "bare"
+                # a root that is itself a run, given with a trailing separator
+                @test only(
+                    main(
+                        ["--no-csv", joinpath(bare, "run_0badc0d1") * "/"];
+                        io = IOBuffer(),
+                    ).records,
+                ).started == DateTime(2026, 8, 1, 12)
+
+                # a data directory that is a link to a place outside the project: the
+                # figure of the run indexed through it is no orphan
+                project = mkpath(joinpath(dir, "P"))
+                write(joinpath(project, "Project.toml"), "name = \"P\"\n")
+                write(
+                    joinpath(mkpath(joinpath(project, "plots")), "run_abcdef01_x.pdf"),
+                    "x",
+                )
+                scratch = mkpath(joinpath(dir, "scratch", "run_abcdef01"))
+                write(joinpath(scratch, "provenance.toml"), "seed = 1\n")
+                symlink(dirname(scratch), joinpath(project, "data"))
+                linked = main(["--no-csv", joinpath(project, "data")]; io = IOBuffer())
+                @test length(linked.records) == 1 && isempty(linked.orphans)
+
+                # an epoch count is no date and does not hide the start time
+                @test parse_time("1724846400") === nothing
+                @test parse_time("20260801-1200") === nothing
+                write(
+                    joinpath(
+                        mkpath(joinpath(dir, "epoch", "run_0badc0d3")),
+                        "provenance.toml",
+                    ),
+                    "timestamp = \"1724846400\"\nstarted = \"2026-08-01T12:00:00\"\n",
+                )
+                @test only(build_index([joinpath(dir, "epoch")], settings).records).started ==
+                      DateTime(2026, 8, 1, 12)
+            end
 
             # a value that is no time must not hide a valid one under a later key
             @test accepts(Val(:time), "at noon on the first") == false
