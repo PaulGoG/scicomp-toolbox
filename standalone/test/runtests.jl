@@ -67,6 +67,8 @@ end
         @test untracked == ["c.jl"]
         # the source path of a rename must not be counted as a further entry
         @test first(parse_status("R  new.jl\0old.jl\0")) == 1
+        # a rename in the work-tree column also carries the source path
+        @test parse_status(" R new.txt\0old.txt\0 M other.txt\0") == (2, String[])
         # NUL separation preserves paths with spaces
         @test parse_status("?? a file.txt\0") == (0, ["a file.txt"])
         # short or malformed fields are skipped rather than throwing
@@ -300,6 +302,24 @@ end
         end
     end
 
+    @testset "workspace-audit: a root that is itself a repository" begin
+        mktempdir() do dir
+            repo = make_repository(joinpath(dir, "project"))
+            mkpath(joinpath(repo, "src"))
+            write(joinpath(repo, "src", "module.jl"), "1")
+            git_run(repo, "add", "src")
+            git_run(repo, "commit", "--quiet", "-m", "add src")
+
+            reports = audit_workspace(repo)
+            @test length(reports) == 1
+            @test only(reports).is_repository
+            @test isempty(unversioned_areas(reports, repo))
+            output = captured_stdout(() -> print_summary(reports, repo))
+            @test occursin(r"Repositories\s*: 1\n", output)
+            @test !occursin("Areas with no repo", output)
+        end
+    end
+
     @testset "workspace-audit: repositories one level below the area" begin
         mktempdir() do dir
             # the layout the default depth of two is meant for
@@ -337,7 +357,7 @@ end
             mkpath(area)
             write(joinpath(area, "old.backup.bundle"), zeros(UInt8, 32))
             reports = audit_workspace(dir)
-            # reported once, carrying the artifact, not twice
+            # reported once, with the artifact
             @test length(reports) == 1
             report = only(reports)
             @test report.name == "area"

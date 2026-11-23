@@ -4,7 +4,7 @@
 # from the upstream branch, stashes, untracked weight and regenerable backup artifacts, so
 # that unsynced work and deletable leftovers are visible in one command.
 #
-# The tool never writes and never deletes: it prints the candidates and the command that
+# The tool is read-only: it prints the candidates and the command that
 # would remove them.
 
 using Printf: @printf, @sprintf
@@ -71,8 +71,8 @@ end
 """
     is_repository_root(dir) -> Bool
 
-Whether `dir` is itself the top level of a work tree, rather than a subdirectory of one or
-no repository at all.
+Whether `dir` is the top level of a work tree; false for a subdirectory of one and outside
+any repository.
 """
 function is_repository_root(dir::AbstractString)
     ok, top = git(dir, "rev-parse", "--show-toplevel")
@@ -106,7 +106,7 @@ function parse_status(payload::AbstractString)
         else
             tracked += 1
             # a rename or copy is reported as "XY <to>\0<from>"
-            (status_x == 'R' || status_x == 'C') && (i += 1)
+            (status_x in ('R', 'C') || status_y in ('R', 'C')) && (i += 1)
         end
         i += 1
     end
@@ -350,11 +350,13 @@ end
 Audit the projects under `root`. Each immediate subdirectory is an area, searched `depth`
 levels deep for repositories and backup artifacts; the default of two suits a workspace
 whose areas each hold their repository one level down. An area with nothing of interest
-beneath it yields one non-repository report.
+beneath it yields one non-repository report. A root that is itself a repository yields
+the report of that repository alone.
 """
 function audit_workspace(root::AbstractString; fetch::Bool = false, depth::Integer = 2)
     isdir(root) || throw(ArgumentError("not a directory: $root"))
     depth >= 1 || throw(ArgumentError("depth must be at least 1, got $depth"))
+    is_repository_root(root) && return DirectoryReport[audit_directory(root; fetch)]
     reports = DirectoryReport[]
     for area in subdirectories(root)
         before = length(reports)
@@ -369,7 +371,7 @@ end
     unversioned_areas(reports, root) -> Vector{String}
 
 Names of the top-level areas under which the walk found no repository. A `notes` directory
-belongs here legitimately; a directory of code does not.
+is expected here; a directory of code is not.
 """
 function unversioned_areas(reports::Vector{DirectoryReport}, root::AbstractString)
     areas = String[]
@@ -517,7 +519,7 @@ repository, and an area with no repository under it is reported as such.
 Without --fetch the distance from the upstream branch is measured against the
 remote-tracking refs already stored, which may be out of date.
 
-The tool only reads: it never writes, commits, fetches without being asked, or deletes.
+The tool writes, commits and deletes nothing, and fetches only with --fetch.
 """,
     )
     return nothing
@@ -571,8 +573,8 @@ end
 """
     default_root() -> String
 
-Parent of the repository holding this script, which is the workspace the toolbox lives in.
-Resolved from the script location so that no absolute path is baked in.
+Parent of the repository holding this script (the workspace of the toolbox), resolved
+from the script location.
 """
 default_root() = dirname(dirname(@__DIR__))
 
