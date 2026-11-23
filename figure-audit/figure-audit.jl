@@ -60,7 +60,7 @@ end
     bounded_real(table, key, default, context, bounds, valid) -> Float64
 
 Value of `key` in `table` (`default` when absent) as a `Float64`. Integers are accepted,
-`Bool` and non-finite values are not; `valid` decides the bounds, which `bounds` states
+`Bool` and non-finite values are not; `valid` tests the bounds and `bounds` states them
 in the error message.
 """
 function bounded_real(
@@ -246,81 +246,97 @@ Base.showerror(io::IO, err::UnreadableFigure) = print(io, "unreadable figure: ",
 
 """
     poppler(product::Function, args::Vector{String})
-        -> (exit_code::Int, stdout_text::String, stderr_text::String)
+        -> (ok::Bool, stdout_text::String, stderr_text::String, exit_code::Int)
 
 Run the Poppler executable of the `Poppler_jll` product function `product` with `args`,
-whatever its exit status, and capture its standard output and error separately.
+whatever its exit status, and capture its standard output and error separately. `ok` is
+true when the process exited with status 0 and was not killed by a signal.
 """
 function poppler(product::Function, args::Vector{String})
     out = IOBuffer()
     err = IOBuffer()
     process = run(pipeline(ignorestatus(`$(product()) $args`); stdout = out, stderr = err))
-    return process.exitcode, String(take!(out)), String(take!(err))
+    return success(process), String(take!(out)), String(take!(err)), process.exitcode
 end
 
 # Standard output of a Poppler call. Poppler reports "Syntax Warning" lines on stderr for
-# files it can still read, so only the exit status decides; on failure the last non-empty
-# stderr line becomes the detail of the `readable` check.
+# files it can still read, so only the process status decides; on failure the last
+# non-empty stderr line becomes the detail of the `readable` check.
 function poppler_output(product::Function, args::Vector{String})
-    code, out, err = poppler(product, args)
-    code == 0 && return out
+    ok, out, err, code = poppler(product, args)
+    ok && return out
     lines = filter(!isempty, strip.(split(err, '\n')))
     detail = isempty(lines) ? "$(nameof(product)) exited with status $code" : last(lines)
     throw(UnreadableFigure(String(detail)))
 end
 
 """
-    pdf_info(path) -> (pages::Int, width_pt::Float64, height_pt::Float64, producer::String)
+    pdf_info(path) -> (pages::Int, width_pt::Float64, height_pt::Float64,
+                       media_width_pt::Float64, producer::String)
 
-Page count, size of the first page [pt] and producer (empty when absent), read with
-`pdfinfo`. Throws [`UnreadableFigure`](@ref) when Poppler cannot read the file.
+Page count, size of the first page as displayed [pt], width of its MediaBox as displayed
+[pt] and producer (empty when absent), read with `pdfinfo -box`. The page size is the
+CropBox; a page rotated by 90° or 270° swaps width and height, and the displayed MediaBox
+width is then its vertical extent. Without a MediaBox line the CropBox size stands in for
+it. Throws [`UnreadableFigure`](@ref) when Poppler cannot read the file.
 """
 function pdf_info(path::AbstractString)
-    text = poppler_output(Poppler_jll.pdfinfo, [String(path)])
+    text = poppler_output(Poppler_jll.pdfinfo, ["-box", String(path)])
     pages = match(r"(?m)^Pages:\s+(\d+)", text)
     page_size = match(r"(?m)^Page size:\s+([0-9.]+) x ([0-9.]+) pts", text)
     (pages === nothing || page_size === nothing) &&
         throw(UnreadableFigure("pdfinfo reports no page count or page size"))
     producer = match(r"(?m)^Producer:[ \t]*(.*)$", text)
+    width = parse(Float64, page_size.captures[1])
+    height = parse(Float64, page_size.captures[2])
+    rotation_line = match(r"(?m)^Page rot:\s+(-?\d+)", text)
+    rotation = rotation_line === nothing ? 0 : parse(Int, rotation_line.captures[1])
+    media_line = match(r"(?m)^MediaBox:\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)", text)
+    corners = media_line === nothing ? nothing : tryparse.(Float64, media_line.captures)
+    media_width, media_height =
+        (corners === nothing || any(isnothing, corners)) ? (width, height) :
+        (corners[3] - corners[1], corners[4] - corners[2])
+    rotated = mod(rotation, 360) in (90, 270)
     return (;
         pages = parse(Int, pages.captures[1]),
-        width_pt = parse(Float64, page_size.captures[1]),
-        height_pt = parse(Float64, page_size.captures[2]),
+        width_pt = rotated ? height : width,
+        height_pt = rotated ? width : height,
+        media_width_pt = rotated ? media_height : media_width,
         producer = producer === nothing ? "" : String(strip(producer.captures[1])),
     )
 end
 
-"""
-    pdf_fonts(path) -> Vector{PdfFont}
+# name, type, encoding, emb, sub, uni, object number and generation of a pdffonts row
+const PDFFONTS_ROW =
+    r"^(.*?)\s+((?:CID )?(?:Type 1C?|Type 3|TrueType|Type 0C?)(?: \(OT\))?|unknown)\s+(\S+)\s+(yes|no)\s+(yes|no)\s+(yes|no)\s+\d+\s+\d+\s*$"
 
-Fonts listed by `pdffonts`; empty when the file holds no text. The rows are sliced at the
-offsets where the header words `type`, `encoding`, `emb`, `sub` and `uni` begin, since the
-type column contains spaces.
 """
-function pdf_fonts(path::AbstractString)
-    lines = split(poppler_output(Poppler_jll.pdffonts, [String(path)]), '\n')
+    parse_pdffonts(text::AbstractString) -> Vector{PdfFont}
+
+Fonts in the output `text` of `pdffonts`; empty when it lists none. The name column is
+padded but never truncated, so a long name shifts the later columns: each row is matched
+from the font type onwards. Throws [`UnreadableFigure`](@ref) when the header is missing
+or a row is not understood.
+"""
+function parse_pdffonts(text::AbstractString)
+    lines = split(text, '\n')
     at = findfirst(line -> startswith(line, "name"), lines)
     at === nothing && throw(UnreadableFigure("pdffonts prints no header"))
-    header = lines[at]
-    starts = Int[]
-    for word in ("type", "encoding", "emb", "sub", "uni")
-        found = findfirst(word, header)
-        found === nothing && throw(UnreadableFigure("pdffonts header lacks '$word'"))
-        push!(starts, first(found))
-    end
     fonts = PdfFont[]
+    # the line after the header is the dash line
     for line in lines[(at + 2):end]
         isempty(strip(line)) && continue
-        chars = collect(line)
-        field(a, b) = String(strip(String(chars[a:min(b, length(chars))])))
+        m = match(PDFFONTS_ROW, line)
+        m === nothing &&
+            throw(UnreadableFigure("pdffonts row not understood: " * strip(line)))
         push!(
             fonts,
             PdfFont(
-                field(1, starts[1] - 1),
-                field(starts[1], starts[2] - 1),
-                field(starts[2], starts[3] - 1),
-                field(starts[3], starts[4] - 1) == "yes",
-                field(starts[4], starts[5] - 1) == "yes",
+                String(strip(m.captures[1])),
+                String(m.captures[2]),
+                String(m.captures[3]),
+                m.captures[4] == "yes",
+                m.captures[5] == "yes",
             ),
         )
     end
@@ -328,13 +344,23 @@ function pdf_fonts(path::AbstractString)
 end
 
 """
-    pdf_text_sizes(path, width_pt) -> Vector{Float64}
+    pdf_fonts(path) -> Vector{PdfFont}
+
+Fonts listed by `pdffonts`, parsed by [`parse_pdffonts`](@ref); empty when the file
+holds no text.
+"""
+pdf_fonts(path::AbstractString) =
+    parse_pdffonts(poppler_output(Poppler_jll.pdffonts, [String(path)]))
+
+"""
+    pdf_text_sizes(path, media_width_pt) -> Vector{Float64}
 
 Sizes [pt] of the fonts `pdftohtml` finds in the file, one per font specification;
-empty when there is no text. pdftohtml scales the page by its zoom, so a reported size
-`S` on a page `W` units wide is `S * width_pt / W` points.
+empty when there is no text. pdftohtml scales the MediaBox as displayed by its zoom, so
+a reported size `S` on a page `W` units wide is `S * media_width_pt / W` points, with
+`media_width_pt` the displayed MediaBox width.
 """
-function pdf_text_sizes(path::AbstractString, width_pt::Real)
+function pdf_text_sizes(path::AbstractString, media_width_pt::Real)
     text = poppler_output(
         Poppler_jll.pdftohtml,
         ["-xml", "-i", "-zoom", "3", "-stdout", String(path)],
@@ -348,7 +374,7 @@ function pdf_text_sizes(path::AbstractString, width_pt::Real)
     page === nothing && throw(UnreadableFigure("pdftohtml reports no page width"))
     zoomed_width = parse(Float64, page.captures[1])
     zoomed_width > 0 || throw(UnreadableFigure("pdftohtml reports a page width of 0"))
-    return sizes .* (width_pt / zoomed_width)
+    return sizes .* (media_width_pt / zoomed_width)
 end
 
 function ppi_value(text::AbstractString)
@@ -357,15 +383,20 @@ function ppi_value(text::AbstractString)
 end
 
 """
-    pdf_images(path) -> Vector{PdfImage}
+    parse_pdfimages(text::AbstractString) -> Vector{PdfImage}
 
-Images listed by `pdfimages -list`; soft masks and stencils are left out. A resolution
-that Poppler reports as `inf` or not at all is `NaN`.
+Images in the output `text` of `pdfimages -list`; soft masks and stencils are left out.
+The resolutions are read from the end of a row, since an inline image prints the single
+token `[inline]` as its object ID. A resolution that Poppler reports as `inf` or not at
+all is `NaN`. Throws [`UnreadableFigure`](@ref) when the header is missing.
 """
-function pdf_images(path::AbstractString)
-    text = poppler_output(Poppler_jll.pdfimages, ["-list", String(path)])
+function parse_pdfimages(text::AbstractString)
+    lines = split(text, '\n')
+    at = findfirst(line -> !isempty(strip(line)), lines)
+    (at === nothing || !startswith(lstrip(lines[at]), "page")) &&
+        throw(UnreadableFigure("pdfimages prints no header"))
     images = PdfImage[]
-    for line in split(text, '\n')
+    for line in lines
         fields = split(line)
         # the header and the dash line fail this test as well
         (length(fields) >= 14 && fields[3] == "image") || continue
@@ -380,13 +411,21 @@ function pdf_images(path::AbstractString)
                 height,
                 String(fields[6]),
                 bits,
-                ppi_value(fields[13]),
-                ppi_value(fields[14]),
+                ppi_value(fields[end - 3]),
+                ppi_value(fields[end - 2]),
             ),
         )
     end
     return images
 end
+
+"""
+    pdf_images(path) -> Vector{PdfImage}
+
+Images listed by `pdfimages -list`, parsed by [`parse_pdfimages`](@ref).
+"""
+pdf_images(path::AbstractString) =
+    parse_pdfimages(poppler_output(Poppler_jll.pdfimages, ["-list", String(path)]))
 
 # --- PNG and SVG -----------------------------------------------------------------------
 
@@ -404,12 +443,13 @@ be32(bytes::AbstractVector{UInt8}, i::Int) =
     Int(bytes[i + 3])
 
 """
-    png_info(path) -> (width, height, bit_depth, colour::String, ppu)
+    png_info(path) -> (width, height, bit_depth, colour::String, ppu, ppu_y)
 
 Pixel width and height, bit depth and colour type of a PNG file from its IHDR chunk,
-and the horizontal pixels per metre of its pHYs chunk (`ppu`, `nothing` when the chunk
-is absent or its unit is not the metre). CRCs are not verified. Throws
-[`UnreadableFigure`](@ref) for a file without the PNG signature or a valid IHDR chunk.
+and the horizontal and vertical pixels per metre of its pHYs chunk (`ppu` and `ppu_y`,
+each `nothing` when the chunk is absent, its unit is not the metre or the value is not
+positive). CRCs are not verified. Throws [`UnreadableFigure`](@ref) for a file without
+the PNG signature, a valid IHDR chunk or the closing IEND chunk.
 """
 function png_info(path::AbstractString)
     bytes = read(path)
@@ -417,12 +457,17 @@ function png_info(path::AbstractString)
         throw(UnreadableFigure("not a PNG file"))
     header = nothing
     ppu = nothing
+    ppu_y = nothing
+    ended = false
     position = 9
     # chunk: 4-byte big-endian length, 4-byte type, data, 4-byte CRC
     while position + 7 <= length(bytes)
         chunk_length = be32(bytes, position)
         chunk_type = String(bytes[(position + 4):(position + 7)])
-        chunk_type == "IEND" && break
+        if chunk_type == "IEND"
+            ended = true
+            break
+        end
         first_byte = position + 8
         last_byte = first_byte + chunk_length - 1
         last_byte + 4 <= length(bytes) ||
@@ -437,9 +482,12 @@ function png_info(path::AbstractString)
             )
         elseif chunk_type == "pHYs" && chunk_length == 9
             ppu = (data[9] == 0x01 && be32(data, 1) > 0) ? Float64(be32(data, 1)) : nothing
+            ppu_y =
+                (data[9] == 0x01 && be32(data, 5) > 0) ? Float64(be32(data, 5)) : nothing
         end
         position = last_byte + 5
     end
+    ended || throw(UnreadableFigure("truncated file: no IEND chunk"))
     header === nothing && throw(UnreadableFigure("no IHDR chunk"))
     colour = get(PNG_COLOUR_TYPES, header.colour_type, "colour type $(header.colour_type)")
     return (;
@@ -448,6 +496,7 @@ function png_info(path::AbstractString)
         bit_depth = header.bit_depth,
         colour,
         ppu,
+        ppu_y,
     )
 end
 
@@ -459,6 +508,7 @@ const SVG_UNITS = Dict(
     "mm" => 72 / 25.4,
     "cm" => 72 / 2.54,
     "in" => 72.0,
+    "pc" => 12.0,
 )
 
 function svg_attribute(tag::AbstractString, name::AbstractString)
@@ -472,17 +522,20 @@ function svg_length(text::AbstractString)
     m === nothing && return nothing
     factor = get(SVG_UNITS, lowercase(m.captures[2]), nothing)
     factor === nothing && return nothing
-    return parse(Float64, m.captures[1]) * factor
+    value = parse(Float64, m.captures[1]) * factor
+    return (isfinite(value) && value > 0) ? value : nothing
 end
 
 """
     svg_info(text) -> (width_pt, height_pt, texts::Int, images::Int)
 
 Width and height [pt] from the `width` and `height` attributes of the root `<svg>` tag
-(units pt, px or none at 0.75 pt per px, mm, cm, in), each falling back on the viewBox
-in px when absent, `nothing` when neither gives it; and the numbers of `<text>` and
-`<image>` elements in the whole text. Throws [`UnreadableFigure`](@ref) when there is no
-root tag.
+(units pt, pc, px or none at 0.75 pt per px, mm, cm, in; a length that is not positive
+counts as absent). A viewBox with positive width and height fills the gaps: both from
+the viewBox in px when both attributes are absent, the missing one from the other and
+the viewBox aspect ratio when one is. Either is `nothing` when nothing gives it. Also
+returns the numbers of `<text>` and `<image>` elements in the whole text. Throws
+[`UnreadableFigure`](@ref) when there is no root tag.
 """
 function svg_info(text::AbstractString)
     root = match(r"<svg\b[^>]*>", text)
@@ -493,9 +546,15 @@ function svg_info(text::AbstractString)
     box = svg_attribute(tag, "viewBox")
     if box !== nothing && (width_pt === nothing || height_pt === nothing)
         values = tryparse.(Float64, split(box, r"[\s,]+"; keepempty = false))
-        if length(values) == 4 && !any(isnothing, values)
-            width_pt = something(width_pt, values[3] * SVG_UNITS["px"])
-            height_pt = something(height_pt, values[4] * SVG_UNITS["px"])
+        if length(values) == 4 && !any(isnothing, values) && values[3] > 0 && values[4] > 0
+            if width_pt === nothing && height_pt === nothing
+                width_pt = values[3] * SVG_UNITS["px"]
+                height_pt = values[4] * SVG_UNITS["px"]
+            elseif height_pt === nothing
+                height_pt = width_pt * values[4] / values[3]
+            else
+                width_pt = height_pt * values[3] / values[4]
+            end
         end
     end
     return (;
@@ -528,8 +587,9 @@ end
 """
     PngFigure
 
-Header of a PNG: path, pixel width and height, bit depth, colour type and horizontal
-pixels per metre (`nothing` without a pHYs chunk in metres).
+Header of a PNG: path, pixel width and height, bit depth, colour type, and horizontal
+and vertical pixels per metre (`ppu`, `ppu_y`; `nothing` without a pHYs chunk in
+metres).
 """
 struct PngFigure
     path::String
@@ -538,6 +598,7 @@ struct PngFigure
     bit_depth::Int
     colour::String
     ppu::Union{Float64, Nothing}
+    ppu_y::Union{Float64, Nothing}
 end
 
 """
@@ -563,14 +624,22 @@ function read_figure(path::String, ::Val{:pdf})
         info.height_pt * MM_PER_PT,
         info.producer,
         pdf_fonts(path),
-        pdf_text_sizes(path, info.width_pt),
+        pdf_text_sizes(path, info.media_width_pt),
         pdf_images(path),
     )
 end
 
 function read_figure(path::String, ::Val{:png})
     info = png_info(path)
-    return PngFigure(path, info.width, info.height, info.bit_depth, info.colour, info.ppu)
+    return PngFigure(
+        path,
+        info.width,
+        info.height,
+        info.bit_depth,
+        info.colour,
+        info.ppu,
+        info.ppu_y,
+    )
 end
 
 function read_figure(path::String, ::Val{:svg})
@@ -590,7 +659,7 @@ figure_width_mm(figure::PngFigure) =
     figure.ppu === nothing ? nothing : figure.width / figure.ppu * 1000
 figure_height_mm(figure::Union{PdfFigure, SvgFigure}) = figure.height_mm
 figure_height_mm(figure::PngFigure) =
-    figure.ppu === nothing ? nothing : figure.height / figure.ppu * 1000
+    figure.ppu_y === nothing ? nothing : figure.height / figure.ppu_y * 1000
 
 counted(n::Integer, noun::AbstractString) = n == 1 ? "1 $noun" : "$n $(noun)s"
 
@@ -626,14 +695,26 @@ end
     check_height(figure, settings, target_mm) -> CheckResult
 
 Printed height, the exported height scaled to the target width, against
-`max_height_mm`. Skipped when the size is unknown.
+`max_height_mm`. A PNG without physical size is printed at its pixel aspect ratio;
+skipped for other figures whose size is unknown.
 """
 function check_height(figure, settings::AuditSettings, target_mm::Float64)
     width = figure_width_mm(figure)
     height = figure_height_mm(figure)
     (width === nothing || height === nothing) &&
         return CheckResult(:height, :skip, "height unknown")
-    printed = height * target_mm / width
+    return height_result(height * target_mm / width, settings)
+end
+function check_height(figure::PngFigure, settings::AuditSettings, target_mm::Float64)
+    width = figure_width_mm(figure)
+    height = figure_height_mm(figure)
+    printed =
+        (width === nothing || height === nothing) ?
+        figure.height / figure.width * target_mm : height * target_mm / width
+    return height_result(printed, settings)
+end
+
+function height_result(printed::Float64, settings::AuditSettings)
     printed > settings.max_height_mm && return CheckResult(
         :height,
         :fail,
@@ -673,7 +754,8 @@ function check_fonts(figure::PdfFigure, settings::AuditSettings, ::Float64)
     type3 = unique(f.name for f in fonts if occursin("Type 3", f.type))
     isempty(type3) ||
         push!(findings, "Type 3 font$(length(type3) > 1 ? "s" : ""): $(join(type3, ", "))")
-    whole = unique(f.name for f in fonts if !f.subset)
+    # Type 3 fonts carry no subset tag
+    whole = unique(f.name for f in fonts if !f.subset && !occursin("Type 3", f.type))
     isempty(whole) || push!(findings, "not subset: $(join(whole, ", "))")
     detail = join(findings, "; ")
     (settings.require_subset && !isempty(whole)) &&
@@ -737,8 +819,8 @@ check_text_size(::SvgFigure, ::AuditSettings, ::Float64) =
     check_raster(figure, settings, target_mm) -> CheckResult
 
 PNG: pixel width over the target width, in whole dpi, against `min_dpi` (fail). PDF:
-every embedded image at its printed resolution against `min_dpi` (warn). SVG: embedded
-images warn, their resolution unread.
+every embedded image at the smaller of its two printed resolutions against `min_dpi`
+(warn). SVG: embedded images warn; their resolution is not read.
 """
 function check_raster(figure::PngFigure, settings::AuditSettings, target_mm::Float64)
     dpi = round(Int, figure.width / (target_mm / 25.4))
@@ -755,8 +837,10 @@ function check_raster(figure::PdfFigure, settings::AuditSettings, target_mm::Flo
     scale = target_mm / figure.width_mm
     low = String[]
     for image in images
-        isnan(image.x_ppi) && continue
-        ppi = round(Int, image.x_ppi / scale)
+        x, y = image.x_ppi, image.y_ppi
+        (isnan(x) && isnan(y)) && continue
+        # the coarser of the two axes decides
+        ppi = round(Int, (isnan(x) ? y : isnan(y) ? x : min(x, y)) / scale)
         ppi < settings.min_dpi && push!(
             low,
             "embedded raster $(image.width) × $(image.height) px at $ppi ppi (minimum $(settings.min_dpi))",
@@ -993,6 +1077,22 @@ function write_csv(path::AbstractString, reports::AbstractVector{FigureReport})
     return path
 end
 
+"""
+    safe_filepath(path) -> String
+
+`path` when no file exists there, otherwise the first free `stem#k.ext`.
+"""
+function safe_filepath(path::AbstractString)
+    isfile(path) || return String(path)
+    stem, extension = splitext(basename(path))
+    k = 1
+    while true
+        candidate = joinpath(dirname(path), "$(stem)#$(k)$(extension)")
+        isfile(candidate) || return candidate
+        k += 1
+    end
+end
+
 function usage(io::IO = stdout)
     print(
         io,
@@ -1089,13 +1189,16 @@ function main(args::Vector{String} = ARGS; io::IO = stdout)
     target_mm =
         width !== nothing ? width :
         column_width(settings, something(column, settings.default_column))
-    reports = audit(collect_figures(paths), settings; target_mm)
+    figures = collect_figures(paths)
+    isempty(figures) &&
+        throw(ArgumentError("no PDF, PNG or SVG figure found in " * join(paths, ", ")))
+    reports = audit(figures, settings; target_mm)
     print_report(io, reports; verbose)
     failed = any(reports) do report
         status = worst_status(report)
         status == :fail || (strict && status == :warn)
     end
-    path = csv === nothing ? nothing : write_csv(abspath(csv), reports)
+    path = csv === nothing ? nothing : write_csv(safe_filepath(abspath(csv)), reports)
     path === nothing || println(io, "Checks written to ", path)
     return (; reports, failed, csv = path)
 end

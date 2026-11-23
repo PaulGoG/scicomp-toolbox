@@ -30,7 +30,8 @@ julia run.jl figure-audit paper/figures --csv figure-audit.csv
 ```
 
 Paths resolve against the working directory. A directory contributes its PDF, PNG and SVG
-files, not those of its subdirectories. The target width is the one given by `--width`,
+files, not those of its subdirectories; an audit that finds no figure is an error. The
+target width is the one given by `--width`,
 for a declared artwork width, else that of the column named by `--column`, else that of
 `[columns].default`.
 
@@ -44,20 +45,22 @@ WARN  map.png  vector: vector version available: map.pdf
 A figure line lists its failed checks and then its warnings; `--verbose` adds every check
 on its own line. The exit status is 0 when no figure fails, 1 when one does, and 2 for an
 invalid argument or configuration; under `--strict` a warning counts as a failure. A build
-that runs the audit before LaTeX and stops on a non-zero status therefore never typesets
-a figure that LaTeX would rescale or that falls below the limits. `--csv FILE` writes one
-row per check with the exported size and the scale factor.
+can run the audit before LaTeX and stop on a non-zero status. The gate does not cover
+what the checks skip: the width of a PNG without a pHYs chunk or of an SVG without a
+size, text in SVG files and text drawn as outlines; a raster embedded in a PDF only
+warns. `--csv FILE` writes one row per check with the exported size and the scale
+factor, to `FILE#1`, `FILE#2`, ... when the file exists.
 
 ## Checks
 
 | Check | Formats | Pass condition | Otherwise |
 | :--- | :--- | :--- | :--- |
 | `size` | PDF, PNG, SVG | exported width within `tolerance_mm` of the target | fail, with the factor LaTeX would scale by; skip for a PNG without physical size |
-| `height` | PDF, PNG, SVG | height scaled to the target width at most `max_height_mm` | fail; skip when the size is unknown |
+| `height` | PDF, PNG, SVG | height scaled to the target width at most `max_height_mm`; a PNG without physical size is taken at its pixel aspect ratio | fail; skip for an SVG without a size |
 | `pages` | PDF | one page | warn |
-| `fonts` | PDF | every font embedded and subset, none of Type 3 | fail when a font is not embedded; warn for Type 3 or an unsubset font, fail for the latter under `require_subset`; info for live SVG text |
+| `fonts` | PDF | every font embedded and subset, none of Type 3 | fail when a font is not embedded; warn for Type 3 or an unsubset font, fail for the latter under `require_subset` (Type 3 fonts carry no subset tag and are exempt); info for live SVG text |
 | `text_size` | PDF | smallest text, scaled to the target width, at least `min_font_pt` | fail |
-| `raster` | PNG, PDF, SVG | PNG: pixel width over the target width at least `min_dpi`; PDF: every embedded image at least `min_dpi` once printed | fail for a PNG; warn for a PDF, and for any image embedded in an SVG |
+| `raster` | PNG, PDF, SVG | PNG: pixel width over the target width at least `min_dpi`; PDF: every embedded image at least `min_dpi` once printed, along its coarser axis | fail for a PNG; warn for a PDF, and for any image embedded in an SVG |
 | `vector` | PNG | no PDF or SVG of the same name in the directory | warn |
 | `colour` | PNG, PDF | information only: colour type and bit depth, colour spaces of embedded images | info |
 
@@ -66,18 +69,20 @@ parsed carries the single check `readable`, which fails.
 
 ## How sizes are read
 
-The width and height of a PDF are those of its first page as `pdfinfo` reports them. A PNG
-records a physical size only in its pHYs chunk, as pixels per metre; without it the width
-is unknown and only the resolution at the target width is checked. An SVG gives its size in
-the `width` and `height` attributes of the root element, in pt, px (0.75 pt), mm, cm or in,
-or else through the viewBox, taken in px.
+The width and height of a PDF are those of the CropBox of its first page as `pdfinfo`
+reports them, which is the box LaTeX includes, turned when the page carries a rotation of
+90° or 270°. A PNG records a physical size only in its pHYs chunk, as horizontal and
+vertical pixels per metre; without it the width is unknown and only the resolution at the
+target width is checked. An SVG gives its size in the `width` and `height` attributes of
+the root element, in pt, pc, px (0.75 pt), mm, cm or in. A missing one follows from the
+other and the aspect ratio of the viewBox; with neither, the viewBox is taken in px.
 
 Text sizes come from `pdftohtml -xml -zoom 3`, which lists every font size on a page scaled
-by the zoom. Dividing by the ratio of the reported page width to the true one gives the
-size in points; since the reported sizes are whole numbers, they are known to about
-0.2 pt, and the comparison with `min_font_pt` uses the value rounded to 0.1 pt. The
-resolution of an image embedded in a PDF is the one `pdfimages -list` reports for the page,
-divided by the scale factor. An SVG produced by Cairo or Makie draws glyphs as outlines;
+by the zoom. Dividing by the ratio of the reported page width to that of the MediaBox
+gives the size in points. The reported sizes are whole numbers, so a size is known to
+±0.17 pt and one that close to `min_font_pt` can fall on either side of it; the
+comparison uses the value rounded to 0.1 pt. The resolution of an image embedded in a PDF
+is the one `pdfimages -list` reports for the page, divided by the scale factor. An SVG produced by Cairo or Makie draws glyphs as outlines;
 only live `<text>` elements are counted, and their fonts depend on where the file is
 rendered.
 
@@ -107,4 +112,6 @@ and a vector sibling, a PNG without physical size, an SVG, a PDF that references
 Helvetica without embedding it, and two broken files. Cairo and Test are in the
 environment for this reason only; the tool itself loads neither. The suite checks the
 settings validation, the PNG, SVG and PDF readers, every check on these fixtures, the
-file collection, the report, the CSV and the command line.
+file collection, the report, the CSV and the command line. The parsers of the `pdffonts`
+and `pdfimages` tables are tested on literal output, page boxes and rotation on PDF
+files written by hand.

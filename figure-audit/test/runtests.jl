@@ -80,11 +80,16 @@ function png_chunk(type::AbstractString, data::Vector{UInt8})
     return vcat(be_bytes(UInt32(length(data))), body, be_bytes(crc32(body)))
 end
 
-# a pHYs chunk in pixels per metre, inserted right after the IHDR chunk
-function insert_phys!(path::AbstractString, pixels_per_metre::UInt32)
+# a pHYs chunk in pixels per metre, inserted right after the IHDR chunk; the vertical
+# value defaults to the horizontal one
+function insert_phys!(
+    path::AbstractString,
+    pixels_per_metre::UInt32,
+    vertical::UInt32 = pixels_per_metre,
+)
     bytes = read(path)
     String(bytes[13:16]) == "IHDR" || error("$path: IHDR is not the first chunk")
-    data = vcat(be_bytes(pixels_per_metre), be_bytes(pixels_per_metre), UInt8[1])
+    data = vcat(be_bytes(pixels_per_metre), be_bytes(vertical), UInt8[1])
     write(path, vcat(bytes[1:33], png_chunk("pHYs", data), bytes[34:end]))
     return path
 end
@@ -95,6 +100,26 @@ function minimal_png(path::AbstractString, colour_type::Integer)
     header = vcat(one_pixel, one_pixel, UInt8[8, colour_type, 0, 0, 0])
     bytes = vcat(PNG_SIGNATURE, png_chunk("IHDR", header), png_chunk("IEND", UInt8[]))
     write(path, bytes)
+    return path
+end
+
+# one page with a 10 pt line of Helvetica and no xref table; `extra` adds page entries
+function minimal_pdf(path; extra = "")
+    write(
+        path,
+        """
+        %PDF-1.4
+        1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+        2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+        3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 600 400] $extra /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+        4 0 obj << /Length 44 >> stream
+        BT /F1 10 Tf 100 100 Td (Ten point) Tj ET
+        endstream endobj
+        5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+        trailer << /Root 1 0 R /Size 6 >>
+        %%EOF
+        """,
+    )
     return path
 end
 
@@ -236,7 +261,7 @@ detail_of(report, check) = only(c.detail for c in report.checks if c.check == ch
             @test isapprox(single.width_pt / MM, 86; atol = 0.05)
             @test isapprox(single.height_pt / MM, 60; atol = 0.05)
             @test single.texts == 1
-            # unitless dimensions are px: a raw Cairo SVG of 86 pt-mm reads 0.75 times as wide
+            # unitless dimensions are px: a Cairo SVG drawn 86 mm wide reads 0.75 times as wide
             cairo = svg_info(read(fixture("cairo.svg"), String))
             @test isapprox(cairo.width_pt / MM, 0.75 * 86; atol = 0.05)
             @test isapprox(cairo.height_pt / MM, 0.75 * 60; atol = 0.05)
@@ -323,7 +348,7 @@ detail_of(report, check) = only(c.detail for c in report.checks if c.check == ch
             @test status_of(png, :colour) == :info
             @test detail_of(png, :colour) == "RGBA, 8 bit"
             small = audited("small.png", 178)
-            @test status_of(small, :size) == :skip && status_of(small, :height) == :skip
+            @test status_of(small, :size) == :skip && status_of(small, :height) == :pass
             @test status_of(small, :raster) == :fail
             @test detail_of(small, :raster) == "114 dpi at 178.0 mm (minimum 300)"
             svg = audited("single.svg", 86)
@@ -433,6 +458,116 @@ detail_of(report, check) = only(c.detail for c in report.checks if c.check == ch
                 io = IOBuffer(),
             )
             @test_throws "no figure given" main(String[]; io = IOBuffer())
+        end
+
+        @testset "Review fixes" begin
+            # a name longer than the padded column shifts every later column
+            fonts = parse_pdffonts(
+                """
+                name                                 type              encoding         emb sub uni object ID
+                ------------------------------------ ----------------- ---------------- --- --- --- ---------
+                WCQNES+NotoSerif-ExtraCondensedExtraLightItalic TrueType          WinAnsi          yes yes yes      7  0
+                ABCDEF+DejaVuSans                    CID TrueType      Identity-H       yes yes yes     10  0
+                Helvetica                            Type 1            WinAnsi          no  no  no       5  0
+                GHIJKL+Füßball                       Type 1C (OT)      Custom           yes yes no      12  0
+                [none]                               Type 3            Custom           yes no  no       9  0
+                """,
+            )
+            @test length(fonts) == 5
+            @test [f.name for f in fonts] == [
+                "WCQNES+NotoSerif-ExtraCondensedExtraLightItalic",
+                "ABCDEF+DejaVuSans",
+                "Helvetica",
+                "GHIJKL+Füßball",
+                "[none]",
+            ]
+            @test [f.type for f in fonts] == ["TrueType", "CID TrueType", "Type 1", "Type 1C (OT)", "Type 3"]
+            @test [f.embedded for f in fonts] == [true, true, false, true, true]
+            @test [f.subset for f in fonts] == [true, true, false, true, false]
+            @test_throws UnreadableFigure parse_pdffonts("no header here\n")
+
+            # an inline image prints one token as its object ID
+            images = parse_pdfimages(
+                """
+                page   num  type   width height color comp bpc  enc interp  object ID x-ppi y-ppi size ratio
+                --------------------------------------------------------------------------------------------
+                   1     0 image     600   400  rgb     3   8  image  no         8  0   150   151 1.2M  11%
+                   1     1 image      10    10  gray    1   8  image  no   [inline]     72   300   12B  12%
+                   1     2 smask     600   400  gray    1   8  image  no         9  0   150   150 300K  20%
+                """,
+            )
+            @test length(images) == 2
+            @test [(i.x_ppi, i.y_ppi) for i in images] == [(150.0, 151.0), (72.0, 300.0)]
+            @test_throws UnreadableFigure parse_pdfimages("")
+
+            mktempdir() do scratch
+                plain = minimal_pdf(joinpath(scratch, "plain.pdf"))
+                cropped = minimal_pdf(
+                    joinpath(scratch, "cropped.pdf");
+                    extra = "/CropBox [50 50 350 250]",
+                )
+                rotated =
+                    minimal_pdf(joinpath(scratch, "rotated.pdf"); extra = "/Rotate 90")
+                for (path, width_pt, height_pt) in
+                    ((plain, 600, 400), (cropped, 300, 200), (rotated, 400, 600))
+                    figure = read_figure(path, Val(:pdf))
+                    @test isapprox(figure.width_mm, width_pt * 25.4 / 72; atol = 0.01)
+                    @test isapprox(figure.height_mm, height_pt * 25.4 / 72; atol = 0.01)
+                    @test isapprox(only(figure.text_sizes), 10.0; atol = 0.2)
+                end
+            end
+
+            mktempdir() do scratch
+                bytes = read(fixture("fig.png"))
+                head = joinpath(scratch, "head.png")
+                write(head, bytes[1:38])
+                @test_throws UnreadableFigure png_info(head)
+                no_iend = joinpath(scratch, "no_iend.png")
+                write(no_iend, bytes[1:(end - 12)])
+                @test_throws UnreadableFigure png_info(no_iend)
+                anisotropic = joinpath(scratch, "anisotropic.png")
+                write_to_png(CairoRGBSurface(1000, 1500), anisotropic)
+                insert_phys!(anisotropic, UInt32(11811), UInt32(5906))
+                figure = read_figure(anisotropic, Val(:png))
+                @test isapprox(figure_width_mm(figure), 1000 / 11811 * 1000; atol = 0.01)
+                @test isapprox(figure_height_mm(figure), 1500 / 5906 * 1000; atol = 0.01)
+                tall_png = joinpath(scratch, "tall.png")
+                write_to_png(CairoRGBSurface(400, 1200), tall_png)
+                defaults = validate_settings(Dict{String, Any}())
+                # printed height 258 mm against 230 mm
+                tall = audit_figure(tall_png, defaults; target_mm = 86)
+                @test status_of(tall, :height) == :fail
+            end
+
+            partial = svg_info("<svg width=\"86mm\" viewBox=\"0 0 8600 6000\"/>")
+            @test partial.width_pt ≈ 86 * 72 / 25.4
+            @test partial.height_pt ≈ 86 * 72 / 25.4 * 6000 / 8600
+            pica = svg_info("<svg width=\"10pc\" height=\"5pc\"/>")
+            @test (pica.width_pt, pica.height_pt) == (120.0, 60.0)
+            degenerate = svg_info("<svg width=\"0mm\" height=\"0mm\"/>")
+            @test degenerate.width_pt === nothing && degenerate.height_pt === nothing
+            @test svg_info("<svg height=\"30mm\" viewBox=\"0 0 200 100\"/>").width_pt ≈
+                  60 * 72 / 25.4
+
+            subset = validate_settings(Dict("typography" => Dict("require_subset" => true)))
+            font_figure(font) =
+                PdfFigure("fonts.pdf", 1, 178.0, 100.0, "", [font], [9.0], PdfImage[])
+            type3 = font_figure(PdfFont("[none]", "Type 3", "Custom", true, false))
+            @test check_fonts(type3, subset, 178.0).status == :warn
+            arial = font_figure(PdfFont("Arial", "TrueType", "WinAnsi", true, false))
+            @test check_fonts(arial, subset, 178.0).status == :fail
+
+            mktempdir() do vacant
+                @test_throws ArgumentError main([vacant]; io = IOBuffer())
+            end
+            mktempdir() do scratch
+                csv = joinpath(scratch, "audit.csv")
+                write(csv, "kept\n")
+                written = main(["--csv", csv, fixture("double.pdf")]; io = IOBuffer())
+                @test read(csv, String) == "kept\n"
+                @test written.csv == joinpath(scratch, "audit#1.csv")
+                @test isfile(written.csv)
+            end
         end
     end
 end
