@@ -396,7 +396,8 @@ function parse_value(
             elseif name in MONTHS
                 push!(parts, name)
             else
-                # BibTeX warns and goes on with the name as the value
+                # BibTeX warns and leaves the field empty; the name is kept so that the
+                # field counts as present
                 push!(parts, name)
                 push!(undefined, (key, name, line_at(src, i)))
             end
@@ -576,17 +577,47 @@ const DOI_SYNTAX = r"^10\.\d{4,9}/\S+$"
 
 `value` without surrounding whitespace and without the resolver prefixes `doi.org/`,
 `www.doi.org/` and `dx.doi.org/`, each optionally preceded by `http://` or `https://`,
-and `doi:` (case-insensitive, repeated prefixes removed in turn). Other URLs are
-returned whole.
+and `doi:` (case-insensitive, repeated prefixes removed in turn). What follows a resolver
+prefix is percent-decoded. Other URLs are returned whole.
 """
 function bare_doi(value::AbstractString)
     doi = strip(value)
+    resolver = false
     while true
         m = match(DOI_PREFIX, doi)
         m === nothing && break
+        resolver |= occursin("doi.org/", lowercase(m.match))
         doi = lstrip(SubString(doi, ncodeunits(m.match) + 1))
     end
-    return String(doi)
+    # a DOI taken from a resolver URL may be percent-encoded
+    return resolver ? percent_decode(doi) : String(doi)
+end
+
+"""
+    percent_decode(text::AbstractString) -> String
+
+`text` with every `%XX` replaced by the byte of hexadecimal value XX; unchanged when the
+result is not valid UTF-8.
+"""
+function percent_decode(text::AbstractString)
+    occursin('%', text) || return String(text)
+    units = codeunits(text)
+    bytes = UInt8[]
+    i = 1
+    while i <= length(units)
+        if units[i] == UInt8('%') && i + 2 <= length(units)
+            byte = tryparse(UInt8, String(units[(i + 1):(i + 2)]); base = 16)
+            if byte !== nothing
+                push!(bytes, byte)
+                i += 3
+                continue
+            end
+        end
+        push!(bytes, units[i])
+        i += 1
+    end
+    decoded = String(bytes)
+    return isvalid(decoded) ? decoded : String(text)
 end
 
 # bytes of a DOI left unencoded in its URL besides ASCII letters and digits
@@ -1055,44 +1086,57 @@ end
 """
     unprotected_capitals(value::AbstractString) -> Vector{String}
 
-The distinct words that hold an uppercase letter at brace depth 0 or inside a special
-character (a brace group at depth 0 opening with a backslash, such as `{\\"O}`), which a
-bibliography style may lowercase. The first word of `value` and a word following one
-that ends in `:` are excepted, as `change.case\$` keeps their first letter.
+The distinct words that hold an uppercase letter which a bibliography style may
+lowercase: one at brace depth 0, or inside a special character (a brace group at depth 0
+opening with a backslash, such as `{\\"O}`), where the letters of control-sequence names
+do not count. `change.case\$` keeps the first character of the title and the first one
+after a colon followed by white space, so those two positions are excepted, not the rest
+of their words.
 """
 function unprotected_capitals(value::AbstractString)
     text = value * " "
     found = String[]
     depth = 0
     special = false
+    control = false
     word = Char[]
     flagged = false
-    exempt = true
+    kept = true
     for i in eachindex(text)
         c = text[i]
         if isspace(c)
+            control = false
             isempty(word) && continue
-            if flagged && !exempt
+            if flagged
                 w = String(strip(String(word), ['.', ',', ';', ':', '!', '?', '(', ')']))
                 w in found || push!(found, w)
             end
-            exempt = last(word) == ':'
+            kept = last(word) == ':'
             empty!(word)
             flagged = false
             continue
         end
+        keeps = kept && isempty(word)
+        isempty(word) && (kept = false)
         push!(word, c)
         if c == '{'
+            control = false
             if depth == 0
                 j = nextind(text, i)
                 special = j <= ncodeunits(text) && text[j] == '\\'
             end
             depth += 1
         elseif c == '}'
+            control = false
             depth = max(depth - 1, 0)
             depth == 0 && (special = false)
-        elseif (depth == 0 || special) && isuppercase(c)
-            flagged = true
+        elseif c == '\\'
+            control = true
+        elseif control && isletter(c)
+            # a letter of a control-sequence name
+        else
+            control = false
+            (depth == 0 || special) && isuppercase(c) && !keeps && (flagged = true)
         end
     end
     return found
@@ -1126,9 +1170,26 @@ function check_title_case(entries::Vector{BibEntry})
     return findings
 end
 
-# a hyphen, en dash or em dash between a digit and a page number with an optional
-# leading letter; "--" never matches
-const PAGE_DASH = r"(\d)(?:-|\x{2013}|\x{2014})(?=[A-Za-z]?\d)"
+# a hyphen between a digit and a page number with an optional leading letter; "--" never
+# matches
+const PAGE_DASH = r"(\d)-(?=[A-Za-z]?\d)"
+# an en dash (U+2013) or em dash (U+2014), written literally: Julia compiles its regexes
+# with ALT_BSUX, under which \x{2013} is not a code point
+const PAGE_LONG_DASH = r"\s*[–—]\s*"
+
+"""
+    corrected_pages(value::AbstractString) -> String
+
+`value` with its range dashes written `--`. A value that holds `--` is returned as it
+is. Where an en or em dash is the range separator only that dash is replaced, the single
+hyphens beside it belonging to section-page numbers such as `3-1`; otherwise a hyphen
+between two page numbers is.
+"""
+function corrected_pages(value::AbstractString)
+    occursin("--", value) && return String(value)
+    occursin(PAGE_LONG_DASH, value) && return replace(value, PAGE_LONG_DASH => "--")
+    return replace(value, PAGE_DASH => s"\1--")
+end
 
 """
     check_pages_dash(entries) -> Vector{Finding}
@@ -1141,8 +1202,8 @@ function check_pages_dash(entries::Vector{BibEntry})
     findings = Finding[]
     for entry in entries
         f = field_of(entry, "pages")
-        (f === nothing || occursin("--", f.value)) && continue
-        corrected = replace(f.value, PAGE_DASH => s"\1--")
+        f === nothing && continue
+        corrected = corrected_pages(f.value)
         corrected == f.value && continue
         push!(
             findings,
@@ -1233,7 +1294,8 @@ check_undefined_string(undefined::Vector{Tuple{String, String, Int}}) = [
     ) for (key, name, line) in undefined
 ]
 
-const CITE_COMMAND = r"\\([A-Za-z]*cite[A-Za-z]*)\*?(?:\[[^\]]*\]){0,2}\{([^}]*)\}"
+const CITE_COMMAND =
+    r"\\([A-Za-z]*cite[A-Za-z]*)\*?(?:\([^)]*\)){0,2}(?:\[[^\]]*\]){0,2}\{([^}]*)\}"
 # a further key group of a multi-citation command such as \cites
 const CITE_GROUP = r"\G(?:\[[^\]]*\]){0,2}\{([^}]*)\}"
 
@@ -1807,9 +1869,7 @@ function corrected_value(name::AbstractString, raw::AbstractString)
         (bare == strip(inner) || !occursin(DOI_SYNTAX, bare)) && return String(raw)
         return raw[1:1] * bare * raw[end:end]
     elseif name == "pages"
-        # single hyphens beside "--" belong to section-page numbers such as 3-1--3-15
-        occursin("--", raw) && return String(raw)
-        return replace(raw, PAGE_DASH => s"\1--")
+        return corrected_pages(raw)
     end
     return nothing
 end

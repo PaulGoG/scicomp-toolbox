@@ -638,12 +638,29 @@ end
         @test corrected_value("pages", "{1-3, 7-9}") == "{1--3, 7--9}"
         @test corrected_value("pages", "{12---15}") == "{12---15}"
         @test corrected_value("pages", "{061102}") == "{061102}"
+        # an en or em dash is the range separator; the hyphens beside it stay
+        @test corrected_value("pages", "{3-1–3-15}") == "{3-1--3-15}"
+        @test corrected_value("pages", "{3-1—3-15}") == "{3-1--3-15}"
+        @test corrected_value("pages", "{123–130}") == "{123--130}"
+        # a resolver URL may be percent-encoded
+        @test bare_doi("https://doi.org/10.1175/1520-0469(1979)036%3C0367:XX%3E2.0.CO;2") ==
+              "10.1175/1520-0469(1979)036<0367:XX>2.0.CO;2"
+        @test doi_url(bare_doi("https://doi.org/10.1/a%23b")) ==
+              "https://doi.org/10.1/a%23b"
+        # biblatex multicite with global notes
+        @test first(citation_keys("\\cites(See)()[p.~3]{a}{b}")) == Set(["a", "b"])
 
         # title capitals
         @test unprotected_capitals("Gravitational waves: Theory and data") == String[]
         @test unprotected_capitals("Tests of General relativity") == ["General"]
         @test unprotected_capitals("Tests of {G}eneral relativity") == String[]
         @test !isempty(unprotected_capitals("The {\\\"O}ffnung"))
+        # only the first character of the title and the one after ": " keep their case
+        @test unprotected_capitals("GW170817: Observation of gravitational waves") ==
+              ["GW170817"]
+        @test unprotected_capitals("Results: LIGO and Virgo") == ["LIGO", "Virgo"]
+        # the letters of a control-sequence name are not text
+        @test unprotected_capitals("Typesetting with {\\TeX} macros") == String[]
 
         # journal spellings
         journals = """

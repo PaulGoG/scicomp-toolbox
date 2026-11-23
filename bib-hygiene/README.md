@@ -49,14 +49,14 @@ run `bib-hygiene --tex . --strict` as a gate and stop on a non-zero status.
 | `duplicate_key` | error | a key already used by an earlier entry, compared case-insensitively |
 | `duplicate_entry` | warning | two entries with the same DOI or the same normalized title (letters and digits, at least 20 characters) |
 | `missing_field` | error | a field required by the standard BibTeX entry type (`author or editor` where either suffices; the biblatex names `journaltitle`, `date` and `institution` stand for `journal`, `year` and `school`) |
-| `doi_prefix` | warning | a DOI written as a doi.org URL or with `doi:` |
+| `doi_prefix` | warning | a DOI written as a doi.org URL (percent-encoded or not) or with `doi:` |
 | `doi_syntax` | error | a DOI that does not have the form `10.NNNN/suffix` |
 | `doi_missing` | warning | an article, inproceedings or incollection with neither a DOI nor an arXiv identifier |
 | `journal_spelling` | warning | one journal written in several ways, such as `Phys. Rev. D` and `Physical Review D` |
 | `non_ascii` | warning | characters above U+007F outside `url`, `doi`, `file` and `eprint` |
 | `unescaped` | warning | `&`, `%`, `#` or `_` without a backslash, outside `\url{}`, math, the identifier fields and `howpublished` |
-| `title_case` | warning | capitals in `title` not protected by braces, except in the first word and in the word after a colon (styles lower the case of the title, not of the booktitle) |
-| `pages_dash` | warning | a page range joined by `-`, an en dash or an em dash instead of `--`; a value that already holds `--` is left alone |
+| `title_case` | warning | capitals in `title` not protected by braces, except the first character of the title and the first after a colon (styles lower the case of the title, not of the booktitle) |
+| `pages_dash` | warning | a page range joined by `-`, an en dash or an em dash instead of `--`; a value that already holds `--` is left alone, and beside an en or em dash the hyphens belong to the page numbers |
 | `year` | error, warning | a year that is neither an integer nor `in press`, `forthcoming` or `submitted` (error); an integer outside [1500, next year] (warning) |
 | `duplicate_field` | warning | a field repeated within an entry; the first value is the one kept |
 | `undefined_string` | warning | a string macro used without an `@string` definition before it in the file; its name stands for the value |
