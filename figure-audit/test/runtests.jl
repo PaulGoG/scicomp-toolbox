@@ -103,15 +103,16 @@ function minimal_png(path::AbstractString, colour_type::Integer)
     return path
 end
 
-# one page with a 10 pt line of Helvetica and no xref table; `extra` adds page entries
-function minimal_pdf(path; extra = "")
+# one page with a 10 pt line of Helvetica and no xref table; `extra` adds page entries,
+# `media` is the MediaBox and `font` the font entry of the page resources
+function minimal_pdf(path; extra = "", media = "0 0 600 400", font = "5 0 R")
     write(
         path,
         """
         %PDF-1.4
         1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
-        3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 600 400] $extra /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+        3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [$media] $extra /Contents 4 0 R /Resources << /Font << /F1 $font >> >> >> endobj
         4 0 obj << /Length 44 >> stream
         BT /F1 10 Tf 100 100 Td (Ten point) Tj ET
         endstream endobj
@@ -499,6 +500,14 @@ detail_of(report, check) = only(c.detail for c in report.checks if c.check == ch
             @test length(images) == 2
             @test [(i.x_ppi, i.y_ppi) for i in images] == [(150.0, 151.0), (72.0, 300.0)]
             @test_throws UnreadableFigure parse_pdfimages("")
+            unreferenced = parse_pdffonts(
+                """
+                name                                 type              encoding         emb sub uni object ID
+                ------------------------------------ ----------------- ---------------- --- --- --- ---------
+                Helvetica                            Type 1            Custom           no  no  no  [none]
+                """,
+            )
+            @test only(unreferenced).name == "Helvetica" && !only(unreferenced).embedded
 
             mktempdir() do scratch
                 plain = minimal_pdf(joinpath(scratch, "plain.pdf"))
@@ -508,8 +517,28 @@ detail_of(report, check) = only(c.detail for c in report.checks if c.check == ch
                 )
                 rotated =
                     minimal_pdf(joinpath(scratch, "rotated.pdf"); extra = "/Rotate 90")
-                for (path, width_pt, height_pt) in
-                    ((plain, 600, 400), (cropped, 300, 200), (rotated, 400, 600))
+                # a CropBox of 300 × 200 pt turned by the rotation; a MediaBox whose
+                # origin is not zero; a font written into the page resources, which
+                # pdffonts lists with the object ID [none]
+                both = minimal_pdf(
+                    joinpath(scratch, "both.pdf");
+                    extra = "/CropBox [50 50 350 250] /Rotate 90",
+                )
+                shifted =
+                    minimal_pdf(joinpath(scratch, "shifted.pdf"); media = "100 100 700 500")
+                direct = minimal_pdf(
+                    joinpath(scratch, "direct.pdf");
+                    font = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+                )
+                @test only(read_figure(direct, Val(:pdf)).fonts).name == "Helvetica"
+                for (path, width_pt, height_pt) in (
+                    (plain, 600, 400),
+                    (cropped, 300, 200),
+                    (rotated, 400, 600),
+                    (both, 200, 300),
+                    (shifted, 600, 400),
+                    (direct, 600, 400),
+                )
                     figure = read_figure(path, Val(:pdf))
                     @test isapprox(figure.width_mm, width_pt * 25.4 / 72; atol = 0.01)
                     @test isapprox(figure.height_mm, height_pt * 25.4 / 72; atol = 0.01)

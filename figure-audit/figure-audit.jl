@@ -306,9 +306,10 @@ function pdf_info(path::AbstractString)
     )
 end
 
-# name, type, encoding, emb, sub, uni, object number and generation of a pdffonts row
+# name, type, encoding, emb, sub, uni and object ID of a pdffonts row; the ID is a number
+# and a generation, or [none] for a font that is not an indirect object
 const PDFFONTS_ROW =
-    r"^(.*?)\s+((?:CID )?(?:Type 1C?|Type 3|TrueType|Type 0C?)(?: \(OT\))?|unknown)\s+(\S+)\s+(yes|no)\s+(yes|no)\s+(yes|no)\s+\d+\s+\d+\s*$"
+    r"^(.*?)\s+((?:CID )?(?:Type 1C?|Type 3|TrueType|Type 0C?)(?: \(OT\))?|unknown)\s+(\S+)\s+(yes|no)\s+(yes|no)\s+(yes|no)\s+(?:\d+\s+\d+|\[none\])\s*$"
 
 """
     parse_pdffonts(text::AbstractString) -> Vector{PdfFont}
