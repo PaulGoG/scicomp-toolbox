@@ -1,6 +1,6 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.13.3"
+julia_version = "1.13.4"
 manifest_format = "2.1"
 project_hash = "c63247465dacd37afb7b5c775152df20acb4f769"
 
@@ -32,10 +32,10 @@ version = "1.0.7"
 
 [[deps.HTTP]]
 deps = ["Base64", "CodecZlib", "Dates", "EnumX", "Logging", "PrecompileTools", "Random", "Reseau", "SHA", "TranscodingStreams", "URIs", "UUIDs", "Zlib_jll"]
-git-tree-sha1 = "f756cc1b518604435938ebca5dddf08c4921ea50"
+git-tree-sha1 = "48d59dc5887b523cc3c6d388f3ce79e51b67cc48"
 registries = "General"
 uuid = "cd3eb016-35fb-5094-929b-558a96fad6f3"
-version = "2.14.1"
+version = "2.16.0"
 
 [[deps.InteractiveUtils]]
 deps = ["Markdown"]
