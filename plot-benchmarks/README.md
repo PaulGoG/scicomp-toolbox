@@ -40,22 +40,23 @@ Existing files are never overwritten (`#1`, `#2`, ... suffixes).
 
 **Thread scaling.** Two stacked panels sharing the thread axis (log₂): speedup
 S(p) = T₁/T_p with the dashed ideal S = p, and parallel efficiency E(p) = S(p)/p with
-the dashed 100 % reference. One series per problem size; hollow markers mark thread
-counts above the physical core count when the dataset was produced with
-`thread_sweep_ceiling = "logical"`.
+the dashed 100 % reference. One series per problem size, each with its own colour and
+marker; hollow markers mark thread counts above the physical core count when the dataset
+was produced with `thread_sweep_ceiling = "logical"`.
 
 **Throughput per element type.** One panel per device (CPU first, then accelerators) at
 the largest measured problem size unless `--size` is given. Bars, one per engine and
 element type, carry their value in GOP/s (10⁹ operations per second; an operation is a
 flop for floating-point types) on a logarithmic axis. On the CPU the library engine is
-shown at its largest thread count within the physical cores; failed and skipped points
-are absent.
+shown, per element type, at its largest thread count within the physical cores; failed
+and skipped points are absent.
 
 **Accelerators across machines** (`--compare`). Three stacked panels sharing the
 element-type axis: the throughput of the library engine, the throughput of the tiled
 KernelAbstractions kernel, and their ratio against a parity line, one series per
 accelerator of the compared datasets. The two throughput panels share their limits, so
-the vertical offset of a series between them is the gap between the two engines. Hollow
+the vertical offset of a series between them is the gap between the two engines; the
+ratio axis is symmetric about parity. Hollow
 markers in the library panel mark the element types the device has no vendor GEMM for,
 which `mul!` serves from the generic GPUArrays path. A type a device could not measure
 leaves a gap in its line; past the seven hues of the palette the marker and the line
@@ -69,7 +70,8 @@ Each comparison figure is drawn at the largest problem size measured in every co
 dataset that holds rows for it (accelerator rows for the first, thread-sweep rows for the
 second), unless `--size` is given. Datasets are pooled by device: a processor or
 accelerator that appears in several of them contributes one series, taken from the first
-dataset that carries it.
+dataset that carries it. Datasets written before HardwareDiagnostics 0.4.0, which have no
+`stage` column, pool with later ones.
 
 Exports are sized at the configured printed width (178 mm double column by default), at
 one point per unit for PDF and SVG and at `px_per_unit` pixels per point for PNG.
@@ -85,9 +87,9 @@ comparison_directory = "../reference-runs"  # path; relative to this tool; searc
 
 [figures]
 format = "pdf"  # one of: "pdf" | "png" | "svg"
-width_mm = 178.0  # float in [60, 300]; printed figure width (double column 178 to 183 mm)
-px_per_unit = 5  # integer >= 1; raster export only (5 gives about 360 dpi at 178 mm)
-fontsize_pt = 9.0  # float in [6, 14]
+width_mm = 178.0  # float in [60, 300] [mm]; printed figure width
+px_per_unit = 5  # integer >= 1 [px/pt]; raster export only (72 dpi per unit)
+fontsize_pt = 9.0  # float in [6, 14] [pt]; base font size
 output_directory = "plots"  # path; relative to this tool
 ```
 

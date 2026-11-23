@@ -419,4 +419,83 @@ end
             @test main(["--help"]) == String[]
         end
     end
+
+    @testset "Review fixes" begin
+        settings = load_settings(joinpath(TOOL_DIR, "config.toml"))
+
+        # a dataset with a stage column pooled with one written without it
+        labelled = synthetic_dataset()
+        labelled.stage = map(eachrow(labelled)) do row
+            row.device_type == "GPU" && return "accelerator"
+            return ismissing(row.speedup_vs_1t) ? "element_types" : "thread_sweep"
+        end
+        earlier = second_dataset()
+        mixed = DataFrame[labelled, earlier]
+        pooled = pooled_devices(mixed, 512, "CPU")
+        from_earlier = pooled.device_name .== "Other(R) Mock CPU @ 3.00GHz"
+        @test nrow(pooled) ==
+              nrow(pooled_devices(DataFrame[labelled], 512, "CPU")) +
+              nrow(pooled_devices(DataFrame[earlier], 512, "CPU"))
+        @test any(from_earlier) && !all(from_earlier)
+        @test all(ismissing, pooled.stage[from_earlier])
+        @test !any(ismissing, pooled.stage[.!from_earlier])
+        # rows without a stage fall back on the speedup rule
+        @test count(is_sweep_row, eachrow(pooled[from_earlier, :])) ==
+              count(is_sweep_row, eachrow(pooled_devices(DataFrame[earlier], 512, "CPU")))
+        @test accelerator_comparison_figure(mixed, settings) isa Figure
+        @test host_comparison_figure(mixed, settings) isa Figure
+
+        # element-type stage at one thread and above the physical cores; the sweep reaches
+        # the physical count for Float32 only
+        base = synthetic_dataset()
+        sweep = base[is_sweep_row.(eachrow(base)), :]
+        element = base[
+            (base.device_type .== "CPU") .& (base.engine .== "blas") .& (base.status .== "ok") .& ismissing.(
+                base.speedup_vs_1t,
+            ),
+            :,
+        ]
+        at_one = copy(element)
+        at_one.blas_threads .= 1
+        at_one.exceeds_physical_cores .= false
+        above = copy(element)
+        above.blas_threads .= 12
+        above.exceeds_physical_cores .= true
+        swept = vcat(sweep, at_one, above)
+        rows = throughput_rows(swept, 512)
+        library = rows[(rows.device_type .== "CPU") .& (rows.engine .== "blas"), :]
+        @test sort(String.(library.data_type)) == ["Float32", "Float64", "Int32"]
+        @test only(library[library.data_type .== "Float32", :blas_threads]) == 8
+        @test all(library[library.data_type .!= "Float32", :blas_threads] .== 1)
+
+        # markers follow the series, not the palette cycle
+        @test series_style(1).marker == :circle
+        @test series_style(2).marker == :rect
+        @test series_style(9).marker == :circle
+        @test length(unique(series_style(k).marker for k in 1:8)) == 8
+
+        # configuration
+        @test_throws ArgumentError("[figures] must be a table") validate_settings(
+            Dict("figures" => "x"),
+        )
+        @test_throws ArgumentError validate_settings(
+            Dict("figures" => Dict("px_per_unit" => true)),
+        )
+        @test_throws "px_per_unit" validate_settings(
+            Dict("figures" => Dict("px_per_unit" => true)),
+        )
+        mktempdir() do dir
+            broken = joinpath(dir, "broken.toml")
+            write(broken, "[figures\n")
+            @test_throws ArgumentError load_settings(broken)
+            @test_throws broken load_settings(broken)
+        end
+
+        # ratio-panel limits symmetric about parity on the logarithmic axis
+        r = 10^(1.1 * log10(5))
+        low, high = ratio_limits([0.2, 0.25])
+        @test low ≈ 1 / r
+        @test high ≈ r
+        @test ratio_limits([1.1]) == (0.5, 2.0)
+    end
 end

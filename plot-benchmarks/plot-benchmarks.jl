@@ -8,9 +8,7 @@
 #                                [--size N] [--px-per-unit N] [--config PATH]
 #   julia run.jl plot-benchmarks --compare [DIR] [options]
 
-using Pkg
-Pkg.activate(@__DIR__; io = devnull)
-Pkg.instantiate(; io = devnull)
+include(joinpath(@__DIR__, "activate.jl"))
 
 using CSV: CSV
 using CairoMakie
@@ -95,21 +93,56 @@ function reject_unknown_keys(table::AbstractDict, known, context::String)
 end
 
 """
+    settings_table(raw::AbstractDict, name::String, known) -> AbstractDict
+
+The `[name]` table of the parsed configuration, empty when absent; fails when the entry is
+not a table or holds a key outside `known`.
+"""
+function settings_table(raw::AbstractDict, name::String, known)
+    table = get(raw, name, Dict{String, Any}())
+    table isa AbstractDict || throw(ArgumentError("[$name] must be a table"))
+    reject_unknown_keys(table, known, name)
+    return table
+end
+
+"""
+    parse_toml_file(path::AbstractString) -> Dict{String, Any}
+
+`TOML.parsefile` with syntax errors turned into an `ArgumentError` naming `path`.
+"""
+function parse_toml_file(path::AbstractString)
+    try
+        return TOML.parsefile(path)
+    catch err
+        err isa TOML.ParserError || rethrow()
+        throw(ArgumentError("$path: $(sprint(showerror, err))"))
+    end
+end
+
+"""
     load_settings(path::AbstractString) -> FigureSettings
 
-Parse and validate the configuration file; fails with an `ArgumentError` naming the key.
+Parse and validate the configuration file; fails with an `ArgumentError` naming the key,
+or the file when it does not parse.
 """
 function load_settings(path::AbstractString)
     isfile(path) || throw(ArgumentError("configuration file not found: $path"))
-    raw = TOML.parsefile(path)
+    return validate_settings(parse_toml_file(path))
+end
+
+"""
+    validate_settings(raw::AbstractDict) -> FigureSettings
+
+Validate a parsed configuration; fails with an `ArgumentError` naming the key. Booleans
+are rejected where a number is expected, although Julia counts `Bool` as an integer.
+"""
+function validate_settings(raw::AbstractDict)
     reject_unknown_keys(raw, ("input", "figures"), "top level")
-    input = get(raw, "input", Dict{String, Any}())
-    figures = get(raw, "figures", Dict{String, Any}())
-    reject_unknown_keys(input, ("dataset_directory", "comparison_directory"), "input")
-    reject_unknown_keys(
-        figures,
-        ("format", "width_mm", "px_per_unit", "fontsize_pt", "output_directory"),
+    input = settings_table(raw, "input", ("dataset_directory", "comparison_directory"))
+    figures = settings_table(
+        raw,
         "figures",
+        ("format", "width_mm", "px_per_unit", "fontsize_pt", "output_directory"),
     )
 
     dataset_directory = get(input, "dataset_directory", "../hardware-diagnostics/data")
@@ -125,17 +158,17 @@ function load_settings(path::AbstractString)
         ),
     )
     width_mm = get(figures, "width_mm", 178.0)
-    (width_mm isa Real && 60 <= width_mm <= 300) || throw(
+    (width_mm isa Real && !(width_mm isa Bool) && 60 <= width_mm <= 300) || throw(
         ArgumentError("[figures].width_mm must be in [60, 300], got $(repr(width_mm))"),
     )
     px_per_unit = get(figures, "px_per_unit", 5)
-    (px_per_unit isa Integer && px_per_unit >= 1) || throw(
+    (px_per_unit isa Integer && !(px_per_unit isa Bool) && px_per_unit >= 1) || throw(
         ArgumentError(
             "[figures].px_per_unit must be an integer >= 1, got $(repr(px_per_unit))",
         ),
     )
     fontsize_pt = get(figures, "fontsize_pt", 9.0)
-    (fontsize_pt isa Real && 6 <= fontsize_pt <= 14) || throw(
+    (fontsize_pt isa Real && !(fontsize_pt isa Bool) && 6 <= fontsize_pt <= 14) || throw(
         ArgumentError("[figures].fontsize_pt must be in [6, 14], got $(repr(fontsize_pt))"),
     )
     output_directory = get(figures, "output_directory", "plots")
@@ -314,11 +347,12 @@ drop_vendor(name::AbstractString) = replace(String(name), r"^(?:NVIDIA|AMD|Intel
     in_sweep_stage(row) -> Bool
 
 Whether a dataset row belongs to the CPU thread sweep. Datasets that carry a `stage`
-column say so directly; in earlier datasets the sweep rows are the CPU library rows with
-a speedup, which the element-type rows never carry.
+column say so directly; in earlier datasets, and in their rows pooled with later ones
+(`stage` missing), the sweep rows are the CPU library rows with a speedup, which the
+element-type rows never carry.
 """
 in_sweep_stage(row) =
-    hasproperty(row, :stage) ? row.stage == "thread_sweep" :
+    hasproperty(row, :stage) && !ismissing(row.stage) ? row.stage == "thread_sweep" :
     row.device_type == "CPU" &&
     row.engine == REFERENCE_ENGINE &&
     !ismissing(row.speedup_vs_1t)
@@ -373,6 +407,15 @@ function scaling_figure(
     linkxaxes!(ax_speedup, ax_efficiency)
     hidexdecorations!(ax_speedup; grid = false, ticks = false)
 
+    # references first, so that the data lie on top of them
+    lines!(
+        ax_speedup,
+        ideal_scaling(maximum(counts))...;
+        color = :grey35,
+        linestyle = :dash,
+        linewidth = 0.9,
+    )
+    hlines!(ax_efficiency, [100.0]; color = :grey35, linestyle = :dash, linewidth = 0.9)
     max_speedup = 1.0
     hollow = false
     elements = Any[]
@@ -404,14 +447,6 @@ function scaling_figure(
         )
         push!(legend_labels, label)
     end
-    lines!(
-        ax_speedup,
-        ideal_scaling(maximum(counts))...;
-        color = :grey35,
-        linestyle = :dash,
-        linewidth = 0.9,
-    )
-    hlines!(ax_efficiency, [100.0]; color = :grey35, linestyle = :dash, linewidth = 0.9)
     push!(elements, LineElement(; color = :grey35, linestyle = :dash, linewidth = 0.9))
     push!(legend_labels, L"Ideal ($S = p$, $E = 100$ \%)")
     if hollow
@@ -482,20 +517,28 @@ end
     throughput_rows(df::DataFrame, N::Integer) -> DataFrame
 
 Measured points at problem size `N`: every engine on accelerators; on the CPU the kernel
-engines and the library engine at its largest thread count within the physical cores
-(the largest count overall when every count exceeds them). A library row of the
-element-type stage supersedes the sweep row of the same element type.
+engines and, per element type, the library engine at its largest thread count within the
+physical cores (the largest count overall when every count exceeds them). A library row
+of the element-type stage supersedes the sweep row of the same element type.
 """
 function throughput_rows(df::DataFrame, N::Integer)
     ok = df[(df.status .== "ok") .& (df.matrix_dim .== N), :]
     cpu_blas = ok[(ok.device_type .== "CPU") .& (ok.engine .== "blas"), :]
-    within = cpu_blas[.!cpu_blas.exceeds_physical_cores, :]
-    pool = nrow(within) == 0 ? cpu_blas : within
-    max_threads = nrow(pool) == 0 ? 0 : maximum(skipmissing(pool.blas_threads))
+    max_threads = Dict{String, Int}()
+    for type in unique(cpu_blas.data_type)
+        of_type = cpu_blas[cpu_blas.data_type .== type, :]
+        within = of_type[.!of_type.exceeds_physical_cores, :]
+        pool = nrow(within) == 0 ? of_type : within
+        counts = collect(skipmissing(pool.blas_threads))
+        isempty(counts) || (max_threads[String(type)] = maximum(counts))
+    end
     keep = map(eachrow(ok)) do row
         row.device_type != "CPU" ||
             row.engine != "blas" ||
-            (!ismissing(row.blas_threads) && row.blas_threads == max_threads)
+            (
+                !ismissing(row.blas_threads) &&
+                row.blas_threads == get(max_threads, String(row.data_type), 0)
+            )
     end
     rows = ok[keep, :]
     # the element-type stage remeasures the top thread count; its row supersedes the
@@ -682,7 +725,9 @@ end
 
 Measured rows at size `N` of every dataset, restricted to `device_type`. A device is
 identified by its backend and name and is taken from the first dataset that carries it,
-so the same processor benchmarked on two machines contributes one series.
+so the same processor benchmarked on two machines contributes one series. Columns absent
+from a dataset, such as `stage` in those written before HardwareDiagnostics 0.4.0, are
+`missing` in its rows.
 """
 function pooled_devices(frames::Vector{DataFrame}, N::Integer, device_type::AbstractString)
     parts = DataFrame[]
@@ -701,7 +746,7 @@ function pooled_devices(frames::Vector{DataFrame}, N::Integer, device_type::Abst
             )
         end
     end
-    return isempty(parts) ? DataFrame() : reduce(vcat, parts)
+    return isempty(parts) ? DataFrame() : reduce(vcat, parts; cols = :union)
 end
 
 """
@@ -716,30 +761,42 @@ function log_limits(values; bottom::Real = 0.06, top::Real = 0.18)
     return (10.0^(log10(low) - bottom * span), 10.0^(log10(high) + top * span))
 end
 
+"""
+    ratio_limits(ratios) -> Tuple{Float64, Float64}
+
+Limits `(1 / r, r)` of a logarithmic ratio axis, symmetric about parity, with
+`r = 10^(1.1 max |log₁₀ ratio|)` and at least 2, so that the farthest ratio keeps a 10 %
+margin on the logarithmic scale. Without ratios, `r = 2`.
+"""
+function ratio_limits(ratios)
+    r = isempty(ratios) ? 2.0 : max(2.0, 10.0^(1.1 * maximum(abs, log10.(ratios))))
+    return (1 / r, r)
+end
+
 is_generic_library(library) = occursin("generic", lowercase(String(library)))
 
 """
-Markers and line styles that separate series once the colour palette wraps. The Okabe-Ito
-palette carries seven hues, so a set of more than seven devices would otherwise draw two
-of them identically.
+Markers that separate series independently of their hue, one per series, and line styles
+that change each time the seven-hue Okabe-Ito palette wraps.
 """
-const SERIES_MARKERS = (:circle, :rect, :utriangle)
+const SERIES_MARKERS =
+    (:circle, :rect, :utriangle, :diamond, :dtriangle, :pentagon, :hexagon, :star5)
 const SERIES_LINESTYLES = (:solid, :dash, :dot)
 
 """
     series_style(k::Integer) -> NamedTuple
 
-Colour, marker and line style of the `k`-th series. The first seven keep the palette
-order with a solid line and a round marker; beyond that the hue repeats but the marker
-and the line style change, so every series stays distinct and the figure survives
-grayscale.
+Colour, marker and line style of the `k`-th series. The colour follows the palette order
+and the marker the eight shapes of `SERIES_MARKERS`, both cyclically, so neighbouring
+series never differ by hue alone and the figure survives greyscale. The line style is
+solid for the first seven series and changes each time the palette wraps.
 """
 function series_style(k::Integer)
     colors = Makie.wong_colors()
     cycle = fld1(k, length(colors))
     return (
         color = colors[mod1(k, length(colors))],
-        marker = SERIES_MARKERS[mod1(cycle, length(SERIES_MARKERS))],
+        marker = SERIES_MARKERS[mod1(k, length(SERIES_MARKERS))],
         linestyle = SERIES_LINESTYLES[mod1(cycle, length(SERIES_LINESTYLES))],
     )
 end
@@ -867,6 +924,8 @@ function accelerator_comparison_figure(
         xticks = ticks,
     )
 
+    # the parity line first, so that the ratios lie on top of it
+    hlines!(ax_ratio, [1.0]; color = :grey35, linestyle = :dash, linewidth = 0.9)
     throughputs = Float64[]
     ratios = Float64[]
     backends = unique(String[String(key[2]) for key in devices])
@@ -921,7 +980,6 @@ function accelerator_comparison_figure(
     end
     isempty(throughputs) && return nothing
 
-    hlines!(ax_ratio, [1.0]; color = :grey35, linestyle = :dash, linewidth = 0.9)
     text!(
         ax_ratio,
         0.58,
@@ -955,14 +1013,9 @@ function accelerator_comparison_figure(
         ylims!(ax, limits...)
         hidexdecorations!(ax; grid = false, ticks = false)
     end
-    if isempty(ratios)
-        ax_ratio.yticks = log_ticks(0.5, 2.0)
-        ylims!(ax_ratio, 0.5, 2.0)
-    else
-        ratio_limits = log_limits(ratios; bottom = 0.10, top = 0.16)
-        ax_ratio.yticks = log_ticks(ratio_limits...)
-        ylims!(ax_ratio, ratio_limits...)
-    end
+    low, high = ratio_limits(ratios)
+    ax_ratio.yticks = log_ticks(low, high)
+    ylims!(ax_ratio, low, high)
     for ax in (ax_library, ax_portable, ax_ratio)
         xlims!(ax, 0.5, length(types) + 0.5)
     end
@@ -1021,7 +1074,7 @@ function host_comparison_figure(
         key => sort(rows[device_key.(eachrow(rows)) .== Ref(key), :], :blas_threads) for
         key in devices
     )
-    # descending sweep ceiling, which orders the hosts by the parallelism they expose
+    # descending sweep ceiling: hosts ordered by the parallelism they expose
     sort!(devices; by = key -> (-maximum(panels[key].blas_threads), key[3]))
     T = join(unique(String.(rows.data_type)), ", ")
     return scaling_figure(
@@ -1037,8 +1090,7 @@ end
 """
     safe_filepath(path) -> String
 
-`path` when free, otherwise `stem#1.ext`, `stem#2.ext`, ... so that figures are never
-overwritten.
+`path` when free, otherwise `stem#1.ext`, `stem#2.ext`, ...
 """
 function safe_filepath(path::AbstractString)
     isfile(path) || return String(path)
@@ -1238,7 +1290,7 @@ function main(args::Vector{String} = ARGS)
         elseif argument == "--compare"
             compare = true
             # the directory is optional; the next token is one unless it is another flag
-            if i < length(args) && !startswith(args[i + 1], "--")
+            if i < length(args) && !startswith(args[i + 1], "-")
                 compare_dir = value_of(argument)
             end
         elseif argument == "--config"
