@@ -35,8 +35,8 @@ end
 
 Number of physical cores and the source of the figure. On Linux each online logical CPU
 under `cpu_root` lists the logical CPUs of its core in `topology/core_cpus_list`
-(`thread_siblings_list` before kernel 5.3), and the distinct lists are counted, which
-holds on x86 and arm64 alike. Elsewhere, or without that topology, the logical thread
+(`thread_siblings_list` before kernel 5.3), and the distinct lists are counted (valid
+on x86 and arm64). Elsewhere, or without that topology, the logical thread
 count is returned and the source string says so.
 """
 function physical_core_count(cpu_root::AbstractString = "/sys/devices/system/cpu")

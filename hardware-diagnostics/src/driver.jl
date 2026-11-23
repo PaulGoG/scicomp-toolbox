@@ -142,7 +142,9 @@ accelerator benchmark stages, with the CSV dataset and TOML sidecar in the outpu
 directory (relative paths resolve against `base_dir`). The TOML sidecar is written
 before the stages and the CSV dataset grows by one row per completed point, so an
 interrupted run keeps its provenance and its measured points. Report lines go to the
-console and, when enabled, to a log file free of terminal escape sequences.
+console and, when enabled, to a log file free of terminal escape sequences. Throws
+`ArgumentError` before any file is created when the plan is empty (host disabled, no
+functional accelerator).
 """
 function run_diagnostics(
     config::BenchmarkConfig;
@@ -150,6 +152,14 @@ function run_diagnostics(
     loaded_backends::AbstractVector{Symbol} = Symbol[],
 )
     host = host_info(; record_hostname = config.record_hostname)
+    devices = discover_accelerators(config.gpu_backend)
+    plan = benchmark_plan(config, host, devices)
+    isempty(plan) && throw(
+        ArgumentError(
+            "nothing to benchmark: the host is disabled and no functional accelerator was found",
+        ),
+    )
+
     output_dir =
         isabspath(config.output_directory) ? config.output_directory :
         normpath(joinpath(base_dir, config.output_directory))
@@ -158,18 +168,17 @@ function run_diagnostics(
     log_path = safe_filepath(joinpath(output_dir, "hardware_benchmark_$stamp.log"))
     csv_path = safe_filepath(joinpath(output_dir, "hardware_benchmark_$stamp.csv"))
     toml_path = safe_filepath(joinpath(output_dir, "hardware_benchmark_$stamp.toml"))
-    log_io = config.log_to_file ? open(log_path, "w") : nothing
-    sinks = IO[stdout]
-    log_io === nothing || push!(sinks, log_io)
-
-    devices = discover_accelerators(config.gpu_backend)
-    plan = benchmark_plan(config, host, devices)
-    reporter = Reporter(sinks; total = length(plan))
+    log_io = nothing
+    reporter = Reporter(IO[stdout]; total = length(plan))
     records = BenchmarkRecord[]
     wall_start = time()
     writer = nothing
     written = Ref(0)
     try
+        if config.log_to_file
+            log_io = open(log_path, "w")
+            push!(reporter.sinks, log_io)
+        end
         emit(reporter, rstrip(sprint(print_host_report, host)))
         emit(reporter, "")
         emit(
@@ -240,7 +249,6 @@ function run_diagnostics(
             run_verification(config, backends, reporter)
         end
         append!(records, run_benchmark_plan(plan, config, host, reporter; on_record))
-        finish!(reporter)
 
         measured = count(record -> record.status == "ok", records)
         emit(reporter, "")

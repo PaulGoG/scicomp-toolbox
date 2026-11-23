@@ -57,14 +57,16 @@ reference run on the same operands of size `verification_size` for every element
 every device, and each kernel result is compared with the reference entry by entry. In
 the standard model of floating-point arithmetic each result lies within
 γₘ·|A|(|B| + |C|) of the exact D, with γₘ = mu/(1 − mu), m = 2N + 2 and u the unit
-roundoff of T, and within √2 times that for complex types (Higham 2002, §3.1 and §3.6,
-doi:[10.1137/1.9780898718027](https://doi.org/10.1137/1.9780898718027)); the bound holds
-for any summation order and with fused multiply-adds. Two correct results therefore
+roundoff of T. For complex types m = 4N + 2 and the bound carries a factor √2: a complex
+product puts two real products into each component, and a library kernel may accumulate
+the components separately with fused multiply-adds (Higham 2002, §3.1 and §3.6,
+doi:[10.1137/1.9780898718027](https://doi.org/10.1137/1.9780898718027)). With these
+constants the bound holds for any summation order. Two correct results therefore
 differ by at most twice the bound, and the log reports the largest deviation as a
 fraction of it; integers must agree exactly. A deviation above the bound aborts the run.
 The bound is a worst case. Observed deviations are about 1 % of it at N = 72, and for
 `Float16` it is comparable to the entries of D themselves, so there the check detects
-only gross errors. No bound of this form exists once (2N + 2)·u ≥ 1, which limits
+only gross errors. No bound of this form exists once m·u ≥ 1, which limits
 `verification_size` to 1022 when `Float16` is configured. Element types the library
 cannot multiply on a device are reported as unverifiable and fail as individual points.
 The default `verification_size = 72` is not a multiple of the 16 × 16 tile, so the
@@ -145,7 +147,10 @@ verification passed on every device: 158 comparisons, none failed. All five elem
 were covered except `Float64` on Metal, which carries no double precision; a `Float64`
 point there fails with the framework's own message and the remaining stages continue.
 The datasets are in `reference-runs/`, whose README records the hardware, the
-configuration and the outcome of each run.
+configuration and the outcome of each run. These runs were made with version 0.3. Since
+the restructuring of 0.4.0 the package has run on the host and on the Intel Arc GPU; the
+CUDA and AMDGPU extensions have been loaded and checked statically, and the Metal
+extension has not been loaded.
 
 Which element types reach the vendor library depends on the backend, so
 `vendor_blas_types` is a method the extensions override. The BLAS-class
@@ -163,7 +168,7 @@ julia run.jl hardware-diagnostics --sizes 512,1024,2048 --types Float32,Float64 
 julia run.jl hardware-diagnostics --threads-ceiling logical    # expose hyper-thread oversubscription
 julia run.jl hardware-diagnostics --min-time 2 --max-samples 100 --seed 1
 julia run.jl hardware-diagnostics --config other.toml --out-dir /scratch/runs --no-hostname
-julia --project=hardware-diagnostics hardware-diagnostics/hardware-diagnostics.jl --quick   # without the dispatcher
+julia hardware-diagnostics/hardware-diagnostics.jl --quick    # without the dispatcher
 ```
 
 Presets set the problem sizes only (`--quick`: 512, 1024; `--standard`: 1024, 2048;
@@ -178,13 +183,13 @@ the command-line options apply on top. Unknown keys are rejected.
 ```toml
 [benchmark]
 engines = ["blas", "ka", "ka_tiled"]  # non-empty subset of: "blas" | "ka" | "ka_tiled"
-problem_sizes = [1024, 2048]  # positive integers, N of the N × N operands; CLI presets replace this list
+problem_sizes = [1024, 2048]  # positive integers, N of the N × N operands
 target_types = ["Float16", "Float32", "Float64", "Int32", "Int64"]  # subset of: Float16 | Float32 | Float64 | ComplexF32 | ComplexF64 | Int16 | Int32 | Int64
 seed = 20260907  # integer >= 0; seeds the operand generator
 
 [sampling]
 min_sampling_time_s = 0.5  # float > 0 [s]; sampling continues until this budget and min_samples are both met
-min_samples = 3  # integer >= 1
+min_samples = 3  # integer in [1, 10000]
 max_samples = 30  # integer in [min_samples, 10000]
 max_point_seconds = 60.0  # float > 0 [s]; a point predicted above this per evaluation is skipped; also caps the sampling time of a point, overriding min_samples
 
@@ -192,8 +197,8 @@ max_point_seconds = 60.0  # float > 0 [s]; a point predicted above this per eval
 run_cpu = true  # boolean
 gpu_backend = "auto"  # one of: "none" | "auto" | "oneapi" | "cuda" | "amdgpu" | "metal"
 thread_sweep_ceiling = "physical"  # one of: "physical" | "logical"
-verify_kernels = true  # boolean; cross-engine check against mul! before benchmarking (componentwise rounding-error bound; exact for integers)
-verification_size = 72  # integer in [8, 1024], at most 1022 with Float16; not a multiple of 16, so the tiled kernel's padded edge tiles are exercised
+verify_kernels = true  # boolean; cross-engine check against mul! before benchmarking
+verification_size = 72  # integer in [8, 1024]; at most 1022 when Float16 is verified
 
 [safety]
 memory_safety_fraction = 0.75  # float in (0.0, 0.95]; usable fraction of free host memory or of device memory
@@ -209,7 +214,9 @@ record_hostname = true  # boolean
 ## Outputs
 
 Each run writes three files named `hardware_benchmark_<timestamp>.*` into the output
-directory; an existing file is never overwritten (`#1`, `#2`, ... suffixes). The sidecar
+directory; an existing file is never overwritten (`#1`, `#2`, ... suffixes), and a run
+with nothing to benchmark (host disabled, no functional accelerator) stops before any
+file is created. The sidecar
 is written before the benchmark stages and the dataset grows by one row as each point
 completes, so an interrupted run keeps its provenance and every measured point.
 
@@ -235,7 +242,6 @@ completes, so an interrupted run keeps its provenance and every measured point.
 
 ```bash
 julia test.jl hardware-diagnostics
-julia --project=hardware-diagnostics -e 'using Pkg; Pkg.test()'
 ```
 
 The suite runs Aqua, ExplicitImports and JET on the package, then unit tests of both

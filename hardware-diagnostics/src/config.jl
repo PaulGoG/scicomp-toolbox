@@ -133,7 +133,7 @@ function get_real(
     value = get(table, key, default)
     (value isa Real && !(value isa Bool)) ||
         throw(ArgumentError("[$context].$key must be a number, got $(repr(value))"))
-    inside = low_open ? (low < value <= high) : (low <= value <= high)
+    inside = isfinite(value) && (low_open ? (low < value <= high) : (low <= value <= high))
     inside || throw(
         ArgumentError(
             "[$context].$key must be in $(low_open ? "(" : "[")$low, $high], got $value",
@@ -463,6 +463,13 @@ function parse_cli_args(args::AbstractVector{<:AbstractString}, base_dir::Abstra
         i += 1
         return arguments[i]
     end
+    function seconds_of(flag::String)
+        text = value_of(flag)
+        value = option_value(Float64, flag, text)
+        isfinite(value) ||
+            throw(ArgumentError("$flag expects a finite number of seconds, got '$text'"))
+        return value
+    end
     parse_list(text::String) = String.(strip.(split(text, ',')))
 
     while i <= length(arguments)
@@ -479,7 +486,6 @@ function parse_cli_args(args::AbstractVector{<:AbstractString}, base_dir::Abstra
         elseif argument == "--sizes"
             items = parse_list(value_of(argument))
             sizes = [option_value(Int, argument, item) for item in items]
-            allunique(sizes) || throw(ArgumentError("$argument contains duplicates"))
             tables["benchmark"]["problem_sizes"] = sizes
             preset = "custom"
         elseif argument == "--engines"
@@ -489,14 +495,11 @@ function parse_cli_args(args::AbstractVector{<:AbstractString}, base_dir::Abstra
         elseif argument == "--blas-only"
             tables["benchmark"]["engines"] = ["blas"]
         elseif argument == "--types"
-            types = parse_list(value_of(argument))
-            allunique(types) || throw(ArgumentError("$argument contains duplicates"))
-            tables["benchmark"]["target_types"] = types
+            tables["benchmark"]["target_types"] = parse_list(value_of(argument))
         elseif argument == "--seed"
             tables["benchmark"]["seed"] = option_value(Int, argument, value_of(argument))
         elseif argument == "--min-time"
-            tables["sampling"]["min_sampling_time_s"] =
-                option_value(Float64, argument, value_of(argument))
+            tables["sampling"]["min_sampling_time_s"] = seconds_of(argument)
         elseif argument == "--min-samples"
             tables["sampling"]["min_samples"] =
                 option_value(Int, argument, value_of(argument))
@@ -504,8 +507,7 @@ function parse_cli_args(args::AbstractVector{<:AbstractString}, base_dir::Abstra
             tables["sampling"]["max_samples"] =
                 option_value(Int, argument, value_of(argument))
         elseif argument == "--max-point-seconds"
-            tables["sampling"]["max_point_seconds"] =
-                option_value(Float64, argument, value_of(argument))
+            tables["sampling"]["max_point_seconds"] = seconds_of(argument)
         elseif argument == "--cpu-only"
             tables["hardware"]["gpu_backend"] = "none"
         elseif argument == "--gpu-only"

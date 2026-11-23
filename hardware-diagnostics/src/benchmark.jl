@@ -3,16 +3,10 @@
 # [`BenchmarkRecord`](@ref).
 
 """
-Stages of a run in execution order, as written to the `stage` column: the Float32
-library engine over the BLAS thread counts, every element type and engine on the host,
-every element type and engine on each accelerator.
-"""
-const STAGES = (:thread_sweep, :element_types, :accelerator)
-
-"""
     BenchmarkRecord
 
-One row of the tidy dataset. `stage` is one of [`STAGES`](@ref). Times are in
+One row of the tidy dataset. `stage` is one of `thread_sweep`, `element_types` or
+`accelerator`. Times are in
 milliseconds, throughputs in 10⁹ operations per second (from the minimum and from the
 median time), `dispersion_pct` is the median absolute deviation relative to the median.
 `blas_threads` is 0 where the BLAS thread count does not apply (KernelAbstractions
@@ -121,7 +115,8 @@ element_type(record::BenchmarkRecord) = SUPPORTED_TYPES[record.data_type]
 """
     BenchmarkPoint
 
-One measurement of the plan: its `stage` (one of [`STAGES`](@ref)), the accelerator
+One measurement of the plan: its `stage` (`:thread_sweep`, `:element_types` or
+`:accelerator`, in execution order), the accelerator
 `device` (`nothing` on the host), engine, element type, problem size N and BLAS thread
 count (0 where it does not apply: kernel engines and accelerators).
 """

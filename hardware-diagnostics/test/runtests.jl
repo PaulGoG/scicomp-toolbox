@@ -159,10 +159,12 @@ end
             zeros(2, 2),
         )
         @test length(verify_engines(cpu, Float64, 40, rng; engines = (:ka_tiled,))) == 1
-        @test HD.rounding_error_bound(Float64, 72) ≈ 146 * eps(Float64) / 2 rtol = 1e-12
-        @test HD.rounding_error_bound(ComplexF32, 72) ≈
-              sqrt(2) * HD.rounding_error_bound(Float32, 72)
-        @test HD.rounding_error_bound(Float16, 1022) > 0
+        @test HD.rounding_error_bound(Float64, 72) ≈ 1.6209256159527547e-14 rtol = 1e-15
+        @test HD.rounding_error_bound(Float32, 72) ≈ 8.702353867510834e-6 rtol = 1e-15
+        @test HD.rounding_error_bound(Float16, 1022) == 1023.0
+        @test HD.rounding_error_bound(ComplexF32, 72) ≈ 2.4445594686904952e-5 rtol = 1e-15
+        @test HD.rounding_error_bound(ComplexF64, 72) ≈ 4.553268130183094e-14 rtol = 1e-15
+        @test HD.rounding_error_bound(Int32, 72) == 0.0
         @test_throws ArgumentError HD.rounding_error_bound(Float16, 1023)
         # an error far above rounding level fails, a rounding-level error passes
         rng16 = HD.operand_rng(1, Float32, 16)
@@ -875,5 +877,109 @@ end
             )
             @test isempty(readdir(dir))
         end
+    end
+
+    @testset "Review fixes" begin
+        # a fused, componentwise complex accumulation exceeds the (2N + 2)·u constant and
+        # stays within the (4N + 2)·u one
+        let
+            N = 72
+            s = Float32(2.0^-23 - 2.0^-27)
+            z = fill(ComplexF32(1, 1), 2N)
+            w = vcat(ComplexF32(1, -1), fill(s * ComplexF32(1, -1), 2N - 1))
+            re, im = 0.0f0, 0.0f0
+            for (zk, wk) in zip(z, w)
+                re = fma(-imag(zk), imag(wk), fma(real(zk), real(wk), re))
+                im = fma(imag(zk), real(wk), fma(real(zk), imag(wk), im))
+            end
+            exact = sum(ComplexF64.(z) .* ComplexF64.(w))
+            magnitude = sum(abs.(ComplexF64.(z)) .* abs.(ComplexF64.(w)))
+            deviation = abs(ComplexF64(ComplexF32(re, im)) - exact)
+            @test deviation <= HD.rounding_error_bound(ComplexF32, N) * magnitude
+            u = Float64(eps(Float32)) / 2
+            @test deviation > sqrt(2) * (2N + 2) * u / (1 - (2N + 2) * u) * magnitude
+        end
+
+        # kernel engines against a reference formed in a wider type
+        cpu = CPU()
+        rng = Xoshiro(3)
+        for (T, W) in (
+                (Float16, Float64),
+                (ComplexF32, Complex{BigFloat}),
+                (ComplexF64, Complex{BigFloat}),
+            ),
+            N in (17, 50)
+
+            A, B, C = (create_matrix(rng, T, N) for _ in 1:3)
+            Aw, Bw, Cw = W.(A), W.(B), W.(C)
+            reference = Aw * Bw + Aw * Cw
+            bound = HD.rounding_error_bound(T, N) .* (abs.(Aw) * (abs.(Bw) .+ abs.(Cw)))
+            for engine in HD.KERNEL_ENGINES
+                D = evaluate_engine!(engine, cpu, similar(A), A, B, C)
+                @test all(abs.(D .- reference) .<= bound)
+            end
+        end
+        for N in (17, 50)
+            A, B, C = (create_matrix(rng, Int16, N) for _ in 1:3)
+            reference = Int64.(A) * Int64.(B) + Int64.(A) * Int64.(C)
+            for engine in HD.KERNEL_ENGINES
+                @test evaluate_engine!(engine, cpu, similar(A), A, B, C) == reference
+            end
+        end
+
+        # verification at a size that is not a multiple of the tile
+        results = verify_engines(cpu, Float32, 40, rng)
+        @test !isempty(results)
+        @test all(r -> r.passed, results)
+        @test all(r -> 0 <= r.bound_ratio <= 1, results)
+
+        for engine in (:blas, :ka, :ka_tiled)
+            @test_throws DimensionMismatch evaluate_engine!(
+                engine,
+                cpu,
+                zeros(2, 2),
+                zeros(4, 4),
+                zeros(4, 4),
+                zeros(4, 4),
+            )
+        end
+
+        @test_throws ArgumentError validate_config(
+            altered(d -> d["sampling"]["min_sampling_time_s"] = Inf),
+        )
+        @test_throws ArgumentError validate_config(
+            altered(d -> d["sampling"]["max_point_seconds"] = Inf),
+        )
+        @test_throws ArgumentError parse_cli_args(["--min-time", "Inf"], TOOL_DIR)
+
+        # an empty plan fails before any output file exists
+        mktempdir() do dir
+            raw = base_config_dict()
+            raw["output"]["output_directory"] = dir
+            valid = validate_config(raw)
+            idle = BenchmarkConfig(
+                (
+                    name === :run_cpu ? false : getfield(valid, name) for
+                    name in fieldnames(BenchmarkConfig)
+                )...,
+            )
+            @test !idle.run_cpu && idle.gpu_backend === :none
+            @test_throws ArgumentError run_diagnostics(idle; base_dir = TOOL_DIR)
+            @test isempty(readdir(dir))
+        end
+
+        record = BenchmarkRecord(;
+            stage = "accelerator",
+            device_type = "GPU",
+            backend = "CPU",
+            engine = "blas",
+            library = "OpenBLAS (ILP64)",
+            device_name = "Mock",
+            data_type = "Float32",
+            matrix_dim = 4096,
+            julia_threads = 1,
+            nominal_ops = 4 * 4096^3,
+        )
+        @test occursin("274877906944", csv_row(record))
     end
 end

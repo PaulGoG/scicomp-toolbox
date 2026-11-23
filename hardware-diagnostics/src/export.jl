@@ -16,13 +16,22 @@ csv_cell(value::AbstractFloat) = isfinite(value) ? @sprintf("%.10g", value) : ""
     csv_row(record::BenchmarkRecord) -> String
 
 One CSV line of the dataset: the fields of `record` in order, strings quoted, undefined
-quantities (`NaN`) and inapplicable thread counts (0) as empty cells.
+quantities (`NaN`) and inapplicable thread counts (0) as empty cells. `nominal_ops`, an
+exact integer count stored as `Float64`, is written in full rather than to ten
+significant digits.
 """
 function csv_row(record::BenchmarkRecord)
     cells = String[]
     for name in fieldnames(BenchmarkRecord)
         value = getfield(record, name)
-        push!(cells, name === :blas_threads && value == 0 ? "" : csv_cell(value))
+        cell = if name === :blas_threads && value == 0
+            ""
+        elseif name === :nominal_ops && isfinite(record.nominal_ops)
+            string(round(Int, record.nominal_ops))
+        else
+            csv_cell(value)
+        end
+        push!(cells, cell)
     end
     return join(cells, ",")
 end
@@ -172,8 +181,8 @@ end
 """
     safe_filepath(path) -> String
 
-`path` itself when no file exists there, otherwise the first of `stem#1.ext`,
-`stem#2.ext`, ... that is free, so that earlier results are never overwritten.
+`path` when no file exists there, otherwise the first free one of `stem#1.ext`,
+`stem#2.ext`, ...
 """
 function safe_filepath(path::AbstractString)
     isfile(path) || return String(path)

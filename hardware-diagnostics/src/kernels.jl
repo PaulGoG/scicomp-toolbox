@@ -137,8 +137,16 @@ end
     evaluate_engine!(engine::Symbol, backend, D, A, B, C) -> D
 
 Execute the benchmark operation with `engine` (one of [`ENGINES`](@ref)) on `backend`.
+Throws `DimensionMismatch` before any engine runs unless `A`, `B`, `C` and `D` are square
+matrices of one common size.
 """
 function evaluate_engine!(engine::Symbol, backend::KernelAbstractions.Backend, D, A, B, C)
+    n = size(D, 1)
+    all(X -> ndims(X) == 2 && size(X) == (n, n), (D, A, B, C)) || throw(
+        DimensionMismatch(
+            "the operands must be square matrices of one size, got $(size(D)), $(size(A)), $(size(B)), $(size(C))",
+        ),
+    )
     engine === :blas && return dual_gemm_blas!(backend, D, A, B, C)
     engine === :ka && return launch_dual_gemm!(backend, D, A, B, C)
     engine === :ka_tiled && return launch_dual_gemm_tiled!(backend, D, A, B, C)
@@ -212,31 +220,41 @@ integer_range_safe(::Type, N::Integer) = true
 """
     accumulation_roundoff(::Type{T}, N::Integer) -> Float64
 
-m·u for one evaluation of D = A·B + A·C in the precision of `T`: m = 2N + 2 accumulated
-terms per entry (2N products and the addition of the two `mul!` results) and the unit
-roundoff u = eps/2 of the real type underlying `T`.
+m·u for one evaluation of D = A·B + A·C in the precision of `T`, with the unit roundoff
+u = eps/2 of the real type underlying `T`. For real `T`, m = 2N + 2: 2N products per
+entry and the addition of the two `mul!` results. For complex `T`, m = 4N + 2: a complex
+product contributes two real products to each of the real and imaginary parts, and an
+engine that accumulates each part on its own with fused multiply-adds (vendor GEMM
+kernels do) sums 4N real products per part.
 """
-accumulation_roundoff(::Type{T}, N::Integer) where {T} =
-    (2 * Int(N) + 2) * Float64(eps(real(T))) / 2
+function accumulation_roundoff(::Type{T}, N::Integer) where {T}
+    m = (T <: Complex ? 4 : 2) * Int(N) + 2
+    return m * Float64(eps(real(T))) / 2
+end
 
 """
     rounding_error_bound(::Type{T}, N::Integer) -> Float64
 
 Coefficient c of the componentwise bound |D̂ − D| ≤ c·|A|(|B| + |C|) on one evaluation of
 D = A·B + A·C in precision `T`, in Higham's standard model without underflow: the
-inner-product constant γₘ = m·u/(1 − m·u) of [`accumulation_roundoff`](@ref), times √2
-for complex types (Higham 2002, §3.1 and §3.6, doi:10.1137/1.9780898718027). The bound
-holds for any summation order and with fused multiply-adds. Zero for integers, whose
-arithmetic is exact within [`integer_accumulation_bound`](@ref); `ArgumentError` when
-m·u ≥ 1, where no bound of this form exists.
+inner-product constant γₘ = m·u/(1 − m·u) of [`accumulation_roundoff`](@ref), with
+m = 2N + 2 for real and m = 4N + 2 for complex types, times √2 for complex types (Higham
+2002, §3.1 and §3.6, doi:10.1137/1.9780898718027). A complex product has two real
+products in each component, so the real and the imaginary part of an entry are each
+bounded by γ₄ₙ₊₂ Σ|aₖ||bₖ| and the modulus of the complex error by √2 times that. With
+these constants the bound holds for any summation order, with or without fused
+multiply-adds. Zero for integers, whose arithmetic is exact within
+[`integer_accumulation_bound`](@ref); `ArgumentError` when m·u ≥ 1, where no bound of
+this form exists.
 """
 function rounding_error_bound(
     ::Type{T},
     N::Integer,
 ) where {T <: Union{AbstractFloat, Complex}}
     mu = accumulation_roundoff(T, N)
+    constant = T <: Complex ? "(4N + 2)·u" : "(2N + 2)·u"
     mu < 1 || throw(
-        ArgumentError("no rounding-error bound for $T at N = $N: (2N + 2)·u = $mu ≥ 1"),
+        ArgumentError("no rounding-error bound for $T at N = $N: $constant = $mu ≥ 1"),
     )
     γ = mu / (1 - mu)
     return T <: Complex ? sqrt(2) * γ : γ
@@ -250,7 +268,9 @@ rounding_error_bound(::Type{T}, N::Integer) where {T <: Integer} = 0.0
 
 Run the `mul!` reference and every kernel engine in `engines` on the same operands and
 compare each result with the reference on the host. Each result lies within
-c·|A|(|B| + |C|) of the exact D, entry by entry ([`rounding_error_bound`](@ref)), so the
+c·|A|(|B| + |C|) of the exact D, entry by entry ([`rounding_error_bound`](@ref), with
+m = 2N + 2 for real and m = 4N + 2 for complex types, which covers a vendor library that
+accumulates the real and imaginary parts separately with fused multiply-adds), so the
 two may differ by at most twice that. `bound_ratio` is the largest
 |D_engine − D_blas| / (2c·|A|(|B| + |C|)) over the entries, and an engine passes when it
 is at most 1; for integers this is exact equality. `max_relative_deviation`,
