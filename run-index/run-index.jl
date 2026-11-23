@@ -1,7 +1,8 @@
 #!/usr/bin/env julia
 # run-index — catalogue of DrWatson-style run directories: what was run, from which commit
 # and configuration, on what hardware, how long it took and how much disk it occupies,
-# with the runs that need attention flagged and the figures whose run is gone. Read-only.
+# with flags on runs that need attention and a list of figures without a run. The projects
+# are only read.
 #
 #   julia run.jl run-index [ROOT ...] [--flagged] [--depth N] [--csv FILE | --no-csv]
 #                          [--config PATH]
@@ -156,6 +157,11 @@ function validate_settings(raw::AbstractDict)
         string_list(discovery, "supplementary_names", ["submission.toml"], "[discovery]")
     figure_directories =
         string_list(discovery, "figure_directories", ["plots"], "[discovery]")
+    any(d -> isabspath(d) || ".." in splitpath(d), figure_directories) && throw(
+        ArgumentError(
+            "[discovery].figure_directories entries must be relative paths without \"..\"",
+        ),
+    )
     figure_extensions = lowercase.(
         string_list(
             discovery,
@@ -223,6 +229,19 @@ first_line(text::AbstractString) = String(first(split(text, '\n')))
 # --- discovery -------------------------------------------------------------------------
 
 """
+    resolve_root(root) -> String
+
+Absolute, normalized form of `root` without a trailing separator (`/` itself excepted).
+"""
+function resolve_root(root::AbstractString)
+    path = normpath(abspath(root))
+    return path == "/" ? path : String(rstrip(path, '/'))
+end
+
+warn_unreadable(err) =
+    @warn "run-index: skipping unreadable directory: $(sprint(showerror, err))"
+
+"""
     is_run_directory(dir, settings) -> Bool
 
 Whether the whole name of `dir` matches the run-id pattern or `dir` holds a provenance
@@ -266,7 +285,7 @@ function find_runs(
         end
         return nothing
     end
-    visit(normpath(abspath(root)), 0)
+    visit(resolve_root(root), 0)
     return sort!(runs)
 end
 
@@ -297,7 +316,7 @@ followed nor counted.
 function disk_usage(dir::AbstractString)
     bytes = 0
     files = 0
-    for (root, _, names) in walkdir(dir; follow_symlinks = false)
+    for (root, _, names) in walkdir(dir; follow_symlinks = false, onerror = warn_unreadable)
         for name in names
             path = joinpath(root, name)
             (islink(path) || !isfile(path)) && continue
@@ -353,7 +372,7 @@ is_table_array(value) =
     flatten(table) -> Vector{Pair{Vector{String}, Any}}
 
 Every value of a nested provenance table with its key path, keys in sorted order. Tables
-appear themselves and through their entries; the tables of an array are entered with
+appear as values and through their entries; the tables of an array are entered with
 their 1-based index as a path component.
 """
 function flatten(
@@ -382,7 +401,7 @@ ends_with_path(path::Vector{String}, alias::Vector{String}) =
 accepts(::Val, value) = false
 accepts(::Val{:text}, value::AbstractString) = !isempty(strip(value))
 accepts(::Val{:time}, value::Union{DateTime, Date}) = true
-accepts(::Val{:time}, value::AbstractString) = !isempty(strip(value))
+accepts(::Val{:time}, value::AbstractString) = parse_time(value) !== nothing
 accepts(::Val{:number}, value::Real) = !(value isa Bool)
 accepts(::Val{:scalar}, value::Union{AbstractString, Real}) = !(value isa Bool)
 accepts(::Val{:table}, value::AbstractDict) = true
@@ -464,8 +483,8 @@ text_value(::Nothing) = ""
     git(dir, args...) -> Union{String, Nothing}
 
 Standard output of a read-only git command run in `dir`, stripped, or `nothing` when git
-is absent or the command fails. Optional locks are disabled, so the index never writes
-to a repository.
+is absent or the command fails. Optional locks are disabled, so git writes nothing to
+the repository.
 """
 function git(dir::AbstractString, args::AbstractString...)
     Sys.which("git") === nothing && return nothing
@@ -531,8 +550,8 @@ end
     RunRecord
 
 One indexed run directory: its project, its path relative to the project root and in
-full, what its provenance files state (`provenance` lists them, separated by `;`), what
-git says about its commit, its disk usage, its replicate group and its flags. Absent text is empty, an absent wall time `NaN`;
+full, the fields of its provenance files (`provenance` lists them, separated by `;`),
+the git state of its commit, its disk usage, its replicate group and its flags. Absent text is empty, an absent wall time `NaN`;
 `on_head` is `nothing` when the ancestry of the commit was not decided.
 """
 struct RunRecord
@@ -591,7 +610,7 @@ end
 """
 Flags of the index, in reporting order:
 
-- `no-provenance`: no provenance file; nothing else can be said about the run.
+- `no-provenance`: no provenance file; a submission record alone does not document a run.
 - `unreadable-provenance`: the provenance file is not valid TOML.
 - `no-commit`: the provenance file records no commit.
 - `no-repository`: a commit is recorded but the run lies in no git repository.
@@ -618,8 +637,8 @@ const FLAGS = (
 """
     canonical_configuration(table, seed_aliases) -> Vector{Pair{String, String}}
 
-The leaves of a configuration table as sorted `dotted.key => repr(value)` pairs, the
-seed keys left out, so that runs differing only in seed compare equal.
+The leaves of a configuration table as sorted `dotted.key => repr(value)` pairs
+without the seed keys, so that runs differing only in seed compare equal.
 """
 function canonical_configuration(table::AbstractDict, seed_aliases::Vector{Vector{String}})
     entries = Pair{String, String}[]
@@ -646,7 +665,7 @@ function build_index(
 )
     located = Dict{String, String}()
     for root in roots, run in find_runs(root, settings; max_depth)
-        haskey(located, run) || (located[run] = normpath(abspath(root)))
+        haskey(located, run) || (located[run] = resolve_root(root))
     end
     repositories = Dict{String, Union{Repository, Nothing}}()
     resolved = Dict{Tuple{String, String}, Union{String, Nothing}}()
@@ -657,7 +676,8 @@ function build_index(
         repo = get!(() -> repository(run), repositories, root)
         sources = read_provenance(run, settings)
         flags = String[]
-        isempty(sources) && push!(flags, "no-provenance")
+        # a submission record alone marks a queued or failed job, not a documented run
+        any(f -> f.name in settings.sidecar_names, sources) || push!(flags, "no-provenance")
         any(f -> f.table === nothing, sources) && push!(flags, "unreadable-provenance")
         entry_sets = [flatten(f.table) for f in sources if f.table !== nothing]
         # a field comes from the first provenance file that has it
@@ -827,11 +847,17 @@ function orphan_figures(
 )
     orphans = OrphanFigure[]
     for project in projects
-        ids = Set(basename(r.path) for r in records if r.project_root == project.root)
+        # every run of the project counts, not only those under the indexed roots
+        ids = Set{String}()
+        for run in find_runs(project.root, settings; max_depth = 64)
+            m = match(settings.run_id, basename(run))
+            m === nothing || push!(ids, String(m.match))
+        end
         for directory in settings.figure_directories
             top = joinpath(project.root, directory)
             isdir(top) || continue
-            for (dir, _, names) in walkdir(top; follow_symlinks = false)
+            for (dir, _, names) in
+                walkdir(top; follow_symlinks = false, onerror = warn_unreadable)
                 for name in sort(names)
                     lowercase(splitext(name)[2]) in settings.figure_extensions || continue
                     m = match(settings.run_id, name)
@@ -1095,7 +1121,7 @@ function main(args::Vector{String} = ARGS; io::IO = stdout)
         isdir(root) || throw(ArgumentError("not a directory: $root"))
     end
     index = build_index(
-        [normpath(abspath(root)) for root in roots],
+        [resolve_root(root) for root in roots],
         settings;
         max_depth = something(depth, settings.max_depth),
     )

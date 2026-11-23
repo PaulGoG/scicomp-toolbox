@@ -115,8 +115,9 @@ record_of(index, run) = only(filter(r -> r.run == run, index.records))
             @test [r.run for r in index.records] == ["data/run_abcdef01", "data/run_abcdef02"]
             queued = record_of(index, "data/run_abcdef01")
             @test queued.job_id == "77" && queued.provenance == "submission.toml"
-            @test queued.flags == ["no-repository"]
-            @test record_of(index, "data/run_abcdef02").flags == ["unreadable-provenance"]
+            @test queued.flags == ["no-provenance", "no-repository"]
+            @test record_of(index, "data/run_abcdef02").flags ==
+                  ["no-provenance", "unreadable-provenance"]
         end
     end
 
@@ -224,7 +225,12 @@ record_of(index, run) = only(filter(r -> r.run == run, index.records))
             project = first(index.projects)
             @test project.runs == 13 && project.flagged == 11
             @test project.repository.branch == "main" && project.repository.head == ws.c5
-            @test project.size_bytes == sum(r.size_bytes for r in curvature)
+            curvature_runs = filter(!=("data/run_aaaa1111"), collect(keys(expected)))
+            written = sum(
+                filesize(joinpath(dir, name)) for run in curvature_runs for
+                (dir, _, names) in walkdir(joinpath(ws.repo, run)) for name in names
+            )
+            @test project.size_bytes == written
             @test index.projects[2].repository === nothing
         end
 
@@ -256,7 +262,10 @@ record_of(index, run) = only(filter(r -> r.run == run, index.records))
                 path = write_csv(joinpath(dir, "index.csv"), index.records)
                 lines = readlines(path)
                 @test length(lines) == 15
-                @test lines[1] == join(string.(fieldnames(RunRecord)), ",")
+                @test lines[1] ==
+                      "project,project_root,run,path,provenance,started,finished," *
+                      "wall_time_s,commit,resolved_commit,dirty,on_head,script,job_id," *
+                      "hostname,cpu,gpu,julia_version,seed,size_bytes,files,group,flags"
                 row = only(filter(l -> occursin("run_f954868c_r2", l), lines))
                 @test occursin("\"dirty;repeat\"", row)
                 @test occursin(",true,true,", row)
@@ -276,11 +285,9 @@ record_of(index, run) = only(filter(r -> r.run == run, index.records))
                 @test occursin("Index written to $csv", String(take!(io)))
                 again = main(["--csv", csv, root]; io = IOBuffer())
                 @test again.csv == joinpath(dir, "index#1.csv")
-                @test main(["--no-csv", "--depth", "6", root]; io = IOBuffer()).csv ===
-                      nothing
-                @test length(
-                    main(["--no-csv", "--depth", "6", root]; io = IOBuffer()).records,
-                ) == 13
+                shallow = main(["--no-csv", "--depth", "6", root]; io = IOBuffer())
+                @test shallow.csv === nothing
+                @test length(shallow.records) == 13
                 twice =
                     main(["--no-csv", root, joinpath(root, "Curvature")]; io = IOBuffer())
                 @test length(twice.records) == 14
@@ -292,7 +299,7 @@ record_of(index, run) = only(filter(r -> r.run == run, index.records))
                 @test occursin("--flagged", String(take!(io)))
                 custom = joinpath(dir, "custom.toml")
                 # a custom provenance name: the run is still found by its name, but its
-                # provenance.toml is no longer read
+                # provenance.toml is not read
                 write(custom, "[discovery]\nsidecar_names = [\"notes.toml\"]\n")
                 customised = main(
                     ["--no-csv", "--config", custom, joinpath(root, "Lone")];
@@ -305,6 +312,46 @@ record_of(index, run) = only(filter(r -> r.run == run, index.records))
             @test_throws "--depth" main(["--depth", "0"]; io = IOBuffer())
             @test_throws "--csv requires a value" main(["--csv"]; io = IOBuffer())
             @test_throws "not a directory" main([joinpath(root, "absent")]; io = IOBuffer())
+        end
+
+        @testset "Review fixes" begin
+            sims = joinpath(root, "Curvature", "data", "sims")
+            narrow = main(["--no-csv", sims]; io = IOBuffer())
+            @test all(f -> f.run_id == "run_dcf44792", narrow.orphans)
+
+            curvature = joinpath(root, "Curvature")
+            plain = main(["--no-csv", curvature]; io = IOBuffer())
+            slash = main(["--no-csv", curvature * "/"]; io = IOBuffer())
+            @test length(slash.records) == length(plain.records)
+            @test [p.name for p in slash.projects] ==
+                  [p.name for p in plain.projects] ==
+                  ["Curvature"]
+
+            # a value that is no time must not hide a valid one under a later key
+            @test accepts(Val(:time), "at noon on the first") == false
+            @test accepts(Val(:time), "2026-08-01T12:00:00") == true
+            mktempdir() do dir
+                write(
+                    joinpath(mkpath(joinpath(dir, "run_0badc0de")), "provenance.toml"),
+                    "timestamp = \"at noon on the first\"\nstarted = \"2026-08-01T12:00:00\"\n",
+                )
+                @test only(build_index([dir], settings).records).started ==
+                      DateTime(2026, 8, 1, 12)
+            end
+
+            for directories in (["/abs"], ["../plots"])
+                @test_throws "figure_directories" validate_settings(
+                    Dict("discovery" => Dict("figure_directories" => directories)),
+                )
+            end
+
+            mktempdir() do dir
+                write(
+                    joinpath(mkpath(joinpath(dir, "run_0badc0df")), "submission.toml"),
+                    "job_id = \"79\"\n",
+                )
+                @test "no-provenance" in only(build_index([dir], settings).records).flags
+            end
         end
 
         @testset "Read-only" begin

@@ -149,7 +149,7 @@ function synthetic_workspace(root::AbstractString)
     write_run(
         joinpath(data, "run_51c2a7e0"),
         "provenance.toml" => nested("v0.1.0", "2026-08-04T12:00:00", 3; L = 1024),
-        "submission.toml" => "job_id = \"4242\"\nbackend = \"slurm\"\ncluster = \"lisa\"\ncommit = \"$c1\"\nsubmitted = 2026-08-04T11:58:00\n",
+        "submission.toml" => "job_id = \"4242\"\nbackend = \"slurm\"\ncluster = \"hpc\"\ncommit = \"$c1\"\nsubmitted = 2026-08-04T11:58:00\n",
     )
     write_run(joinpath(data, "sims", "N=64_seed=1"), "metadata.toml" => tagsave(1))
     write_run(joinpath(data, "sims", "N=64_seed=2"), "metadata.toml" => tagsave(2))

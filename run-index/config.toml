@@ -9,7 +9,7 @@ figure_extensions = [".pdf", ".png", ".svg"]  # list of file extensions, each st
 max_depth = 8  # integer in [1, 64]; directory levels searched below each root
 
 [fields]
-commit = ["gitcommit", "commit", "git_commit", "toolbox_commit"]  # each entry: list of keys, matched against the trailing components of a dotted key path in the provenance file; the first key with a match wins, the shallowest match first
+commit = ["gitcommit", "commit", "git_commit", "toolbox_commit"]  # each entry: list of keys, matched against the trailing components of a dotted key path in the provenance file; earlier keys take precedence, then shallower matches
 patch = ["gitpatch"]
 script = ["script"]
 job_id = ["job_id"]

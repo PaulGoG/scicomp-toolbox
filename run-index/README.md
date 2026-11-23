@@ -3,7 +3,8 @@
 Catalogue of the run directories of DrWatson-style projects: what was run, from which
 commit and configuration, on what hardware, how long it took and how much disk it
 occupies. Runs that need attention are flagged, and figures whose run directory has gone
-are listed. The tool only reads; git runs with optional locks disabled.
+are listed. The projects are only read, with the optional locks of git disabled; the
+index itself is written as a CSV file.
 
 ```
 run-index/
@@ -69,8 +70,8 @@ hashes, tags and `git describe` output (DrWatson's `gitcommit`) are all understo
 
 | Flag | Meaning |
 | :--- | :--- |
-| `no-provenance` | no provenance file; nothing else can be said about the run |
-| `unreadable-provenance` | the provenance file is not valid TOML |
+| `no-provenance` | no provenance file; a submission record alone does not count |
+| `unreadable-provenance` | a provenance file or submission record is not valid TOML |
 | `no-commit` | the provenance file records no commit |
 | `no-repository` | a commit is recorded but the run lies in no git repository |
 | `unknown-commit` | the repository does not know the recorded commit |
@@ -126,7 +127,9 @@ Figures whose run has no directory
 ## Configuration
 
 `config.toml` holds the discovery rules (`[discovery]`), the provenance keys of every
-field (`[fields]`) and the directory of the CSV index (`[output]`). Absent keys take the
+field (`[fields]`) and the directory of the CSV index (`[output]`). The figure
+directories are relative to a project root. Figures are matched against every run of
+their project, whatever part of it the roots cover. Absent keys take the
 shipped defaults; unknown keys, invalid regular expressions and out-of-range values are
 rejected with a message naming the key.
 
