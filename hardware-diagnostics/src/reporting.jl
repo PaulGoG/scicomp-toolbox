@@ -90,7 +90,7 @@ function render_progress(reporter::Reporter)
             format_seconds(elapsed),
             format_seconds(remaining),
             label
-        )
+        ),
     )
     flush(reporter.console)
     return nothing

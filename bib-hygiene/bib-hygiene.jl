@@ -1773,7 +1773,7 @@ function print_findings(io::IO, findings::Vector{Finding})
     for f in sort(findings; by = finding_order)
         println(
             io,
-            @sprintf("  %-8s %s: %s", string(f.severity), string(f.check), f.detail)
+            @sprintf("  %-8s %s: %s", string(f.severity), string(f.check), f.detail),
         )
     end
     return nothing

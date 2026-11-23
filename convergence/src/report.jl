@@ -142,7 +142,7 @@ function Base.show(io::IO, ::MIME"text/plain", estimate::OrderEstimate)
             estimate.order,
             spread,
             fitted_count(estimate)
-        )
+        ),
     )
     return nothing
 end

@@ -105,7 +105,7 @@ function run_verification(
                     backend_label(backend),
                     string(T),
                     first_line(sprint(showerror, err))
-                )
+                ),
             )
             continue
         end
@@ -120,7 +120,7 @@ function run_verification(
                     result.bound_ratio,
                     result.max_relative_deviation,
                     result.passed ? "passed" : "FAILED"
-                )
+                ),
             )
             result.passed || begin
                 finish!(reporter)
@@ -212,7 +212,7 @@ function run_diagnostics(
                 sampling.min_sampling_time_s,
                 sampling.max_samples,
                 sampling.max_point_seconds
-            )
+            ),
         )
         emit(
             reporter,

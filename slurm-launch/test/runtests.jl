@@ -98,7 +98,7 @@ function synthetic_projects(root::AbstractString)
             nbody,
             "runs",
             "sweep_showcase",
-            @sprintf("%03d_orbit-eccentricity=%.1f_seed=1", i, e)
+            @sprintf("%03d_orbit-eccentricity=%.1f_seed=1", i, e),
         )
         mkpath(case)
         write(

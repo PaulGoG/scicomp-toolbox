@@ -1,6 +1,6 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.13.3"
+julia_version = "1.13.4"
 manifest_format = "2.1"
 project_hash = "9c9c6deaa93001bda88b40a09897187ebd4ef492"
 
@@ -41,10 +41,10 @@ version = "1.11.0"
 
 [[deps.JuliaFormatter]]
 deps = ["CommonMark", "Glob", "JuliaSyntax", "PrecompileTools", "TOML", "Test"]
-git-tree-sha1 = "4a25454bfd37ad800d20017fe59243e41163fed9"
+git-tree-sha1 = "61187e0820b997fb7ef3deda98f52f2991d472a8"
 registries = "General"
 uuid = "98e50ef6-434e-11e9-1051-2b60c6c9e899"
-version = "2.14.0"
+version = "2.14.12"
 
 [[deps.JuliaSyntax]]
 git-tree-sha1 = "0d4b3dab95018bcf3925204475693d9f09dc45b8"
