@@ -38,7 +38,7 @@ For a [`GridConvergence`](@ref), the step size and value of the quantity `label`
 grid, the refinement ratios, the observed order, the extrapolated value, the approximate
 and extrapolated relative errors, the grid convergence indices of the fine and medium
 grids in percent and the asymptotic ratio, with a final line when the convergence is
-oscillatory.
+oscillatory, since the extrapolation formulas assume a monotone error.
 
 Returns `nothing`.
 """
@@ -119,7 +119,10 @@ function convergence_table(
     println(io, "  GCI fine                         $(g3(100 * grid.gci_fine)) %")
     println(io, "  GCI medium                       $(g3(100 * grid.gci_medium)) %")
     println(io, "  asymptotic ratio                 $(g4(grid.asymptotic_ratio))")
-    grid.oscillatory && println(io, "  oscillatory convergence")
+    grid.oscillatory && println(
+        io,
+        "  oscillatory convergence: the extrapolated value and the indices assume a monotone error",
+    )
     return nothing
 end
 

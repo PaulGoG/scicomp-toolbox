@@ -92,11 +92,13 @@ p ln(r21) = ln|ε32/ε21| + q(p),   q(p) = ln((r21^p − s) / (r32^p − s))
 
 This equation has one positive root when |ε32/ε21| exceeds ln(r32)/ln(r21) for s > 0
 (1 for a constant ratio) and 1 for s < 0. The root is ln|ε32/ε21| / ln(r) for a constant
-ratio r and is found by bisection otherwise. At or below the threshold the differences
-between the grids do not shrink under refinement, and the input is refused. Celik et al.
-write the equation with an absolute value and solve it by fixed-point iteration: the
-absolute value gives such sequences a positive order, and the iteration diverges once
-r32 is well above r21. Then
+ratio r and is found by bisection otherwise. At or below the threshold no positive order
+exists (for a constant ratio, the differences between the grids do not shrink under
+refinement) and the input is refused; so is input whose differences are so close to
+round-off that the order is uncertain by more than half its value. Celik et al. write
+the equation with an absolute value and solve it by fixed-point iteration: the absolute
+value gives such sequences a positive order, and the iteration diverges once r32 is well
+above r21. Then
 
 ```
 φ_ext  = (r21^p φ₁ − φ₂) / (r21^p − 1)
@@ -201,7 +203,9 @@ csv_directory = "data"  # path; relative to this tool
 ```
 
 The CSV file has the columns `series, h, error, order, fitted`, one row per level of
-every series; `order` is the pairwise order and is empty for the coarsest level.
+every series; `order` is the pairwise order and is empty for the coarsest level. With
+`--quantity` the `error` column holds |q − q_ext| and `fitted` marks the three levels of
+the three-grid procedure, whose results are printed in the report only.
 
 ## Tests
 

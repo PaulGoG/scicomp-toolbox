@@ -264,18 +264,19 @@ Order of the three-grid procedure from R = |ε₃₂/ε₂₁| = `ratio` and the
 which is p ln r₂₁ = ln R + q(p) with q(p) = ln((r₂₁ᵖ - s) / (r₃₂ᵖ - s)), the equation of
 Celik et al. without its absolute value. The right-hand side of the first form increases
 strictly with p from [`order_threshold`](@ref) to ∞, so the order is unique; it is
-ln R / ln r for a constant ratio r and is found by bisection to 10⁻¹² otherwise. The
+ln R / ln r for a constant ratio r and is found by bisection to 10⁻¹³ otherwise. The
 fixed-point iteration of the paper diverges on such grids once r₃₂ is well above r₂₁.
 
-Throws `ArgumentError` when R does not exceed the threshold: the differences between
-successive grids do not shrink under refinement and no positive order exists. The
-absolute value of the published equation would return a positive order there.
+Throws `ArgumentError` when R does not exceed the threshold, where no positive order
+exists (for a constant ratio, the differences between the grids do not shrink under
+refinement). The absolute value of the published equation would return a positive order
+there.
 """
 function observed_order(ratio::Float64, r21::Float64, r32::Float64, s::Float64)
     threshold = order_threshold(r21, r32, s)
     ratio > threshold || throw(
         ArgumentError(
-            "the differences between successive grids do not shrink under refinement: |ε32/ε21| = $ratio does not exceed $threshold, so no positive order exists",
+            "no positive order exists: |ε32/ε21| = $ratio does not exceed $threshold, so the differences between the grids do not shrink fast enough under refinement",
         ),
     )
     a, b = log(r21), log(r32)
@@ -322,9 +323,9 @@ P. J. Roache, J. Fluids Eng. 116(3), 405–413 (1994), doi:10.1115/1.2910291.
 
 Returns a [`GridConvergence`](@ref). Throws `ArgumentError` unless exactly three levels
 with distinct, positive, finite h and finite values are given; for F_s < 1; when the
-quantity does not change between two grids; when φ₁ or φ₂ vanishes; and when the
-differences between successive grids do not shrink under refinement, or exceed the
-threshold of [`order_threshold`](@ref) by less than their round-off.
+quantity does not change between two grids; when φ₁ or φ₂ vanishes; when no positive
+order exists ([`observed_order`](@ref)); and when the differences are so close to
+round-off that their rounding error could change the order by more than half its value.
 
 # Example
 ```julia
@@ -365,13 +366,14 @@ function grid_convergence(
     ratio = abs(ε32 / ε21)
     # relative rounding error of the ratio: each difference carries that of its operands
     roundoff = eps() * ((abs(φ1) + abs(φ2)) / abs(ε21) + (abs(φ2) + abs(φ3)) / abs(ε32))
-    excess = log(ratio / order_threshold(r21, r32, s))
-    (0 < excess <= roundoff) && throw(
+    p = observed_order(ratio, r21, r32, s)
+    # d ln R / dp is at least ln(min r) / 2, which bounds the change of p under that error
+    uncertainty = 2 * roundoff / log(min(r21, r32))
+    uncertainty > p / 2 && throw(
         ArgumentError(
-            "|ε32/ε21| = $ratio equals its threshold to round-off; the observed order vanishes",
+            "the differences between the grids are at the level of round-off: the observed order $p is uncertain by up to $uncertainty",
         ),
     )
-    p = observed_order(ratio, r21, r32, s)
     extrapolated = (r21^p * φ1 - φ2) / (r21^p - 1)
     relative_error = abs((φ1 - φ2) / φ1)
     gci_fine = safety_factor * relative_error / (r21^p - 1)
@@ -402,7 +404,8 @@ law by construction, so no least-squares fit is made and the estimate carries no
 (`NaN`). Coarser levels show whether the sequence had reached that power law earlier.
 
 Throws `ArgumentError` for oscillatory convergence, where the distances from the
-extrapolated value are not errors, and under the conditions of the level validation.
+extrapolated value are not errors; when the three finest levels of `h` and `values` are
+not those of `grid`; and under the conditions of the level validation.
 """
 function extrapolated_estimate(
     h::AbstractVector{<:Real},
@@ -413,6 +416,18 @@ function extrapolated_estimate(
         ArgumentError(
             "under oscillatory convergence the distances from the extrapolated value are not errors",
         ),
+    )
+    length(h) == length(values) || throw(
+        DimensionMismatch(
+            "h has $(length(h)) entries but the values have $(length(values))",
+        ),
+    )
+    finest = sortperm(collect(h))[1:min(3, length(h))]
+    (
+        Tuple(Float64.(h[finest])) == grid.h &&
+        Tuple(Float64.(values[finest])) == grid.values
+    ) || throw(
+        ArgumentError("the three finest levels are not those of the three-grid result"),
     )
     hs, es = sorted_levels(h, abs.(Float64.(values) .- grid.extrapolated))
     check_nonzero(hs, es)

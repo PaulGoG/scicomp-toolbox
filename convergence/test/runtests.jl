@@ -273,14 +273,28 @@ end
             @test alternating.oscillatory
             @test alternating.order ≈ 1.7 atol = 1e-9
         end
+        # the extrapolated value is that of the published, monotone formula there, not
+        # the limit 1.5 of the alternating sequence
+        a1, a2, a3 = (1.5 + 0.8 * (-1)^k * h[k]^1.7 for k in 1:3)
+        alternating = grid_convergence(h, [a1, a2, a3])
+        @test alternating.extrapolated ≈ (2^1.7 * a1 - a2) / (2^1.7 - 1) rtol = 1e-9
+        @test abs(alternating.extrapolated - 1.5) > 0.04
+        io = IOBuffer()
+        convergence_table(io, alternating)
+        @test occursin("assume a monotone error", String(take!(io)))
 
         # no positive order: differences that grow or stay equal under refinement
-        @test_throws "do not shrink" grid_convergence(h, [1.0, 1.2, 1.3])
-        @test_throws "do not shrink" grid_convergence(h, [1.0, 1.2, 1.1])
-        @test_throws "do not shrink" grid_convergence(h, [1.0, 2.0, 3.0])
+        @test_throws "no positive order" grid_convergence(h, [1.0, 1.2, 1.3])
+        @test_throws "no positive order" grid_convergence(h, [1.0, 1.2, 1.1])
+        @test_throws "no positive order" grid_convergence(h, [1.0, 2.0, 3.0])
         @test_throws ArgumentError grid_convergence(h, [1.0, 1.1, 1.2])
         # monotone with unequal ratios: |ε32/ε21| = 1.5 does not exceed ln 4 / ln 2 = 2
-        @test_throws "do not shrink" grid_convergence([0.1, 0.2, 0.8], [1.0, 1.2, 1.5])
+        @test_throws "no positive order" grid_convergence([0.1, 0.2, 0.8], [1.0, 1.2, 1.5])
+        # differences at the level of round-off: one ulp above the threshold, where the
+        # unguarded order would be 6e-16, and ε21 = eps with ε32 = 99 eps, where it would
+        # be log2(99) on a ratio known to a factor 7
+        @test_throws "round-off" grid_convergence(h, [1.0, 2.0, nextfloat(3.0)])
+        @test_throws "round-off" grid_convergence(h, [1.0, nextfloat(1.0), 1 + 100 * eps()])
         @test_throws ArgumentError grid_convergence([0.1, 0.2], [1.0, 1.1])
         @test_throws ArgumentError grid_convergence(h, [1.0, 1.0, 1.2])
         @test_throws ArgumentError grid_convergence(h, [0.0, 1.0, 3.0])
@@ -328,6 +342,13 @@ end
         @test occursin("three-grid", text)
         @test !occursin("exact power law", text) && !occursin("±", text)
         @test Convergence.fit_label("q", estimate) == "q: p = 1.70"
+        # the estimate belongs to the grids it was computed from
+        @test_throws "three finest levels" extrapolated_estimate(
+            [0.05, 0.1, 0.2, 0.4],
+            [9.0, q[4], q[3], q[2]],
+            grid,
+        )
+        @test_throws "three finest levels" extrapolated_estimate(h, reverse(q), grid)
         oscillating = grid_convergence([0.1, 0.2, 0.4], [1.0, 0.9, 1.3])
         @test oscillating.oscillatory
         @test_throws ArgumentError extrapolated_estimate(
@@ -541,7 +562,7 @@ end
             # differences that grow under refinement are refused
             growing = joinpath(dir, "growing.csv")
             write(growing, "h,q\n0.4,1.3\n0.2,1.2\n0.1,1.0\n")
-            @test_throws "do not shrink" main(
+            @test_throws "no positive order" main(
                 [growing, "--quantity", "--no-csv", "--no-figure"];
                 io = IOBuffer(),
             )
