@@ -1,17 +1,35 @@
 # scicomp-toolbox
 
-[![CI](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/ci.yml/badge.svg)](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/ci.yml)
-[![Format](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/format.yml/badge.svg)](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/format.yml)
-[![Aqua QA](https://raw.githubusercontent.com/JuliaTesting/Aqua.jl/master/badge.svg)](https://github.com/JuliaTesting/Aqua.jl)
-[![JET](https://img.shields.io/badge/%F0%9F%9B%A9%EF%B8%8F_tested_with-JET.jl-233f9a)](https://github.com/aviatesk/JET.jl)
-[![Code style: JuliaFormatter](https://img.shields.io/badge/code%20style-JuliaFormatter-informational)](https://github.com/domluna/JuliaFormatter.jl)
-[![Julia](https://img.shields.io/badge/Julia-1.12%2B-9558B2?logo=julia&logoColor=white)](https://julialang.org)
-[![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey?logo=linux&logoColor=white)](https://www.kernel.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/ci.yml?query=branch%3Amain)
+[![Aqua QA](https://juliatesting.github.io/Aqua.jl/dev/assets/badge.svg)](https://github.com/JuliaTesting/Aqua.jl)
+[![JET](https://img.shields.io/badge/tested%20with-JET.jl-233f9a)](https://github.com/aviatesk/JET.jl)
+[![Format](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/format.yml/badge.svg?branch=main)](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/format.yml?query=branch%3Amain)
+[![Julia](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FPaulGoG%2Fscicomp-toolbox%2Fmain%2Fhardware-diagnostics%2FProject.toml&query=%24.compat.julia&label=julia&color=9558b2)](https://julialang.org/downloads/)
+[![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)](#requirements)
 
 Scientific scripting workbench in Julia. It hosts standalone utilities and self-contained
 tools that do not warrant a repository of their own, behind a common dispatcher, test
 runner and formatting gate.
+
+```
+scicomp-toolbox/
+├── run.jl                  # dispatcher: list and run tools
+├── test.jl                 # global test runner
+├── check.jl                # pre-commit: format, then test
+├── formatter/              # pinned JuliaFormatter environment
+├── standalone/             # tier 2: sysinfo, workspace-audit
+├── hardware-diagnostics/   # tier 1: host and GPU benchmark, package HardwareDiagnostics
+├── plot-benchmarks/        # tier 1: figures from its datasets
+├── run-index/              # tier 1: catalogue of run directories
+├── slurm-launch/           # tier 1: job scripts, submission, status
+├── convergence/            # tier 1: observed order of accuracy, package Convergence
+├── figure-audit/           # tier 1: exported figures against a column width
+├── bib-hygiene/            # tier 1: BibTeX validation
+├── reference-runs/         # datasets of the eight validation runs
+└── assets/                 # figures of this README
+```
+
+The [full tree](#full-tree) is at the end.
 
 ![Dual-GEMM throughput per element type on eight accelerators, by engine, with the ratio of the portable kernel to the library](assets/cross_host_accelerators_N4096.png)
 
@@ -38,6 +56,117 @@ Core Ultra 7 155H). The M4 shows the same knee at its four performance cores and
 julia run.jl hardware-diagnostics --stress                   # one machine
 julia run.jl plot-benchmarks --compare                       # both figures above
 ```
+
+## Two tiers
+
+A **tier 1 tool** is a directory with its own `Project.toml` and committed `Manifest.toml`,
+an `activate.jl`, a validated `config.toml`, the entry point `<name>/<name>.jl`, a test
+suite under `test/` and a README. A tool that outgrows a script becomes a package inside
+that directory (`name` and `uuid` in `Project.toml`, `src/<Name>.jl`); the dispatcher and
+the test runner handle both forms. Tools never share an environment, so their
+dependencies cannot conflict. A new tool starts as a pruned copy of `plot-benchmarks/`.
+
+A **tier 2 script** in `standalone/` relies on the standard library only and runs without
+instantiation. The `Project.toml` beside the scripts exists for their shared test suite
+in `standalone/test/`, which the global runner discovers like any other. Running a script
+never needs it, and the dispatcher does not list `standalone/` as a tool.
+
+## Requirements
+
+Julia 1.12 or later through [juliaup](https://github.com/JuliaLang/juliaup). Every
+environment declares `julia = "1.12"`, and the committed manifests are resolved with the
+current stable release (1.13); that of `figure-audit` is resolved with 1.12, for the
+reason its README gives. Linux is the primary platform and the one CI covers;
+`hardware-diagnostics` has also run on macOS/arm64 with the Metal backend. GPU packages
+(`CUDA`, `AMDGPU`, `Metal`, `oneAPI`) are not dependencies of any tool: install the one
+matching the hardware into the default environment and the tool resolves it through the
+load path (see `hardware-diagnostics/README.md`).
+
+## Entry points
+
+```bash
+julia run.jl --list                                     # catalogue
+julia run.jl sysinfo                                    # standalone script
+julia run.jl workspace-audit                            # git state of the surrounding workspace
+julia run.jl workspace-audit ~/projects --dirty-only    # another root, only what needs attention
+julia run.jl workspace-audit ~/projects --depth 1       # areas that are themselves repositories
+julia run.jl hardware-diagnostics --quick --cpu-only    # tool; arguments are forwarded
+julia run.jl plot-benchmarks --format png               # figures from the newest dataset
+julia run.jl plot-benchmarks --compare                  # cross-host figures from reference-runs/
+julia run.jl run-index ~/projects --flagged             # run directories that need attention
+julia run.jl slurm-launch --help                        # job scripts; run from the project to launch
+julia run.jl convergence errors.csv --reference-orders 1,2  # order of accuracy from a table of errors
+julia run.jl figure-audit paper/figures --column double  # exported figures against the column width
+julia run.jl bib-hygiene paper/refs.bib --tex paper/     # BibTeX checks and the citations of a manuscript
+julia run.jl --threads 8 hardware-diagnostics           # Julia threads of the child process
+julia test.jl                                           # every test suite
+julia test.jl hardware-diagnostics                      # one suite
+julia check.jl                                          # format in place, then test
+julia check.jl --check                                  # fail on formatting differences
+```
+
+Each tier 1 entry point activates and instantiates its own environment, so a fresh clone
+needs no manual setup. Child processes receive `--threads` from `JULIA_NUM_THREADS`, or
+`auto` when the variable is unset; `--threads N` before the tool name overrides both.
+
+A REPL in the environment of one tool:
+
+```bash
+julia -i hardware-diagnostics/activate.jl
+```
+
+## Catalogue
+
+| Tool | Tier | Purpose | Entry point |
+| :--- | :--- | :--- | :--- |
+| [`sysinfo`](standalone/sysinfo.jl) | 2 | CPU topology (physical and logical), memory, thread pools, BLAS library, repository revision | `standalone/sysinfo.jl` |
+| [`workspace-audit`](standalone/workspace-audit.jl) | 2 | Branch, working-tree state, distance from upstream, stashes, untracked weight and regenerable backup artifacts of every repository under a workspace root, searched two levels deep; areas under no version control are named | `standalone/workspace-audit.jl` |
+| [`hardware-diagnostics`](hardware-diagnostics/) | 1 | Host and accelerator introspection; dual-GEMM throughput through the vendor library and two KernelAbstractions kernels (naive, tiled), with thread scaling and cross-engine verification | `hardware-diagnostics/hardware-diagnostics.jl` |
+| [`plot-benchmarks`](plot-benchmarks/) | 1 | Thread-scaling and throughput figures (CairoMakie) from one hardware-diagnostics dataset, or across the machines of several (`--compare`) | `plot-benchmarks/plot-benchmarks.jl` |
+| [`run-index`](run-index/) | 1 | Catalogue of DrWatson-style run directories: commit and configuration, hardware, wall time, disk usage; flags missing or unreproducible provenance, seed replicates and repeats, and figures whose run is gone | `run-index/run-index.jl` |
+| [`slurm-launch`](slurm-launch/) | 1 | Job scripts for Julia pipelines and wrapped native launch scripts, resources derived from the run configuration; submit, status, cancel and fetch on Slurm or as detached local runs | `slurm-launch/slurm-launch.jl` |
+| [`convergence`](convergence/) | 1 | Observed order of accuracy from a table of errors against the step size: pairwise orders, least-squares order with a Student-t interval, the three-grid procedure with Richardson extrapolation and the grid convergence index, a CSV and a two-panel figure; usable as the package `Convergence` | `convergence/convergence.jl` |
+| [`figure-audit`](figure-audit/) | 1 | Exported PDF, PNG and SVG figures checked against a column width: printed size and the scaling LaTeX would apply, page count, font embedding and subsetting, smallest text size after scaling, raster resolution, colour space; non-zero exit on failure | `figure-audit/figure-audit.jl` |
+| [`bib-hygiene`](bib-hygiene/) | 1 | BibTeX validation before submission: duplicate keys and entries, required fields, DOI form, journal names written in several ways, encoding and escaping, unprotected capitals, page ranges, years, citations of the manuscript; optional cached DOI and arXiv lookups; corrected copy in a separate file | `bib-hygiene/bib-hygiene.jl` |
+
+## Status
+
+| Component | State |
+| :--- | :--- |
+| Dispatcher, test runner, formatting gate | in use; exercised by CI on Julia 1.12 and the current stable release, Ubuntu |
+| `sysinfo` | in use; parsing covered by the `standalone` suite |
+| `workspace-audit` | in use; read-only by construction, tested against repositories built in `mktempdir()` |
+| `hardware-diagnostics`, CPU path | tested (unit tests, static QA with Aqua, JET and ExplicitImports, end-to-end run); seven host processors in [`reference-runs/`](reference-runs/), x86_64 and arm64 |
+| `hardware-diagnostics`, CUDA extension | run on four devices (RTX 5090, RTX 5070 Ti, RTX 2080 Super Max-Q, Tesla T4), all three engines, verification passed |
+| `hardware-diagnostics`, AMDGPU extension | run on two devices (Radeon Pro W7900, Radeon RX 7700 XT), all three engines, verification passed |
+| `hardware-diagnostics`, oneAPI extension | run on an Intel Arc integrated GPU (Meteor Lake), all three engines, verification passed |
+| `hardware-diagnostics`, Metal extension | run on an Apple M4, all three engines, verification passed for the four element types Metal carries; `Float64` is refused per point |
+| `plot-benchmarks` | tested on synthetic datasets; figures inspected on the eight reference runs |
+| `run-index` | new; tested against a synthetic DrWatson workspace with real git history, not yet run on a real project |
+| `slurm-launch` | new; local backend run end to end, Slurm verbs tested against stub commands and golden scripts; no submission to a real cluster yet |
+| `convergence` | the fit validated on forward Euler, the classical Runge-Kutta scheme, central differences and the trapezoidal rule and against a least-squares solve in extended precision, the three-grid procedure on the worked example of Celik et al. and on exact power laws; static QA with Aqua, JET and ExplicitImports; figure inspected |
+| `figure-audit` | new; tested on PDF, PNG and SVG fixtures drawn with Cairo at test time, Poppler through `Poppler_jll`; not yet run on a manuscript's figure set |
+| `bib-hygiene` | new; every check tested on a fixture, the online checks and the cache against a stub fetcher, then exercised once live against doi.org and the arXiv API |
+
+The accelerator runs were made with `HardwareDiagnostics` 0.3. Since the restructuring of
+0.4.0 the package has run on the host and on the Intel Arc GPU; the CUDA and AMDGPU
+extensions have been loaded and checked statically, and the Metal extension has not been
+loaded.
+
+## Conventions
+
+Run outputs go to `<tool>/data/` and figures to `<tool>/plots/`; both are ignored by git,
+as are logs, CSV and binary data files. The datasets under `reference-runs/` are committed
+because the README figures and the backend validation rest on them. The manifests of the
+tools, the formatter and `standalone/` are committed; those of `test/` subdirectories are
+not. Commits follow Conventional Commits and `CHANGELOG.md` records notable changes.
+Formatting is enforced with the JuliaFormatter version pinned in
+`formatter/Manifest.toml`.
+
+## Full tree
+
+<details>
+<summary>Every directory and entry file</summary>
 
 ```
 scicomp-toolbox/
@@ -93,7 +222,7 @@ scicomp-toolbox/
 │   └── test/                      # synthetic DrWatson workspace built at test time
 ├── slurm-launch/                  # tier 1: job scripts with derived resource requests
 │   ├── activate.jl
-│   ├── config.toml                # no cluster defined: site settings are never guessed
+│   ├── config.toml                # ships no cluster table
 │   ├── slurm-launch.jl            # entry point
 │   ├── Manifest.toml
 │   ├── Project.toml
@@ -126,106 +255,4 @@ scicomp-toolbox/
     └── test/                      # fixture bib and tex, stub fetcher
 ```
 
-## Two tiers
-
-A **tier 1 tool** is a directory with its own `Project.toml` and committed `Manifest.toml`,
-an `activate.jl`, a validated `config.toml`, the entry point `<name>/<name>.jl`, a test
-suite under `test/` and a README. A tool that outgrows a script becomes a package inside
-that directory (`name` and `uuid` in `Project.toml`, `src/<Name>.jl`); the dispatcher and
-the test runner handle both forms. Tools never share an environment, so their
-dependencies cannot conflict. A new tool starts as a pruned copy of `plot-benchmarks/`.
-
-A **tier 2 script** in `standalone/` relies on the standard library only and runs without
-instantiation. The `Project.toml` beside the scripts exists for their shared test suite
-in `standalone/test/`, which the global runner discovers like any other. Running a script
-never needs it, and the dispatcher does not list `standalone/` as a tool.
-
-## Requirements
-
-Julia 1.12 or later through [juliaup](https://github.com/JuliaLang/juliaup); the declared
-floor of every environment is `julia = "1.12"` and the committed manifests are resolved
-with the current stable release (1.13), except that of `figure-audit`, resolved with 1.12:
-`Zstd_jll` is a standard library in 1.13 only, and a manifest that records it as such
-cannot be loaded by 1.12 where Poppler reaches it through Libtiff. Linux is the primary
-platform and the one CI covers; `hardware-diagnostics` has also been run on macOS/arm64, where the Metal backend
-was exercised. GPU packages (`CUDA`, `AMDGPU`, `Metal`, `oneAPI`) are not dependencies of
-any tool: install the one matching the hardware into the default environment and the tool
-resolves it through the load path (see `hardware-diagnostics/README.md`).
-
-## Entry points
-
-```bash
-julia run.jl --list                                     # catalog
-julia run.jl sysinfo                                    # standalone script
-julia run.jl workspace-audit                            # git state of the surrounding workspace
-julia run.jl workspace-audit ~/projects --dirty-only    # another root, only what needs attention
-julia run.jl workspace-audit ~/projects --depth 1       # areas that are themselves repositories
-julia run.jl hardware-diagnostics --quick --cpu-only    # tool; arguments are forwarded
-julia run.jl plot-benchmarks --format png               # figures from the newest dataset
-julia run.jl plot-benchmarks --compare                  # cross-host figures from reference-runs/
-julia run.jl run-index ~/projects --flagged             # run directories that need attention
-julia run.jl slurm-launch --help                        # job scripts; run from the project to launch
-julia run.jl convergence errors.csv --reference-orders 1,2  # order of accuracy from a table of errors
-julia run.jl figure-audit paper/figures --column double  # exported figures against the column width
-julia run.jl bib-hygiene paper/refs.bib --tex paper/     # BibTeX checks and the citations of a manuscript
-julia run.jl --threads 8 hardware-diagnostics           # Julia threads of the child process
-julia test.jl                                           # every test suite
-julia test.jl hardware-diagnostics                      # one suite
-julia check.jl                                          # format in place, then test
-julia check.jl --check                                  # fail on formatting differences
-```
-
-Each tier 1 entry point activates and instantiates its own environment, so a fresh clone
-needs no manual setup. Child processes receive `--threads` from `JULIA_NUM_THREADS`, or
-`auto` when the variable is unset; `--threads N` before the tool name overrides both.
-
-Working inside one environment:
-
-```bash
-julia --project=hardware-diagnostics                    # REPL in the tool's environment
-julia --project=hardware-diagnostics -e 'using Pkg; Pkg.test()'
-julia -i -e 'include("hardware-diagnostics/activate.jl")'
-```
-
-## Catalog
-
-| Tool | Tier | Purpose | Entry point |
-| :--- | :--- | :--- | :--- |
-| [`sysinfo`](standalone/sysinfo.jl) | 2 | CPU topology (physical and logical), memory, thread pools, BLAS library, repository revision | `standalone/sysinfo.jl` |
-| [`workspace-audit`](standalone/workspace-audit.jl) | 2 | Branch, working-tree state, distance from upstream, stashes, untracked weight and regenerable backup artifacts of every repository under a workspace root, searched two levels deep; areas under no version control are named | `standalone/workspace-audit.jl` |
-| [`hardware-diagnostics`](hardware-diagnostics/) | 1 | Host and accelerator introspection; dual-GEMM throughput through the vendor library and two KernelAbstractions kernels (naive, tiled), with thread scaling and cross-engine verification | `hardware-diagnostics/hardware-diagnostics.jl` |
-| [`plot-benchmarks`](plot-benchmarks/) | 1 | Thread-scaling and throughput figures (CairoMakie) from one hardware-diagnostics dataset, or across the machines of several (`--compare`) | `plot-benchmarks/plot-benchmarks.jl` |
-| [`run-index`](run-index/) | 1 | Catalogue of DrWatson-style run directories: commit and configuration, hardware, wall time, disk usage; flags missing or unreproducible provenance, seed replicates and repeats, and figures whose run is gone | `run-index/run-index.jl` |
-| [`slurm-launch`](slurm-launch/) | 1 | Job scripts for Julia pipelines and wrapped native launch scripts, resources derived from the run configuration; submit, status, cancel and fetch on Slurm or as detached local runs | `slurm-launch/slurm-launch.jl` |
-| [`convergence`](convergence/) | 1 | Observed order of accuracy from a table of errors against the step size: pairwise orders, least-squares order with a Student-t interval, the three-grid procedure with Richardson extrapolation and the grid convergence index, a CSV and a two-panel figure; usable as the package `Convergence` | `convergence/convergence.jl` |
-| [`figure-audit`](figure-audit/) | 1 | Exported PDF, PNG and SVG figures checked against a column width: printed size and the scaling LaTeX would apply, page count, font embedding and subsetting, smallest text size after scaling, raster resolution, colour space; non-zero exit on failure | `figure-audit/figure-audit.jl` |
-| [`bib-hygiene`](bib-hygiene/) | 1 | BibTeX validation before submission: duplicate keys and entries, required fields, DOI form, journal names written in several ways, encoding and escaping, unprotected capitals, page ranges, years, citations of the manuscript; optional cached DOI and arXiv lookups; corrected copy beside the input | `bib-hygiene/bib-hygiene.jl` |
-
-## Status
-
-| Component | State |
-| :--- | :--- |
-| Dispatcher, test runner, formatting gate | in use; exercised by CI on Julia 1.12 and the current stable release, Ubuntu |
-| `sysinfo` | in use; parsing covered by the `standalone` suite |
-| `workspace-audit` | in use; read-only by construction, tested against repositories built in `mktempdir()` |
-| `hardware-diagnostics`, CPU path | tested (unit tests, static QA with Aqua, JET and ExplicitImports, end-to-end run); seven host processors in [`reference-runs/`](reference-runs/), x86_64 and arm64 |
-| `hardware-diagnostics`, CUDA extension | run on four devices (RTX 5090, RTX 5070 Ti, RTX 2080 Super Max-Q, Tesla T4), all three engines, verification passed |
-| `hardware-diagnostics`, AMDGPU extension | run on two devices (Radeon Pro W7900, Radeon RX 7700 XT), all three engines, verification passed |
-| `hardware-diagnostics`, oneAPI extension | run on an Intel Arc integrated GPU (Meteor Lake), all three engines, verification passed |
-| `hardware-diagnostics`, Metal extension | run on an Apple M4, all three engines, verification passed for the four element types Metal carries; `Float64` is refused per point |
-| `plot-benchmarks` | tested on synthetic datasets; figures inspected on the eight reference runs |
-| `run-index` | new; tested against a synthetic DrWatson workspace with real git history, not yet run on a real project |
-| `slurm-launch` | new; local backend run end to end, Slurm verbs tested against stub commands and golden scripts; no submission to a real cluster yet |
-| `convergence` | new; the fit validated on forward Euler, the classical Runge-Kutta scheme, central differences and the trapezoidal rule, the three-grid procedure on exact power laws; static QA with Aqua, JET and ExplicitImports; figure inspected |
-| `figure-audit` | new; tested on PDF, PNG and SVG fixtures drawn with Cairo at test time, Poppler through `Poppler_jll`; not yet run on a manuscript's figure set |
-| `bib-hygiene` | new; every check tested on a fixture, the online checks and the cache against a stub fetcher, then exercised once live against doi.org and the arXiv API |
-
-## Conventions
-
-Run outputs go to `<tool>/data/` and figures to `<tool>/plots/`; both are ignored by git,
-as are logs, CSV and binary data files. The datasets under `reference-runs/` are committed
-because the README figures and the backend validation rest on them. The manifests of the
-tools, the formatter and `standalone/` are committed; those of `test/` subdirectories are
-not. Commits follow Conventional Commits and `CHANGELOG.md` records notable changes.
-Formatting is enforced with the JuliaFormatter version pinned in
-`formatter/Manifest.toml`.
+</details>

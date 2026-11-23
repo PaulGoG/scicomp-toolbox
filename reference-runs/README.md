@@ -24,7 +24,7 @@ in hardware:
 julia run.jl hardware-diagnostics --stress
 ```
 
-That is `problem_sizes = [1024, 2048, 4096]` with the shipped `config.toml`: element
+That is `problem_sizes = [1024, 2048, 4096]` with the `config.toml` of that revision: element
 types `Float16, Float32, Float64, Int32, Int64`, engines `blas, ka, ka_tiled`, seed
 `20260907`, memory safety fraction `0.75`, sampling at least 3 evaluations and 0.5 s per
 point and at most 30, points predicted above 60 s per evaluation skipped, thread sweep up
@@ -52,7 +52,9 @@ distinct processor.
 
 The `.toml` provenance sidecar and the `.log` report of each run are not committed: they
 record host names and absolute paths of the machines they ran on. Everything the figures
-need is in the `.csv`; the table above was compiled from the sidecars.
+need is in the `.csv`; the table above was compiled from the sidecars. The files have the
+23 columns of version 0.3 and predate the `stage` column; `plot-benchmarks` reads both
+layouts and can pool them.
 
 ## Outcome
 
@@ -82,7 +84,7 @@ Metal device were written `GPUArrays generic` by a defect in the version that pr
 them: vendor coverage came from one fixed type set that assumed every backend serves the
 BLAS types and only those. Metal does not: `MPS_VALID_MATMUL_TYPES` and
 `MPSGRAPH_VALID_MATMUL_TYPES` both carry the `(Float16, Float16)` pair, so `mul!` reached
-an Apple GEMM, consistent with the measured 3.45 TOP/s. `vendor_blas_types` asks
+an Apple GEMM, consistent with the measured 3.45 TFLOP/s. `vendor_blas_types` asks
 the backend since 0.3.2, and those three fields now read `Metal Performance Shaders`, as
 the fixed code writes them. The same defect labelled the three failed `Float64` library
 rows `Metal Performance Shaders`, which has no double precision; they now read
