@@ -11,6 +11,7 @@ hardware_benchmark_*
 *.jld2
 *.pdf
 *.png
+*.svg
 !**/test/fixtures/**
 !assets/**
 !reference-runs/**

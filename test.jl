@@ -2,7 +2,7 @@
 # test.jl — global test runner. Discovers every sub-environment with test/runtests.jl,
 # instantiates it, and runs its suite in an isolated child process. Package
 # environments (Project.toml with name and uuid plus src/<Name>.jl) run through
-# Pkg.test, which honors test/Project.toml; plain environments run the script directly.
+# Pkg.test, which honours test/Project.toml; plain environments run the script directly.
 #
 #   julia test.jl            all suites
 #   julia test.jl <tool>     one suite

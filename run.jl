@@ -4,7 +4,7 @@
 #   julia run.jl <tool> [args...]              run a sub-environment tool or a standalone script
 #   julia run.jl --threads N <tool> [args...]  Julia thread count of the child process
 #                                              (default: JULIA_NUM_THREADS, else auto)
-#   julia run.jl --list                        catalog of tools and standalone scripts
+#   julia run.jl --list                        catalogue of tools and standalone scripts
 #   julia run.jl --help
 
 using Printf: @printf
@@ -70,7 +70,7 @@ Workbench dispatcher
 Usage:
   julia run.jl <tool> [args...]              run a tool or a standalone script
   julia run.jl --threads N <tool> [args...]  Julia thread count of the child (default: auto)
-  julia run.jl --list                        catalog of tools and standalone scripts
+  julia run.jl --list                        catalogue of tools and standalone scripts
   julia run.jl --help                        this message
 
 Examples:

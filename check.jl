@@ -27,6 +27,14 @@ function run_step(label::String, cmd::Cmd)
 end
 
 function main(args::Vector{String} = ARGS)
+    unknown = filter(!=("--check"), args)
+    if !isempty(unknown)
+        println(
+            stderr,
+            "Usage: julia check.jl [--check]; unknown argument '$(first(unknown))'",
+        )
+        exit(2)
+    end
     check_only = "--check" in args
     format_script = joinpath(REPO_ROOT, "formatter", "format.jl")
     format_args = check_only ? [REPO_ROOT, "--check"] : [REPO_ROOT]
