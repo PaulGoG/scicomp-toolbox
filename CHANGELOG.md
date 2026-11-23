@@ -19,8 +19,8 @@ findings.
 - `Convergence` 0.2.0: the three-grid order is the root of
   p ln r₂₁ = ln|ε₃₂/ε₂₁| + q(p), found by bisection for unequal refinement ratios. The
   fixed-point iteration diverged on exact power laws once r₃₂ was well above r₂₁.
-  Sequences whose differences do not shrink under refinement are refused; they received
-  a positive order. `asymptotic_ratio` is GCI₃₂ / (r₂₁ᵖ GCI₂₁), the reciprocal of the
+  Sequences that admit no positive order are refused, where they received one, and so
+  are differences at the level of round-off. `asymptotic_ratio` is GCI₃₂ / (r₂₁ᵖ GCI₂₁), the reciprocal of the
   earlier value.
 - `Convergence` 0.2.0: `main`, `read_series`, `load_settings`, `validate_settings` and
   `StudySettings` are no longer exported. `convergence_figure` draws under its own theme
@@ -53,21 +53,27 @@ findings.
   the decimals of the standard error; with three significant digits an interval that
   excluded the formal order read as containing it.
 - `figure-audit`: an embedded font whose name exceeds 36 characters was reported as not
-  embedded; a PDF with a CropBox or a page rotation was measured with the wrong width
+  embedded, and a font that is no indirect object could not be read; a PDF with a CropBox or a page rotation was measured with the wrong width
   and text size; a PNG without its IEND chunk passed; an SVG with one of `width` and
   `height` took the other from the viewBox in px; `--csv` overwrote an existing file; a
   Poppler tool killed by a signal counted as a success.
 - `bib-hygiene`: `--fixed` turned a `doi` field holding a URL other than a doi.org one
   into an invalid string, and rewrote the hyphens of section-page numbers
-  (`3-1--3-15`). Two journals sharing an abbreviation were reported as one. The word
-  after a colon in a title was flagged. `\cites{a}{b}` lost its second key.
+  (`3-1--3-15`). An en or em dash in a page range was never recognised: the pattern
+  wrote it as `\x{2013}`, which Julia's regular expressions do not read as a code point.
+  Two journals sharing an abbreviation were reported as one. In a title only the first
+  character and the one after a colon keep their case: the word after a colon was
+  flagged, and capitals further into the first word were not. `\cites{a}{b}` lost its
+  second key.
 - `slurm-launch`: an array requested the GPU type of its last case instead of the one
   with the most memory; a launch script at the project root produced `cd ''`; `status`
-  and `cancel` of a local job trusted a process id that the system may have reused.
+  and `cancel` of a local job trusted a process id that the system may have reused;
+  pending array tasks were counted as one (`squeue` and `sacct` are now asked for one
+  line per task).
 - `run-index`: a directory holding only a submission record was listed as a documented
   run; a root narrower than the project listed figures of existing runs as orphans; a
-  root with a trailing separator lost its project name; a non-date string under an
-  earlier key hid a valid start time.
+  root with a trailing separator lost its project name; a non-date string or an epoch
+  count under an earlier key hid a valid start time.
 - `plot-benchmarks`: `--compare` aborted when datasets with and without the `stage`
   column were pooled; a dataset swept to the logical thread count lost the library
   bars of every element type but `Float32`.
