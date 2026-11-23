@@ -1,6 +1,6 @@
 name = "Convergence"
 uuid = "4285f31f-1621-4d2c-9b80-6d570eb2dc4d"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Paul-Adrian Gogîță"]
 
 [deps]

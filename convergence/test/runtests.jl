@@ -1,12 +1,14 @@
 # Tests of the Convergence package. The numerical cases are schemes of known order on
-# problems with closed-form solutions, so the suite validates itself without data.
+# problems with closed-form solutions; the three-grid procedure is checked against the
+# worked example of Celik et al. (2008), so the suite needs no data files.
 
 using Convergence
+using Convergence: StudySettings, load_settings, main, read_series, validate_settings
 using Test
 using Aqua
 using ExplicitImports
 using JET
-using TOML: TOML
+using LinearAlgebra: diag
 
 const TOOL_DIR = normpath(joinpath(@__DIR__, ".."))
 
@@ -54,6 +56,20 @@ exact_derivative(h) = [exp(j * h) for j in 1:(round(Int, 1 / h) - 1)]
 # Three-grid synthetic quantity with an exact power law: q(h) = 1.5 + 0.8 h^1.7.
 synthetic_quantity(h) = 1.5 + 0.8 * h^1.7
 
+"""
+Slope, intercept and standard error of the slope of the least-squares line through
+(log h, log e), from the normal equations in extended precision: the reference for
+`fit_order`, which forms the same quantities from centred sums.
+"""
+function reference_fit(h, e)
+    X = hcat(log.(big.(h)), ones(BigFloat, length(h)))
+    y = log.(big.(e))
+    β = (X' * X) \ (X' * y)
+    residual = y - X * β
+    variance = sum(abs2, residual) / (length(h) - 2)
+    return Float64(β[1]), Float64(exp(β[2])), Float64(sqrt(variance * diag(inv(X' * X))[1]))
+end
+
 @testset "Convergence" begin
     @testset "Static QA" begin
         Aqua.test_all(Convergence)
@@ -85,6 +101,13 @@ synthetic_quantity(h) = 1.5 + 0.8 * h^1.7
         @test_throws ArgumentError error_norm(u, zeros(3), :relative)
         @test_throws ArgumentError error_norm(1.0, 0.0, :relative)
         @test_throws ArgumentError error_norm(1.0, 2.0, :H1)
+        @test_throws ArgumentError error_norm(u, v, :L2; measure = Inf)
+        @test error_norm(ComplexF32[1 + 2im], ComplexF32[1 - 2im], :Linf) == 4.0
+        # entries wider than Float64 keep their precision until the norm is returned
+        @test error_norm([big"1" + big"1e-30"], [big"1"], :Linf) ≈ 1e-30 rtol = 1e-12
+        @test error_norm(big"1" + big"1e-30", big"1") ≈ 1e-30 rtol = 1e-12
+        @test error_norm([big"1" + big"1e-30"], [big"1"], :L2; measure = 0.25) ≈ 5e-31 rtol =
+            1e-12
     end
 
     @testset "Pairwise orders" begin
@@ -106,9 +129,9 @@ synthetic_quantity(h) = 1.5 + 0.8 * h^1.7
         est = fit_order(h, e)
         @test est.order ≈ 2.0 atol = 1e-10
         @test est.constant ≈ 3.0 rtol = 1e-8
-        @test est.standard_error ≈ 0.0 atol = 1e-8
-        @test est.confidence_interval[1] ≈ 2.0 atol = 1e-6
-        @test est.confidence_interval[2] ≈ 2.0 atol = 1e-6
+        # round-off residuals are reported as an exact power law
+        @test est.standard_error == 0.0
+        @test est.confidence_interval[1] == est.order == est.confidence_interval[2]
         @test est.confidence_level == 0.95
         @test [l.h for l in est.levels] == [0.4, 0.2, 0.1, 0.05, 0.025]
         @test est.levels[1].order === nothing
@@ -128,13 +151,17 @@ synthetic_quantity(h) = 1.5 + 0.8 * h^1.7
         @test est.levels[1].fitted == false
         @test all(l.fitted for l in est.levels[2:end])
         @test est.levels[2].order ≈ 2 + log(3) / log(2)
-        # a fit over three levels has one degree of freedom: t(1, 0.975) = 12.706
+        # a fit over three levels has one degree of freedom, where the quantile of
+        # Student's t has the closed form t(1, P) = tan(π (P - 1/2))
         noisy = fit_order([0.4, 0.2, 0.1], [1.0, 0.3, 0.06])
-        @test noisy.standard_error > 0
+        slope, constant, deviation = reference_fit([0.4, 0.2, 0.1], [1.0, 0.3, 0.06])
+        @test noisy.order ≈ slope rtol = 1e-12
+        @test noisy.constant ≈ constant rtol = 1e-12
+        @test noisy.standard_error ≈ deviation rtol = 1e-10
         @test noisy.confidence_interval[2] - noisy.order ≈
-              12.706204736174698 * noisy.standard_error rtol = 1e-6
+              tan(0.475π) * noisy.standard_error rtol = 1e-10
         @test noisy.order - noisy.confidence_interval[1] ≈
-              12.706204736174698 * noisy.standard_error rtol = 1e-6
+              tan(0.475π) * noisy.standard_error rtol = 1e-10
         wider = fit_order([0.4, 0.2, 0.1], [1.0, 0.3, 0.06]; confidence = 0.99)
         @test wider.confidence_interval[2] > noisy.confidence_interval[2]
         @test wider.confidence_level == 0.99
@@ -150,18 +177,27 @@ synthetic_quantity(h) = 1.5 + 0.8 * h^1.7
     end
 
     @testset "Schemes of known order" begin
-        euler = convergence_study(euler_error, 2.0 .^ -(3:8))
+        steps = 2.0 .^ -(3:8)
+        euler = convergence_study(euler_error, steps)
         @test 0.98 < euler.order < 1.05
         @test all(1.0 < l.order < 1.05 for l in euler.levels[2:end])
-        @test euler.order ≈ 1.0139626718473365 rtol = 1e-6
-        @test euler.constant ≈ 0.1974275003937855 rtol = 1e-6
-        @test euler.standard_error ≈ 0.00334063326373347 rtol = 1e-4
+        slope, constant, deviation = reference_fit(steps, euler_error.(steps))
+        @test euler.order ≈ slope rtol = 1e-10
+        @test euler.constant ≈ constant rtol = 1e-10
+        @test euler.standard_error ≈ deviation rtol = 1e-8
+        # e = (h / 2e)(1 + 5h/12 + ...): the constant tends to 1/(2e) from above
+        @test exp(-1) / 2 < euler.constant < 1.1 * exp(-1) / 2
+        # the residuals are the next term of the expansion, not noise: the interval of
+        # the slope lies above the formal order
+        @test euler.confidence_interval[1] > 1
         rk4 = convergence_study(rk4_error, 2.0 .^ -(1:5))
         @test 3.9 < rk4.order < 4.3
-        central = convergence_study(central_error, 2.0 .^ -(2:7))
+        steps = 2.0 .^ -(2:7)
+        central = convergence_study(central_error, steps)
         @test central.order ≈ 2.0 atol = 0.01
         @test central.constant ≈ cos(1.0) / 6 rtol = 0.02
-        @test central.standard_error ≈ 0.00029181073341439366 rtol = 1e-4
+        @test central.standard_error ≈ last(reference_fit(steps, central_error.(steps))) rtol =
+            1e-8
         trapezoid = convergence_study(trapezoid_error, 2.0 .^ -(2:7))
         @test trapezoid.order ≈ 2.0 atol = 0.01
         @test trapezoid.constant ≈ (exp(1.0) - 1) / 12 rtol = 0.02
@@ -185,40 +221,120 @@ synthetic_quantity(h) = 1.5 + 0.8 * h^1.7
     end
 
     @testset "Three-grid procedure" begin
+        # Celik et al. (2008), doi:10.1115/1.2960953, Table 1, first column: reattachment
+        # length on 18000, 8000 and 4500 cells in two dimensions (h ∝ N^(-1/2)); the paper
+        # gives r21 = 1.5, r32 = 1.333, p = 1.53, φ_ext = 6.1685, e_a = 1.5 %,
+        # e_ext = 1.7 %, GCI = 2.2 %
+        celik = grid_convergence([18000, 8000, 4500] .^ -0.5, [6.063, 5.972, 5.863])
+        @test collect(celik.refinement_ratios) ≈ [1.5, 4 / 3]
+        @test celik.order ≈ 1.53 atol = 0.005
+        @test celik.extrapolated ≈ 6.1685 atol = 5e-5
+        @test 100 * celik.relative_error ≈ 1.5 atol = 0.05
+        @test 100 * celik.extrapolated_relative_error ≈ 1.7 atol = 0.05
+        @test 100 * celik.gci_fine ≈ 2.2 atol = 0.05
+        @test !celik.oscillatory
+
+        # exact power law q = 1.5 + 0.8 h^1.7, constant ratio 2: closed forms
         h = [0.1, 0.2, 0.4]
-        grid = grid_convergence(h, synthetic_quantity.(h))
+        q1, q2, q3 = synthetic_quantity.(h)
+        grid = grid_convergence(h, [q1, q2, q3])
         @test grid.h == (0.1, 0.2, 0.4)
         @test grid.refinement_ratios == (2.0, 2.0)
-        @test grid.order ≈ 1.7 atol = 1e-8
-        @test grid.extrapolated ≈ 1.5 atol = 1e-8
-        @test grid.relative_error ≈ 0.02368061352554299 rtol = 1e-8
-        @test grid.gci_fine ≈ 0.013161689971781835 rtol = 1e-6
-        @test grid.gci_medium ≈ 0.04177324090512686 rtol = 1e-6
-        @test grid.asymptotic_ratio ≈ 1.023680613525543 rtol = 1e-6
-        @test grid.extrapolated_relative_error ≈ abs(1.5 - grid.values[1]) / 1.5 rtol = 1e-8
+        @test grid.order ≈ 1.7 atol = 1e-10
+        @test grid.extrapolated ≈ 1.5 atol = 1e-10
+        @test grid.relative_error ≈ (q2 - q1) / q1 rtol = 1e-12
+        @test grid.extrapolated_relative_error ≈ (q1 - 1.5) / 1.5 rtol = 1e-9
+        @test grid.gci_fine ≈ 1.25 * (q2 - q1) / q1 / (2^1.7 - 1) rtol = 1e-9
+        @test grid.gci_medium ≈ 1.25 * (q3 - q2) / q2 / (2^1.7 - 1) rtol = 1e-9
+        # GCI32 / (r^p GCI21) = φ1 / φ2 on an exact power law
+        @test grid.asymptotic_ratio ≈ q1 / q2 rtol = 1e-9
         @test !grid.oscillatory
         shuffled = grid_convergence([0.4, 0.1, 0.2], synthetic_quantity.([0.4, 0.1, 0.2]))
         @test shuffled.order ≈ grid.order
-        uneven = grid_convergence([0.1, 0.2, 0.3], synthetic_quantity.([0.1, 0.2, 0.3]))
-        @test collect(uneven.refinement_ratios) ≈ [2.0, 1.5]
-        @test uneven.order ≈ 1.7 atol = 1e-8
-        @test uneven.extrapolated ≈ 1.5 atol = 1e-8
-        safer = grid_convergence(h, synthetic_quantity.(h); safety_factor = 3.0)
+        safer = grid_convergence(h, [q1, q2, q3]; safety_factor = 3.0)
         @test safer.gci_fine ≈ 3 / 1.25 * grid.gci_fine
-        oscillating = grid_convergence([0.1, 0.2, 0.4], [1.0, 1.2, 1.1])
-        @test oscillating.oscillatory
-        @test oscillating.order ≈ 1.0
+
+        # unequal ratios, including r32 well above r21, where the fixed-point iteration
+        # of the paper diverges
+        for steps in
+            ([0.1, 0.2, 0.3], [0.1, 0.125, 0.25], [0.1, 0.15, 0.45], [1.0, 1.3, 2.6])
+            uneven = grid_convergence(steps, synthetic_quantity.(steps))
+            @test uneven.order ≈ 1.7 atol = 1e-9
+            @test uneven.extrapolated ≈ 1.5 atol = 1e-9
+        end
+        linear = grid_convergence([1.0, 1.3, 2.6], 1 .+ 0.01 .* [1.0, 1.3, 2.6])
+        @test linear.order ≈ 1.0 atol = 1e-9
+        @test linear.extrapolated ≈ 1.0 atol = 1e-9
+
+        # alternating error q = 1.5 + 0.8 (-1)^k h^1.7: same order, flagged
+        for steps in ([0.1, 0.2, 0.4], [0.1, 0.2, 0.3])
+            alternating =
+                grid_convergence(steps, [1.5 + 0.8 * (-1)^k * steps[k]^1.7 for k in 1:3])
+            @test alternating.oscillatory
+            @test alternating.order ≈ 1.7 atol = 1e-9
+        end
+
+        # no positive order: differences that grow or stay equal under refinement
+        @test_throws "do not shrink" grid_convergence(h, [1.0, 1.2, 1.3])
+        @test_throws "do not shrink" grid_convergence(h, [1.0, 1.2, 1.1])
+        @test_throws "do not shrink" grid_convergence(h, [1.0, 2.0, 3.0])
+        @test_throws ArgumentError grid_convergence(h, [1.0, 1.1, 1.2])
+        # monotone with unequal ratios: |ε32/ε21| = 1.5 does not exceed ln 4 / ln 2 = 2
+        @test_throws "do not shrink" grid_convergence([0.1, 0.2, 0.8], [1.0, 1.2, 1.5])
         @test_throws ArgumentError grid_convergence([0.1, 0.2], [1.0, 1.1])
         @test_throws ArgumentError grid_convergence(h, [1.0, 1.0, 1.2])
-        @test_throws ArgumentError grid_convergence(h, [0.0, 1.0, 1.2])
-        @test_throws ArgumentError grid_convergence(h, [1.0, 1.1, 1.2]; safety_factor = 0.9)
-        @test_throws ArgumentError grid_convergence([0.1, 0.1, 0.4], [1.0, 1.1, 1.2])
+        @test_throws ArgumentError grid_convergence(h, [0.0, 1.0, 3.0])
+        @test_throws ArgumentError grid_convergence(h, [-1.0, 0.0, 3.0])
+        @test_throws ArgumentError grid_convergence(h, [1.0, NaN, 2.0])
+        @test_throws ArgumentError grid_convergence(h, [1.0, 1.1, 1.4]; safety_factor = 0.9)
+        @test_throws ArgumentError grid_convergence([0.1, 0.1, 0.4], [1.0, 1.1, 1.4])
+        # φ_ext = 0 for q = h²: the extrapolated relative error is infinite, the rest finite
+        vanishing = grid_convergence(h, h .^ 2)
+        @test vanishing.extrapolated == 0 && isinf(vanishing.extrapolated_relative_error)
+        @test vanishing.order ≈ 2.0
+
         io = IOBuffer()
         convergence_table(io, grid)
         text = String(take!(io))
         @test occursin("GCI", text)
         @test occursin("1.7", text)
         @test occursin("1.5", text)
+    end
+
+    @testset "Quantity without an exact value" begin
+        # q = 10, 3, 2 at h = 0.4, 0.2, 0.1: ε21 = 1, ε32 = 7, so p = log2(7) and
+        # q_ext = (7·2 - 3) / 6 = 11/6
+        grid = grid_convergence([0.4, 0.2, 0.1], [10.0, 3.0, 2.0])
+        @test grid.order ≈ log2(7)
+        @test grid.extrapolated ≈ 11 / 6
+        estimate = extrapolated_estimate([0.4, 0.2, 0.1], [10.0, 3.0, 2.0], grid)
+        @test estimate.order == grid.order
+        @test isnan(estimate.standard_error)
+        @test all(isnan, estimate.confidence_interval)
+        @test [l.error for l in estimate.levels] ≈ [10 - 11 / 6, 3 - 11 / 6, 2 - 11 / 6]
+        @test all(l.fitted for l in estimate.levels)
+        @test estimate.constant ≈ (2 - 11 / 6) / 0.1^log2(7)
+        # a fourth, coarser level is tabulated but did not determine the estimate
+        h = [0.8, 0.4, 0.2, 0.1]
+        q = synthetic_quantity.(h)
+        grid = grid_convergence(h[2:4], q[2:4])
+        estimate = extrapolated_estimate(h, q, grid)
+        @test [l.fitted for l in estimate.levels] == [false, true, true, true]
+        @test estimate.levels[1].error ≈ 0.8 * 0.8^1.7 rtol = 1e-8
+        @test estimate.levels[2].order ≈ 1.7 atol = 1e-7
+        io = IOBuffer()
+        convergence_table(io, estimate)
+        text = String(take!(io))
+        @test occursin("three-grid", text)
+        @test !occursin("exact power law", text) && !occursin("±", text)
+        @test Convergence.fit_label("q", estimate) == "q: p = 1.70"
+        oscillating = grid_convergence([0.1, 0.2, 0.4], [1.0, 0.9, 1.3])
+        @test oscillating.oscillatory
+        @test_throws ArgumentError extrapolated_estimate(
+            [0.1, 0.2, 0.4],
+            [1.0, 0.9, 1.3],
+            oscillating,
+        )
     end
 
     @testset "Richardson extrapolation" begin
@@ -229,6 +345,9 @@ synthetic_quantity(h) = 1.5 + 0.8 * h^1.7
         @test richardson_extrapolate(1 + c / 2^1.7, 1 + c, 2, 1.7) ≈ 1.0
         @test_throws ArgumentError richardson_extrapolate(1.0, 2.0, 1.0, 2)
         @test_throws ArgumentError richardson_extrapolate(1.0, 2.0, 2.0, 0)
+        @test_throws ArgumentError richardson_extrapolate(1.0, 2.0, Inf, 2)
+        # integer r and p: 2^64 overflows Int64, the result is 1 - 1/(2^64 - 1)
+        @test richardson_extrapolate(1.0, 2.0, 2, 64) ≈ 1.0 atol = 1e-15
         @test_throws DimensionMismatch richardson_extrapolate([1.0, 2.0], [1.0], 2, 2)
     end
 
@@ -238,14 +357,6 @@ synthetic_quantity(h) = 1.5 + 0.8 * h^1.7
         for name in fieldnames(StudySettings)
             @test getfield(shipped, name) == getfield(defaults, name)
         end
-        @test shipped.confidence_level == 0.95
-        @test shipped.skip_coarsest == 0
-        @test shipped.safety_factor == 1.25
-        @test shipped.format == "pdf"
-        @test shipped.width_mm == 86.0
-        @test shipped.fontsize_pt == 9.0
-        @test shipped.reference_orders == Float64[]
-        @test shipped.xlabel == "Step size h"
         bad(d) = validate_settings(d)
         @test_throws "unknown key 'extra'" bad(Dict("extra" => Dict()))
         @test_throws "confidence_level" bad(Dict("fit" => Dict("confidence_level" => 1.0)))
@@ -287,8 +398,43 @@ synthetic_quantity(h) = 1.5 + 0.8 * h^1.7
         @test occursin("±", text)
         @test occursin("95 % interval", text)
         @test occursin("4 levels", text)
+        # order and interval carry the decimals of the standard error
+        steps = 2.0 .^ -(3:8)
+        convergence_table(io, convergence_study(euler_error, steps))
+        @test occursin(
+            r"p = 1\.01\d\d ± 0\.00\d\d \(95 % interval \[1\.00\d\d, 1\.02\d\d\]\)",
+            String(take!(io)),
+        )
+        convergence_table(
+            io,
+            fit_order(h, [1.0, 0.3, 0.06, 0.02, 0.004]; confidence = 0.999),
+        )
+        @test occursin("99.9 % interval", String(take!(io)))
+        # legend: a standard error below the fourth decimal is not printed as zero
+        tiny = fit_order([0.4, 0.2, 0.1], [0.16, 0.04, 0.01 * (1 + 1e-5)])
+        @test 0 < tiny.standard_error < 5e-5
+        @test Convergence.fit_label("s", tiny) == "s: p = 2.0000"
+        @test Convergence.fit_label("L2", exact) == "L2: p = 2.00"
+        @test occursin(
+            r"^Linf: p = \d\.\d+ ± 0\.\d+$",
+            Convergence.fit_label("Linf", noisy),
+        )
+        # x ticks: plain decimals at the step sizes when their labels fit
+        ticks = Convergence.step_ticks([0.0125, 0.025, 0.05, 0.1], (0.011, 0.11), 190, 9)
+        @test ticks == ([0.0125, 0.025, 0.05, 0.1], ["0.0125", "0.025", "0.05", "0.1"])
+        @test Convergence.step_ticks(2.0 .^ -(9:-1:2), (0.0018, 0.27), 190, 9) === nothing
+        @test Convergence.step_ticks([500.0, 1000.0, 2000.0], (450.0, 2200.0), 190, 9) ==
+              ([500.0, 1000.0, 2000.0], ["500", "1000", "2000"])
+        @test Convergence.step_ticks([1e-4, 2e-4], (9e-5, 2.2e-4), 190, 9) === nothing
+        @test Convergence.log_label(1.0, false) == "1"
+        @test Convergence.log_label(10.0, false) == "10"
+        @test Convergence.log_label(0.01, true) == "0.01"
+        makie = parentmodule(Convergence.Figure)
+        theme_before = makie.current_default_theme().fontsize[]
         fig = convergence_figure(exact)
         @test fig isa Convergence.Figure
+        # the figure is drawn under its own theme and leaves the active one alone
+        @test makie.current_default_theme().fontsize[] == theme_before
         both = convergence_figure(
             ["L2" => exact, "Linf" => noisy];
             reference_orders = [1, 2],
@@ -370,8 +516,35 @@ synthetic_quantity(h) = 1.5 + 0.8 * h^1.7
             @test studied.grids[1].first == "energy"
             @test studied.grids[1].second.order ≈ 1.7 atol = 1e-8
             @test studied.grids[1].second.extrapolated ≈ 1.5 atol = 1e-8
-            @test studied.estimates[1].second.order ≈ 1.7 atol = 1e-6
-            @test occursin("GCI", String(take!(io)))
+            @test studied.estimates[1].second.order == studied.grids[1].second.order
+            @test isnan(studied.estimates[1].second.standard_error)
+            text = String(take!(io))
+            @test occursin("GCI", text) && occursin("three-grid", text)
+            @test !occursin("exact power law", text)
+            # three arbitrary monotone levels are not reported as an exact power law
+            arbitrary = joinpath(dir, "arbitrary.csv")
+            write(arbitrary, "h,q\n0.4,10.0\n0.2,3.0\n0.1,2.0\n")
+            io = IOBuffer()
+            three = main([arbitrary, "--quantity", "--no-csv", "--no-figure"]; io)
+            @test three.grids[1].second.extrapolated ≈ 11 / 6
+            @test !occursin("exact power law", String(take!(io)))
+            # oscillatory convergence: the three-grid report alone, no outputs
+            wavy = joinpath(dir, "wavy.csv")
+            write(wavy, "h,q\n0.4,1.3\n0.2,0.9\n0.1,1.0\n")
+            io = IOBuffer()
+            waved = main([wavy, "--quantity", "--out-dir", dir]; io)
+            @test waved.grids[1].second.oscillatory
+            @test isempty(waved.estimates) &&
+                  waved.csv === nothing &&
+                  waved.figure === nothing
+            @test occursin("oscillatory convergence", String(take!(io)))
+            # differences that grow under refinement are refused
+            growing = joinpath(dir, "growing.csv")
+            write(growing, "h,q\n0.4,1.3\n0.2,1.2\n0.1,1.0\n")
+            @test_throws "do not shrink" main(
+                [growing, "--quantity", "--no-csv", "--no-figure"];
+                io = IOBuffer(),
+            )
             custom = joinpath(dir, "custom.toml")
             write(custom, "[fit]\nskip_coarsest = 2\n[figures]\nformat = \"svg\"\n")
             configured = main(

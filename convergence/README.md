@@ -46,10 +46,13 @@ with their pairwise orders and the fitted order with its interval. The CSV file
 never overwritten (`#1`, `#2`, ... suffixes). `--no-csv` and `--no-figure` suppress
 either output.
 
-With `--quantity` the columns hold values of a quantity of interest rather than errors.
+With `--quantity` the columns hold values of a quantity of interest instead of errors.
 The three finest levels of each series go through the three-grid procedure, whose report
-precedes the table, and the error of every level becomes its distance |q − q_ext| from
-the extrapolated value, which then enters the usual fit and figure.
+is printed first. The table and the figure then show the distance |q − q_ext| of every
+level from the extrapolated value, with the order of the three-grid procedure. Those
+three levels lie on that power law by construction, so no fit is made and no interval is
+given; coarser levels show whether the sequence was already on it. A series that
+converges in an oscillatory manner gets the three-grid report only.
 
 ## Method
 
@@ -57,7 +60,8 @@ the extrapolated value, which then enters the usual fit and figure.
 measure μ (h in one dimension, h² in two), the discrete L1 norm is μ Σ |uᵢ − u_ref,ᵢ|,
 the L2 norm (μ Σ |uᵢ − u_ref,ᵢ|²)^(1/2) and the maximum norm max |uᵢ − u_ref,ᵢ|; the
 relative norm ‖u − u_ref‖₂ / ‖u_ref‖₂ uses plain Euclidean norms, in which μ cancels.
-Entries are widened to double precision before the difference is formed.
+The difference is formed in double precision, or in the precision of the entries when
+that is higher (`BigFloat` references).
 
 **Pairwise order.** With the levels sorted by decreasing h, the observed order between
 levels k and k + 1 is p_k = ln(e_k / e_k+1) / ln(h_k / h_k+1). It is attached to the finer
@@ -68,7 +72,12 @@ y = ln e on x = ln h over m levels: p = Sxy / Sxx and ln C = ȳ − p x̄. With 
 sum of squares SSR and s² = SSR / (m − 2), the standard error of p is (s² / Sxx)^(1/2)
 and the two-sided interval at confidence level γ is p ± t s_p, where t is the
 1 − (1 − γ)/2 quantile of Student's t distribution with m − 2 degrees of freedom. An
-exact power law has SSR = 0 and is reported as such. The coarsest levels of a sequence
+exact power law has SSR = 0 and is reported as such. The interval is that of the
+regression slope and measures the scatter of the levels about one power law.
+Discretisation errors are deterministic, so it is not a confidence interval for the
+asymptotic order: forward Euler on h = 2⁻³, …, 2⁻⁸ gives p = 1.014 with the 95 % interval
+[1.005, 1.023], above the formal order, because the next term of the error expansion
+bends the line. The coarsest levels of a sequence
 are often outside the asymptotic range; `skip_coarsest` (or `--skip`) leaves that many of
 them out of the fit, which needs at least three remaining levels. Excluded levels keep
 their pairwise orders in the table and the figure.
@@ -78,11 +87,16 @@ ratios r21 = h₂/h₁ and r32 = h₃/h₂, let ε21 = φ₂ − φ₁, ε32 = �
 s < 0 indicates oscillatory convergence. The observed order solves
 
 ```
-p = |ln|ε32/ε21| + q(p)| / ln(r21),   q(p) = ln((r21^p − s) / (r32^p − s))
+p ln(r21) = ln|ε32/ε21| + q(p),   q(p) = ln((r21^p − s) / (r32^p − s))
 ```
 
-by fixed-point iteration from q = 0, to 10⁻¹² in p; with a constant refinement ratio q
-vanishes. Then
+This equation has one positive root when |ε32/ε21| exceeds ln(r32)/ln(r21) for s > 0
+(1 for a constant ratio) and 1 for s < 0. The root is ln|ε32/ε21| / ln(r) for a constant
+ratio r and is found by bisection otherwise. At or below the threshold the differences
+between the grids do not shrink under refinement, and the input is refused. Celik et al.
+write the equation with an absolute value and solve it by fixed-point iteration: the
+absolute value gives such sequences a positive order, and the iteration diverges once
+r32 is well above r21. Then
 
 ```
 φ_ext  = (r21^p φ₁ − φ₂) / (r21^p − 1)
@@ -90,11 +104,13 @@ e_a    = |(φ₁ − φ₂) / φ₁|,            e_ext = |(φ_ext − φ₁) / �
 GCI21  = F_s e_a / (r21^p − 1),       GCI32 = F_s |(φ₂ − φ₃) / φ₂| / (r32^p − 1)
 ```
 
-with the safety factor F_s = 1.25 recommended for three or more grids. The ratio
-r21^p GCI21 / GCI32 approaches 1 when the grids lie in the asymptotic range. The
-procedure follows Celik, Ghia, Roache, Freitas, Coleman and Raad, J. Fluids Eng. 130(7),
-078001 (2008), doi:[10.1115/1.2960953](https://doi.org/10.1115/1.2960953); the grid
-convergence index is due to Roache, J. Fluids Eng. 116(3), 405–413 (1994),
+with the safety factor F_s = 1.25 that Celik et al. use for three grids. The ratio
+GCI32 / (r21^p GCI21) approaches 1 when the grids lie in the asymptotic range. Under
+oscillatory convergence φ_ext and the indices are still those of these formulas, which
+assume a monotone error. The procedure follows Celik, Ghia, Roache, Freitas, Coleman and
+Raad, J. Fluids Eng. 130(7), 078001 (2008),
+doi:[10.1115/1.2960953](https://doi.org/10.1115/1.2960953); the grid convergence index is
+due to Roache, J. Fluids Eng. 116(3), 405–413 (1994),
 doi:[10.1115/1.2910291](https://doi.org/10.1115/1.2910291).
 
 **Richardson extrapolation.** Two solutions of a scheme of order p on grids with
@@ -139,7 +155,8 @@ fig = convergence_figure(estimate; reference_orders = [1])
 For field solutions, `convergence_study(solve, exact, h; norm = :L2, measure = h -> h^2)`
 evaluates `error_norm(solve(h), exact(h), norm; measure = measure(h))` at every step
 size. `fit_order`, `pairwise_orders`, `grid_convergence` and `richardson_extrapolate`
-take plain vectors and numbers.
+take plain vectors and numbers; `extrapolated_estimate(h, values, grid)` tabulates the
+levels of a quantity against the extrapolated value of a `grid_convergence` result.
 
 ## Figure
 
@@ -151,8 +168,11 @@ series, labelled with their slope at the fine end. The strip below shows the pai
 orders at the finer step size of each pair, with the fitted order as a dashed guide; a
 sequence that has not reached its asymptotic order shows as a drift away from it. The
 legend above names each series with its fitted order and standard error, printed with as
-many decimals as the error needs. The x ticks sit at the step sizes when there are at
-most eight of them and none is below 10⁻³, at the decades otherwise.
+many decimals as the error needs; series differ by colour and by marker. The x ticks sit
+at the step sizes when there are at most eight of them between 10⁻³ and 10⁴ and their
+labels fit side by side, at the 1, 2, 5 values or the decades otherwise.
+`convergence_figure` draws under its own theme and leaves the active Makie theme as it
+was.
 
 ## Configuration
 
@@ -162,7 +182,7 @@ wrong type or out of bounds stops the tool with a message naming the key.
 
 ```toml
 [fit]
-confidence_level = 0.95  # float in (0, 1); coverage of the t-interval of the order
+confidence_level = 0.95  # float in (0, 1); level of the t-interval of the fitted order
 skip_coarsest = 0  # integer >= 0; coarsest levels left out of the least-squares fit
 safety_factor = 1.25  # float >= 1; safety factor of the grid convergence index
 
@@ -170,7 +190,7 @@ safety_factor = 1.25  # float >= 1; safety factor of the grid convergence index
 format = "pdf"  # one of: "pdf" | "png" | "svg"
 width_mm = 86.0  # float in [60, 300] [mm]; printed figure width
 px_per_unit = 5  # integer >= 1 [px/pt]; raster export only
-fontsize_pt = 9.0  # float in [6, 14] [pt]
+fontsize_pt = 9.0  # float in [6, 14] [pt]; base font size
 reference_orders = []  # list of reals > 0; slopes of the reference lines
 xlabel = "Step size h"  # non-empty string; x-axis label
 ylabel = "Error"  # non-empty string; y-axis label of the error panel
@@ -187,8 +207,9 @@ every series; `order` is the pairwise order and is empty for the coarsest level.
 
 ```bash
 julia test.jl convergence
-julia --project=convergence -e 'using Pkg; Pkg.test()'
 ```
 
 The suite runs the static checks of Aqua, JET and ExplicitImports on the package
-together with the unit tests.
+together with the unit tests. The fit is compared with a least-squares solve in extended
+precision and the three-grid procedure with the worked example of Celik et al. (their
+Table 1).

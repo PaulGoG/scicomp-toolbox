@@ -86,12 +86,13 @@ function usage(io::IO = stdout)
                                   column per series, numeric without missing cells
           --skip N                coarsest levels left out of the fit, integer >= 0
                                   (default: [fit].skip_coarsest)
-          --confidence X          coverage of the interval of the order, in (0, 1)
+          --confidence X          level of the t-interval of the fitted order, in (0, 1)
                                   (default: [fit].confidence_level)
           --quantity              the series hold values of a quantity of interest: the
-                                  three finest levels give the three-grid estimate, and the
-                                  error of each level is its distance from the extrapolated
-                                  value
+                                  three finest levels give the order, the extrapolated
+                                  value and the grid convergence index, and the error of
+                                  each level is its distance from the extrapolated value;
+                                  no fit is made, so --skip and --confidence do not apply
           --reference-orders L    comma-separated slopes > 0 of the reference lines
                                   (default: [figures].reference_orders)
           --xlabel TEXT           x-axis label (default: [figures].xlabel)
@@ -138,9 +139,11 @@ end
 
 Parse the command line (see `--help`), fit the order of every series of the input CSV,
 print the tables to `io`, write the CSV of the levels and the figure. With `--quantity`
-the three finest levels of each series first go through [`grid_convergence`](@ref),
-whose report is printed, and the errors become the distances |q - q_ext| from the
-extrapolated value.
+the three finest levels of each series go through [`grid_convergence`](@ref), whose
+report is printed, and the levels are tabulated by [`extrapolated_estimate`](@ref): the
+errors are the distances |q - q_ext| from the extrapolated value and the order is that of
+the three-grid procedure, without a fit. A series that converges in an oscillatory manner
+gets the three-grid report only.
 
 Returns `(; estimates, grids, csv, figure)`: the estimates and three-grid results as
 `name => result` pairs (`grids` empty without `--quantity`) and the paths written
@@ -240,7 +243,6 @@ function main(args::Vector{String} = ARGS; io::IO = stdout)
     grids = Pair{String, GridConvergence}[]
     for (k, (name, values)) in enumerate(series)
         k > 1 && println(io)
-        errors = values
         if quantity
             length(h) >= 3 || throw(
                 ArgumentError(
@@ -255,15 +257,23 @@ function main(args::Vector{String} = ARGS; io::IO = stdout)
             )
             push!(grids, name => grid)
             convergence_table(io, grid; label = name)
+            if grid.oscillatory
+                println(
+                    io,
+                    "No error table for $name: the distances from the extrapolated value are not errors under oscillatory convergence.",
+                )
+                continue
+            end
             println(io)
-            errors = abs.(values .- grid.extrapolated)
+            estimate = extrapolated_estimate(h, values, grid)
+        else
+            estimate = fit_order(
+                h,
+                values;
+                confidence = settings.confidence_level,
+                skip = settings.skip_coarsest,
+            )
         end
-        estimate = fit_order(
-            h,
-            errors;
-            confidence = settings.confidence_level,
-            skip = settings.skip_coarsest,
-        )
         push!(estimates, name => estimate)
         convergence_table(io, estimate; label = name)
     end
@@ -276,7 +286,7 @@ function main(args::Vector{String} = ARGS; io::IO = stdout)
         out_dir === nothing ? resolve(settings.figure_directory) : abspath(out_dir)
     stem = first(splitext(basename(file)))
     csv_path = nothing
-    if write_table
+    if write_table && !isempty(estimates)
         mkpath(csv_directory)
         stamp = Libc.strftime("%Y-%m-%d_%H-%M-%S", time())
         target = joinpath(csv_directory, "convergence_$(stem)_$(stamp).csv")
@@ -285,9 +295,8 @@ function main(args::Vector{String} = ARGS; io::IO = stdout)
         println(io, "CSV written to ", csv_path)
     end
     figure_path = nothing
-    if draw_figure
+    if draw_figure && !isempty(estimates)
         mkpath(figure_directory)
-        set_theme!(publication_theme(settings.fontsize_pt))
         fig = convergence_figure(
             estimates;
             reference_orders = settings.reference_orders,
@@ -298,7 +307,7 @@ function main(args::Vector{String} = ARGS; io::IO = stdout)
         )
         target = joinpath(figure_directory, "convergence_$(stem).$(settings.format)")
         figure_path = save_figure(fig, target, settings)
-        write_table || println(io)
+        csv_path === nothing && println(io)
         println(io, "Figure written to ", figure_path)
     end
     return (; estimates, grids, csv = csv_path, figure = figure_path)

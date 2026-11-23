@@ -23,10 +23,10 @@ using CairoMakie.Makie:
     linkxaxes!,
     rich,
     scatter!,
-    set_theme!,
     superscript,
     text!,
     to_color,
+    with_theme,
     xlims!,
     ylims!
 using CairoMakie.Makie.FileIO: save
@@ -38,10 +38,9 @@ using Printf: @sprintf
 using Statistics: mean, quantile
 using TOML: TOML
 
-export ConvergenceLevel, OrderEstimate, GridConvergence, StudySettings
+export ConvergenceLevel, OrderEstimate, GridConvergence
 export error_norm, pairwise_orders, fit_order, richardson_extrapolate, grid_convergence
-export convergence_study, convergence_table, convergence_figure
-export validate_settings, load_settings, read_series, main
+export extrapolated_estimate, convergence_study, convergence_table, convergence_figure
 
 include("norms.jl")
 include("orders.jl")

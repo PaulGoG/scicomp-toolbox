@@ -18,6 +18,9 @@ g4(x::Real) = @sprintf("%.4g", x)
 
 fitted_count(estimate::OrderEstimate) = count(level -> level.fitted, estimate.levels)
 
+"Decimals that show a standard error `σ` with two significant digits, from two to four."
+order_decimals(σ::Real) = clamp(ceil(Int, -log10(σ)) + 1, 2, 4)
+
 """
     convergence_table(io::IO, estimate::OrderEstimate; label::AbstractString = "error")
     convergence_table(io::IO, grid::GridConvergence; label::AbstractString = "quantity")
@@ -27,7 +30,9 @@ Print a convergence study to `io`.
 For an [`OrderEstimate`](@ref), a table of the levels with the columns `h`, `label`,
 `order` (pairwise, with respect to the next coarser level) and `fit` (`*` for the levels
 that entered the fit), followed by the fitted order with its interval and the constant
-of e ≈ C hᵖ, or the order alone when the levels follow an exact power law.
+of e ≈ C hᵖ, the order and the interval printed with the decimals of the standard error;
+the order alone when the levels follow an exact power law or when it comes from the
+three-grid procedure.
 
 For a [`GridConvergence`](@ref), the step size and value of the quantity `label` on each
 grid, the refinement ratios, the observed order, the extrapolated value, the approximate
@@ -58,14 +63,34 @@ function convergence_table(io::IO, estimate::OrderEstimate; label::AbstractStrin
     )
     m = fitted_count(estimate)
     p = estimate.order
-    if estimate.standard_error == 0
+    σ = estimate.standard_error
+    if isnan(σ)
+        println(
+            io,
+            "Order p = $(g3(p)) from the three-grid procedure; errors against the extrapolated value, no interval",
+        )
+    elseif σ == 0
         println(io, "Order p = $(g3(p)) (exact power law over $m levels)")
     else
         low, high = estimate.confidence_interval
-        percent = round(Int, 100 * estimate.confidence_level)
+        d = order_decimals(σ)
+        # a standard error below the last printed decimal keeps two significant digits
+        deviation = σ < 0.5 * 10.0^-d ? @sprintf("%.1e", σ) : @sprintf("%.*f", d, σ)
         println(
             io,
-            "Order p = $(g3(p)) ± $(g3(estimate.standard_error)) ($percent % interval [$(g3(low)), $(g3(high))]); e ≈ $(g3(estimate.constant)) h^p over $m levels",
+            @sprintf(
+                "Order p = %.*f ± %s (%g %% interval [%.*f, %.*f]); e ≈ %s h^p over %d levels",
+                d,
+                p,
+                deviation,
+                100 * estimate.confidence_level,
+                d,
+                low,
+                d,
+                high,
+                g3(estimate.constant),
+                m
+            ),
         )
     end
     return nothing
@@ -93,7 +118,7 @@ function convergence_table(
     )
     println(io, "  GCI fine                         $(g3(100 * grid.gci_fine)) %")
     println(io, "  GCI medium                       $(g3(100 * grid.gci_medium)) %")
-    println(io, "  asymptotic ratio                 $(g3(grid.asymptotic_ratio))")
+    println(io, "  asymptotic ratio                 $(g4(grid.asymptotic_ratio))")
     grid.oscillatory && println(io, "  oscillatory convergence")
     return nothing
 end
@@ -101,15 +126,18 @@ end
 """
     show(io::IO, ::MIME"text/plain", estimate::OrderEstimate)
 
-One line with the order, its standard error and the number of fitted levels.
+One line with the order, its standard error when it has one and the number of fitted
+levels.
 """
 function Base.show(io::IO, ::MIME"text/plain", estimate::OrderEstimate)
+    σ = estimate.standard_error
+    spread = isnan(σ) ? "" : @sprintf(" ± %.2g", σ)
     print(
         io,
         @sprintf(
-            "OrderEstimate: p = %.2f ± %.2f over %d levels",
+            "OrderEstimate: p = %.2f%s over %d levels",
             estimate.order,
-            estimate.standard_error,
+            spread,
             fitted_count(estimate)
         )
     )
@@ -119,8 +147,7 @@ end
 """
     safe_filepath(path) -> String
 
-`path` when no file exists there, otherwise the first free `stem#k.ext`, so that no
-output is overwritten.
+`path` when no file exists there, otherwise the first free `stem#k.ext`.
 """
 function safe_filepath(path::AbstractString)
     isfile(path) || return String(path)

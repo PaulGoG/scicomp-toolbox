@@ -18,10 +18,17 @@ end
 """
     OrderEstimate
 
-Least-squares estimate of the order p in e ≈ C hᵖ: the order `order`, its standard error
+Estimate of the order p in e ≈ C hᵖ: the order `order`, its standard error
 `standard_error`, the two-sided Student-t interval `confidence_interval` at
 `confidence_level`, the constant `constant` (C) and the levels of the study `levels`,
 sorted by decreasing h (coarsest first).
+
+The interval is that of the regression slope: it measures the scatter of the fitted
+levels about one power law. Discretisation errors are deterministic, so it is not a
+confidence interval for the asymptotic order, which pre-asymptotic levels bias beyond it.
+
+An estimate taken from the three-grid procedure ([`extrapolated_estimate`](@ref)) has no
+interval: `standard_error`, `confidence_interval` and `confidence_level` are `NaN`.
 """
 struct OrderEstimate
     order::Float64
@@ -40,7 +47,7 @@ on the fine, medium and coarse grids, refinement ratios `refinement_ratios` (r�
 r₃₂ = h₃/h₂), observed order `order`, extrapolated value `extrapolated`, approximate
 relative error e_a = `relative_error`, extrapolated relative error e_ext =
 `extrapolated_relative_error`, grid convergence indices of the fine and medium grids
-`gci_fine` and `gci_medium` (fractions), `asymptotic_ratio` r₂₁ᵖ GCI₂₁ / GCI₃₂, which
+`gci_fine` and `gci_medium` (fractions), `asymptotic_ratio` GCI₃₂ / (r₂₁ᵖ GCI₂₁), which
 approaches 1 in the asymptotic range, and `oscillatory`, set when the differences
 between successive grids change sign.
 """
@@ -86,7 +93,7 @@ end
 
 """
 Residual sum of squares of log e below which a fit is reported as an exact power law:
-residuals of 10⁻¹² in log e, far above round-off and far below any real misfit.
+residuals of 10⁻¹² in log e, above round-off and below any genuine misfit.
 """
 const EXACT_RESIDUAL = 1e-24
 
@@ -135,7 +142,9 @@ residual sum of squares SSR and s² = SSR / (m - 2), the standard error of p is
 (s² / Sxx)^(1/2) and the interval is p ± t s_p with t the 1 - (1 - confidence)/2
 quantile of Student's t distribution with m - 2 degrees of freedom. An exact power law
 (SSR at the level of round-off, below [`EXACT_RESIDUAL`](@ref)) gives a zero standard
-error and the interval (p, p).
+error and the interval (p, p). The interval describes the scatter of the levels about
+the fitted power law, not the uncertainty of the asymptotic order
+([`OrderEstimate`](@ref)).
 
 Every level carries its pairwise order with respect to the next coarser one, whether it
 entered the fit or not.
@@ -193,8 +202,10 @@ function fit_order(
 end
 
 function check_extrapolation(r::Real, p::Real)
-    r > 1 || throw(ArgumentError("the refinement ratio must exceed 1, got $r"))
-    p > 0 || throw(ArgumentError("the order must be positive, got $p"))
+    (isfinite(r) && r > 1) ||
+        throw(ArgumentError("the refinement ratio must be finite and exceed 1, got $r"))
+    (isfinite(p) && p > 0) ||
+        throw(ArgumentError("the order must be positive and finite, got $p"))
     return nothing
 end
 
@@ -215,7 +226,8 @@ richardson_extrapolate(1.0025, 1.01, 2, 2)  # 1.0
 """
 function richardson_extrapolate(fine::Number, coarse::Number, r::Real, p::Real)
     check_extrapolation(r, p)
-    return (r^p * fine - coarse) / (r^p - 1)
+    rᵖ = float(r)^p
+    return (rᵖ * fine - coarse) / (rᵖ - 1)
 end
 
 function richardson_extrapolate(
@@ -228,27 +240,59 @@ function richardson_extrapolate(
     size(fine) == size(coarse) || throw(
         DimensionMismatch("fine has size $(size(fine)), coarse has size $(size(coarse))"),
     )
-    return (r^p .* fine .- coarse) ./ (r^p - 1)
+    rᵖ = float(r)^p
+    return (rᵖ .* fine .- coarse) ./ (rᵖ - 1)
 end
+
+"""
+    order_threshold(r21, r32, s) -> Float64
+
+Value that R = |ε₃₂/ε₂₁| must exceed for a positive order to exist: the limit of
+r₂₁ᵖ (r₃₂ᵖ - s) / (r₂₁ᵖ - s) as p → 0, which is ln r₃₂ / ln r₂₁ for monotone convergence
+(s = 1; 1 for a constant ratio) and 1 for oscillatory convergence (s = -1).
+"""
+order_threshold(r21::Float64, r32::Float64, s::Float64) = s > 0 ? log(r32) / log(r21) : 1.0
 
 """
     observed_order(ratio, r21, r32, s) -> Float64
 
-Order of the three-grid procedure from |ε₃₂/ε₂₁| = `ratio` and the sign `s` of ε₃₂/ε₂₁:
-the fixed point of p = |ln ratio + q(p)| / ln r₂₁ with
-q(p) = ln((r₂₁ᵖ - s) / (r₃₂ᵖ - s)), started from q = 0. For a constant refinement ratio
-q vanishes and the start value is the order.
+Order of the three-grid procedure from R = |ε₃₂/ε₂₁| = `ratio` and the sign `s` of
+ε₃₂/ε₂₁. Three values that follow φₖ = φ_ext + C (±1)ᵏ hₖᵖ satisfy
+
+    R = r₂₁ᵖ (r₃₂ᵖ - s) / (r₂₁ᵖ - s),
+
+which is p ln r₂₁ = ln R + q(p) with q(p) = ln((r₂₁ᵖ - s) / (r₃₂ᵖ - s)), the equation of
+Celik et al. without its absolute value. The right-hand side of the first form increases
+strictly with p from [`order_threshold`](@ref) to ∞, so the order is unique; it is
+ln R / ln r for a constant ratio r and is found by bisection to 10⁻¹² otherwise. The
+fixed-point iteration of the paper diverges on such grids once r₃₂ is well above r₂₁.
+
+Throws `ArgumentError` when R does not exceed the threshold: the differences between
+successive grids do not shrink under refinement and no positive order exists. The
+absolute value of the published equation would return a positive order there.
 """
 function observed_order(ratio::Float64, r21::Float64, r32::Float64, s::Float64)
-    p = abs(log(ratio)) / log(r21)
-    isapprox(r21, r32; rtol = 1e-12) && return p
-    for _ in 1:200
-        q = log((r21^p - s) / (r32^p - s))
-        p_next = abs(log(ratio) + q) / log(r21)
-        abs(p_next - p) <= 1e-12 && return p_next
-        p = p_next
+    threshold = order_threshold(r21, r32, s)
+    ratio > threshold || throw(
+        ArgumentError(
+            "the differences between successive grids do not shrink under refinement: |ε32/ε21| = $ratio does not exceed $threshold, so no positive order exists",
+        ),
+    )
+    a, b = log(r21), log(r32)
+    isapprox(r21, r32; rtol = 1e-12) && return log(ratio) / a
+    # ln(1 - s e⁻ˣ), without cancellation at small x and without overflow at large x
+    tail(x) = s > 0 ? log(-expm1(-x)) : log1p(exp(-x))
+    residual(p) = b * p + tail(b * p) - tail(a * p) - log(ratio)
+    low, high = 0.0, 1.0
+    while residual(high) < 0
+        high *= 2
+        high <= 1024 || throw(ArgumentError("the observed order exceeds 1024"))
     end
-    throw(ArgumentError("the order iteration did not converge"))
+    while high - low > 1e-13 * max(1.0, high)
+        middle = (low + high) / 2
+        residual(middle) < 0 ? (low = middle) : (high = middle)
+    end
+    return (low + high) / 2
 end
 
 """
@@ -258,24 +302,29 @@ end
 Three-grid procedure of Celik et al. for a scalar quantity φ computed on three grids.
 The levels are sorted by increasing h into fine, medium and coarse (h₁ < h₂ < h₃), with
 r₂₁ = h₂/h₁, r₃₂ = h₃/h₂, ε₂₁ = φ₂ - φ₁, ε₃₂ = φ₃ - φ₂ and s = sign(ε₃₂/ε₂₁); s < 0
-marks oscillatory convergence. The order solves
-p = |ln|ε₃₂/ε₂₁| + q(p)| / ln r₂₁ with q(p) = ln((r₂₁ᵖ - s) / (r₃₂ᵖ - s)), by
-fixed-point iteration to 10⁻¹² (at most 200 iterations; q = 0 when r₂₁ = r₃₂). Then
+marks oscillatory convergence. The order solves p ln r₂₁ = ln|ε₃₂/ε₂₁| + q(p) with
+q(p) = ln((r₂₁ᵖ - s) / (r₃₂ᵖ - s)) ([`observed_order`](@ref)). Then
 
     φ_ext = (r₂₁ᵖ φ₁ - φ₂) / (r₂₁ᵖ - 1)
     e_a = |(φ₁ - φ₂) / φ₁|,  e_ext = |(φ_ext - φ₁) / φ_ext|
     GCI₂₁ = F_s e_a / (r₂₁ᵖ - 1),  GCI₃₂ = F_s |(φ₂ - φ₃) / φ₂| / (r₃₂ᵖ - 1)
 
-with the safety factor F_s = `safety_factor` (1.25 for three grids, Roache 1994), and
-the asymptotic ratio r₂₁ᵖ GCI₂₁ / GCI₃₂.
+with the safety factor F_s = `safety_factor` (1.25 in Celik et al. for three grids), and
+the asymptotic ratio GCI₃₂ / (r₂₁ᵖ GCI₂₁). `e_ext` is `Inf` when φ_ext vanishes.
+
+Under oscillatory convergence φ_ext, e_ext and the indices are those of the published
+formulas, which assume a monotone error; an alternating error would place the limit
+between φ₁ and φ₂.
 
 References: I. B. Celik, U. Ghia, P. J. Roache, C. J. Freitas, H. Coleman and
 P. E. Raad, J. Fluids Eng. 130(7), 078001 (2008), doi:10.1115/1.2960953;
 P. J. Roache, J. Fluids Eng. 116(3), 405–413 (1994), doi:10.1115/1.2910291.
 
-Returns a [`GridConvergence`](@ref). Throws `ArgumentError` unless exactly three
-levels with distinct, positive h are given, for F_s < 1, when the quantity does not
-change between two grids, when φ₁ = 0, and when the iteration does not converge.
+Returns a [`GridConvergence`](@ref). Throws `ArgumentError` unless exactly three levels
+with distinct, positive, finite h and finite values are given; for F_s < 1; when the
+quantity does not change between two grids; when φ₁ or φ₂ vanishes; and when the
+differences between successive grids do not shrink under refinement, or exceed the
+threshold of [`order_threshold`](@ref) by less than their round-off.
 
 # Example
 ```julia
@@ -297,6 +346,7 @@ function grid_convergence(
     all(hk -> isfinite(hk) && hk > 0, h) ||
         throw(ArgumentError("the step sizes h must be positive and finite"))
     allunique(h) || throw(ArgumentError("the step sizes h must be distinct"))
+    all(isfinite, values) || throw(ArgumentError("the values must be finite"))
     fine, medium, coarse = sortperm(collect(h))
     h1, h2, h3 = Float64(h[fine]), Float64(h[medium]), Float64(h[coarse])
     φ1, φ2, φ3 = Float64(values[fine]), Float64(values[medium]), Float64(values[coarse])
@@ -306,11 +356,22 @@ function grid_convergence(
     ε32 = φ3 - φ2
     (iszero(ε21) || iszero(ε32)) &&
         throw(ArgumentError("the quantity does not change between two of the grids"))
-    φ1 == 0 && throw(
-        ArgumentError("the fine-grid value vanishes; the relative error is undefined"),
+    (φ1 == 0 || φ2 == 0) && throw(
+        ArgumentError(
+            "the fine- or medium-grid value vanishes; the relative errors are undefined",
+        ),
     )
     s = sign(ε32 / ε21)
-    p = observed_order(abs(ε32 / ε21), r21, r32, s)
+    ratio = abs(ε32 / ε21)
+    # relative rounding error of the ratio: each difference carries that of its operands
+    roundoff = eps() * ((abs(φ1) + abs(φ2)) / abs(ε21) + (abs(φ2) + abs(φ3)) / abs(ε32))
+    excess = log(ratio / order_threshold(r21, r32, s))
+    (0 < excess <= roundoff) && throw(
+        ArgumentError(
+            "|ε32/ε21| = $ratio equals its threshold to round-off; the observed order vanishes",
+        ),
+    )
+    p = observed_order(ratio, r21, r32, s)
     extrapolated = (r21^p * φ1 - φ2) / (r21^p - 1)
     relative_error = abs((φ1 - φ2) / φ1)
     gci_fine = safety_factor * relative_error / (r21^p - 1)
@@ -325,9 +386,43 @@ function grid_convergence(
         abs((extrapolated - φ1) / extrapolated),
         gci_fine,
         gci_medium,
-        r21^p * gci_fine / gci_medium,
+        gci_medium / (r21^p * gci_fine),
         s < 0,
     )
+end
+
+"""
+    extrapolated_estimate(h, values, grid::GridConvergence) -> OrderEstimate
+
+Levels of a quantity of interest without an exact value, measured against the
+extrapolated value of the three-grid procedure: the error of each level is
+|φ - φ_ext|, the order is `grid.order` and the constant is that of the power law through
+the finest level. The three levels of `grid` are marked as fitted; they lie on that power
+law by construction, so no least-squares fit is made and the estimate carries no interval
+(`NaN`). Coarser levels show whether the sequence had reached that power law earlier.
+
+Throws `ArgumentError` for oscillatory convergence, where the distances from the
+extrapolated value are not errors, and under the conditions of the level validation.
+"""
+function extrapolated_estimate(
+    h::AbstractVector{<:Real},
+    values::AbstractVector{<:Real},
+    grid::GridConvergence,
+)
+    grid.oscillatory && throw(
+        ArgumentError(
+            "under oscillatory convergence the distances from the extrapolated value are not errors",
+        ),
+    )
+    hs, es = sorted_levels(h, abs.(Float64.(values) .- grid.extrapolated))
+    check_nonzero(hs, es)
+    orders = consecutive_orders(hs, es)
+    n = length(hs)
+    levels = ConvergenceLevel[
+        ConvergenceLevel(hs[k], es[k], k == 1 ? nothing : orders[k - 1], hs[k] in grid.h) for k in 1:n
+    ]
+    constant = es[n] / hs[n]^grid.order
+    return OrderEstimate(grid.order, NaN, (NaN, NaN), NaN, constant, levels)
 end
 
 """

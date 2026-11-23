@@ -7,6 +7,10 @@ const PT_PER_MM = 72 / 25.4
 const OKABE_ITO =
     ("#E69F00", "#56B4E9", "#009E73", "#D55E00", "#CC79A7", "#0072B2", "#F0E442", "#000000")
 
+"Markers of the series, so that two series differ by shape as well as by colour."
+const MARKERS =
+    (:circle, :rect, :utriangle, :diamond, :dtriangle, :pentagon, :hexagon, :star5)
+
 """
     publication_theme(fontsize_pt::Real) -> Theme
 
@@ -56,7 +60,7 @@ darker(color) = RGBAf(0.65 * color.r, 0.65 * color.g, 0.65 * color.b, color.alph
     log_label(value::Real, plain::Bool)
 
 Label of a logarithmic tick: a plain decimal when `plain` or when the decade is 10⁰ or
-10¹, otherwise `10^k` or `m × 10^k` with the integer mantissa `m`, the exponent set as
+10¹, otherwise `10^k` or `m × 10^k` with the integer mantissa `m` and the exponent as
 a superscript.
 """
 function log_label(value::Real, plain::Bool)
@@ -123,14 +127,34 @@ order_label(p::Real) = isinteger(p) ? "p = $(round(Int, p))" : "p = $(@sprintf("
     fit_label(name, estimate::OrderEstimate) -> String
 
 Legend entry of a series: its name and the fitted order with its standard error, both
-printed with as many decimals as the standard error needs (two to four), or the order
-alone with two decimals when the fit is exact.
+printed with as many decimals as the standard error needs (two to four). The order
+stands alone, with two decimals, when the fit is exact or the estimate has no interval,
+and with four when the standard error is below the last of them.
 """
 function fit_label(name::AbstractString, estimate::OrderEstimate)
     σ = estimate.standard_error
-    σ == 0 && return @sprintf("%s: p = %.2f", name, estimate.order)
-    decimals = clamp(ceil(Int, -log10(σ)) + 1, 2, 4)
+    (isnan(σ) || σ == 0) && return @sprintf("%s: p = %.2f", name, estimate.order)
+    σ < 5e-5 && return @sprintf("%s: p = %.4f", name, estimate.order)
+    decimals = order_decimals(σ)
     return name * ": p = " * @sprintf("%.*f ± %.*f", decimals, estimate.order, decimals, σ)
+end
+
+"""
+    step_ticks(steps, limits, width_pt, fontsize_pt) -> Union{Tuple, Nothing}
+
+Ticks at the step sizes themselves, labelled as plain decimals with three significant
+digits, when there are at most eight of them between 10⁻³ and 10⁴ and their labels fit
+side by side on an axis about `width_pt` wide; `nothing` otherwise.
+"""
+function step_ticks(steps::Vector{Float64}, limits, width_pt::Real, fontsize_pt::Real)
+    (length(steps) <= 8 && first(steps) >= 1e-3 && last(steps) <= 1e4) || return nothing
+    labels = String[@sprintf("%g", round(h; sigdigits = 3)) for h in steps]
+    length(steps) == 1 && return (steps, labels)
+    decades = log10(last(limits)) - log10(first(limits))
+    spacing = width_pt * minimum(diff(log10.(steps))) / decades
+    # about half the font size per character, and one character between labels
+    widest = 0.5 * fontsize_pt * (maximum(length, labels) + 1)
+    return spacing >= widest ? (steps, labels) : nothing
 end
 
 "The coarsest level that entered the fit, or the coarsest level when none did."
@@ -155,9 +179,9 @@ each `reference_orders` entry adds a dotted grey line of that slope through the
 coarsest fitted point of the first series, labelled at its fine end. The strip below
 shows the pairwise orders at the finer step size of each pair, with the fitted order as
 a dashed guide. The legend above the panels names each series with its fitted order and
-standard error, one entry per series.
-The figure is `width_mm` wide and square; `fontsize_pt` sets the marker size, while the
-fonts follow the active theme ([`publication_theme`](@ref)).
+standard error, one entry per series; series differ by colour and by marker.
+The figure is `width_mm` wide and square and is drawn under
+[`publication_theme`](@ref)`(fontsize_pt)`; the active theme is left as it was.
 
 The second form plots a single estimate under the name `label`.
 
@@ -175,6 +199,19 @@ function convergence_figure(
     isempty(series) && throw(ArgumentError("at least one series is required"))
     all(p -> isfinite(p) && p > 0, reference_orders) ||
         throw(ArgumentError("the reference orders must be positive and finite"))
+    return with_theme(publication_theme(fontsize_pt)) do
+        draw_convergence(series, reference_orders, xlabel, ylabel, width_mm, fontsize_pt)
+    end
+end
+
+function draw_convergence(
+    series::AbstractVector{<:Pair{<:AbstractString, OrderEstimate}},
+    reference_orders::AbstractVector{<:Real},
+    xlabel::AbstractString,
+    ylabel::AbstractString,
+    width_mm::Real,
+    fontsize_pt::Real,
+)
     markersize = 0.7 * fontsize_pt
 
     fig = Figure(size = figure_size(width_mm, 1.0))
@@ -213,6 +250,7 @@ function convergence_figure(
     labels = String[]
     for (k, (name, estimate)) in enumerate(series)
         color = to_color(OKABE_ITO[mod1(k, length(OKABE_ITO))])
+        marker = MARKERS[mod1(k, length(MARKERS))]
         stroke = darker(color)
         levels = estimate.levels
         hs = Float64[level.h for level in levels]
@@ -230,7 +268,7 @@ function convergence_figure(
                 color,
                 strokecolor = stroke,
                 strokewidth = 0.8,
-                marker = :circle,
+                marker,
                 markersize,
             )
         end
@@ -242,7 +280,7 @@ function convergence_figure(
                 color = :transparent,
                 strokecolor = stroke,
                 strokewidth = 0.8,
-                marker = :circle,
+                marker,
                 markersize,
             )
         end
@@ -264,7 +302,7 @@ function convergence_figure(
             color,
             strokecolor = stroke,
             strokewidth = 0.8,
-            marker = :circle,
+            marker,
             markersize = 0.8 * markersize,
         )
         hlines!(ax_order, [estimate.order]; color, linestyle = :dash, linewidth = 1.0)
@@ -279,7 +317,7 @@ function convergence_figure(
                     color,
                     strokecolor = stroke,
                     strokewidth = 0.8,
-                    marker = :circle,
+                    marker,
                     markersize,
                 ),
             ],
@@ -288,12 +326,11 @@ function convergence_figure(
     end
 
     x_limits = log_limits(h_low, h_high)
-    # the step sizes themselves label the axis when they are few and print as plain
-    # decimals; otherwise the decades do
-    xticks =
-        (length(steps) <= 8 && h_low >= 1e-3) ?
-        (steps, String[@sprintf("%.3g", h) for h in steps]) : decade_ticks(x_limits...)
-    isempty(first(xticks)) && (xticks = log_ticks(x_limits...))
+    # the axis takes about four fifths of the figure width
+    xticks = something(
+        step_ticks(steps, x_limits, 0.78 * width_mm * PT_PER_MM, fontsize_pt),
+        log_ticks(x_limits...),
+    )
     for ax in (ax_error, ax_order)
         ax.xticks = xticks
         xlims!(ax, x_limits...)
@@ -309,8 +346,7 @@ function convergence_figure(
     half_range = max(0.6 * (high - low), 0.25)
     ylims!(ax_order, (low + high) / 2 - half_range, (low + high) / 2 + half_range)
 
-    # one entry per series, marker and fit line together, stacked so that a narrow
-    # single-column figure never clips the legend
+    # one entry per series, marker and fit line together, stacked to fit a single column
     Legend(
         fig[0, 1],
         elements,
