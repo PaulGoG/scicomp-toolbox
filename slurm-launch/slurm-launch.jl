@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 # slurm-launch — job scripts for Julia pipelines and for wrapped native launch scripts,
-# with the resource request derived from the run's own configuration; submission,
+# with the resource request derived from the run configuration; submission,
 # status, cancellation and fetch hints, on a Slurm cluster or as a detached local run.
 #
 #   julia run.jl slurm-launch [generate|submit] [--payload julia|launcher] [options]
@@ -61,7 +61,7 @@ const DERIVATION_KEYS = Dict(
 """
     Cluster
 
-Site settings of one Slurm cluster, none of which can be derived from a run: partition,
+Site settings of one Slurm cluster, independent of the run: partition,
 account, QoS, wall-clock limit, the Julia command and the setup lines (`module load`,
 juliaup) on the cluster, the directory holding the deployed projects, a constraint, the
 mail policy, the GPU types with their memory [GB] in ascending order, and verbatim extra
@@ -204,14 +204,13 @@ function validate_cluster(name::AbstractString, table)
         )
     end
     gpu_table = get(table, "gpu_types", Dict{String, Any}())
-    (
-        gpu_table isa AbstractDict &&
-        all(v -> v isa Real && !(v isa Bool) && v > 0, values(gpu_table))
-    ) || throw(
+    (gpu_table isa AbstractDict && all(is_positive, values(gpu_table))) || throw(
         ArgumentError(
-            "$context.gpu_types must map GPU type names to their memory in GB (> 0)",
+            "$context.gpu_types must map GPU type names to their memory in GB (finite, > 0)",
         ),
     )
+    any(k -> occursin(r"\s", k), keys(gpu_table)) &&
+        throw(ArgumentError("$context.gpu_types names may not hold spaces"))
     gpu_types = sort!(
         [String(k) => Float64(v) for (k, v) in gpu_table];
         by = p -> (last(p), first(p)),
@@ -226,6 +225,11 @@ function validate_cluster(name::AbstractString, table)
     qos = get_string(table, "qos", "", context)
     any(field -> occursin(r"\s", field), (partition, account, qos)) &&
         throw(ArgumentError("$context: partition, account and qos may not hold spaces"))
+    constraint = get_string(table, "constraint", "", context)
+    mail_user = get_string(table, "mail_user", "", context)
+    for (key, value) in ("constraint" => constraint, "mail_user" => mail_user)
+        occursin(r"\s", value) && throw(ArgumentError("$context.$key may not hold spaces"))
+    end
     return Cluster(
         String(name),
         partition,
@@ -235,9 +239,9 @@ function validate_cluster(name::AbstractString, table)
         get_string(table, "julia", "", context),
         get_strings(table, "setup", String[], context),
         remote_root,
-        get_string(table, "constraint", "", context),
+        constraint,
         mail_type,
-        get_string(table, "mail_user", "", context),
+        mail_user,
         gpu_types,
         directives,
     )
@@ -373,7 +377,7 @@ function first_value(config::AbstractDict, keys::Vector{String})
 end
 
 is_count(value) = value isa Integer && !(value isa Bool) && value >= 1
-is_positive(value) = value isa Real && !(value isa Bool) && value > 0
+is_positive(value) = value isa Real && !(value isa Bool) && isfinite(value) && value > 0
 
 """
     Resources
@@ -447,7 +451,7 @@ end
     derive_resources(payload, config, source, settings, backend, cluster) -> Resources
 
 The request of one run, read from its parsed configuration `config` (file `source`)
-through the derivation keys of `payload`. Nothing is invented: a quantity the slurm
+through the derivation keys of `payload`. A quantity the slurm
 backend needs and the configuration lacks is an error naming the key, and an optional
 one that is absent is left to the site default with a note.
 """
@@ -545,20 +549,29 @@ function derive_resources(
 end
 
 """
-    combine(requests) -> Resources
+    combine(requests, cluster) -> Resources
 
-The request of an array job: the largest value of every quantity over the cases, the
-first GPU type among the largest, and every note once.
+The request of an array job on `cluster` (`nothing` for the local backend): the largest
+value of every quantity over the cases, the GPU type with the most memory among those
+the cases need, and every note once.
 """
-function combine(requests::Vector{Resources})
+function combine(requests::Vector{Resources}, cluster::Union{Cluster, Nothing})
     length(requests) == 1 && return only(requests)
-    gpu_types = unique(r.gpu_type for r in requests if !isempty(r.gpu_type))
+    type, memory = "", -Inf
+    if cluster !== nothing
+        # the strict comparison keeps the first listed of types with equal memory
+        for (name, gb) in cluster.gpu_types
+            if gb > memory && any(r -> r.gpu_type == name, requests)
+                type, memory = name, gb
+            end
+        end
+    end
     return Resources(
         maximum(r.cpus_per_task for r in requests),
         maximum(r.tasks for r in requests),
         maximum(r.memory_gb for r in requests),
         maximum(r.gpus for r in requests),
-        isempty(gpu_types) ? "" : last(gpu_types),
+        type,
         "",
         "",
         unique(vcat((r.notes for r in requests)...)),
@@ -570,7 +583,7 @@ end
 """
     JobSpec
 
-Everything a job script states: payload and backend, the cluster, the project root here
+Contents of a job script: payload and backend, the cluster, the project root here
 and where the job runs (`target`), job name and file stem, generation time, commit of the
 project, the run configuration and the script it runs (relative to the project root, or
 file names inside each case directory of an array job), the output directory, the cases
@@ -650,7 +663,7 @@ end
 
 `path` (relative paths resolve against the working directory) as a path relative to the
 project root; `ArgumentError` naming `flag` when it lies outside the project or holds
-whitespace, which job scripts and Slurm directives cannot carry safely.
+whitespace (unsafe in job scripts and Slurm directives).
 """
 function inside(project::AbstractString, path::AbstractString, flag::AbstractString)
     relative = relpath(normpath(abspath(path)), project)
@@ -698,6 +711,8 @@ function build_spec(
         ArgumentError("--backend must be one of: $(join(BACKENDS, " | ")), got '$backend'"),
     )
     project = normpath(abspath(get(options, "project", pwd())))
+    # a trailing separator would leave basename(project) empty
+    project == "/" || (project = String(rstrip(project, '/')))
     isdir(project) || throw(ArgumentError("--project $project is not a directory"))
     payload == "julia" &&
         !isfile(joinpath(project, "Project.toml")) &&
@@ -774,7 +789,7 @@ function build_spec(
                 ),
             )
         end
-        resources = combine(last.(cases))
+        resources = combine(last.(cases), cluster)
         run_config = config_name
         output = root
         config_hash = file_hash(sources)
@@ -835,7 +850,9 @@ function build_spec(
     extension = backend == "slurm" ? ".sbatch" : ".sh"
     stem = base
     k = 1
-    while isfile(joinpath(project, settings.job_directory, stem * extension))
+    jobs = joinpath(project, settings.job_directory)
+    while ispath(joinpath(jobs, stem * extension)) ||
+          ispath(joinpath(jobs, stem * ".cases"))
         k += 1
         stem = "$(base)_$k"
     end
@@ -907,16 +924,19 @@ julia_command(spec::JobSpec, settings::LaunchSettings) =
 
 Shell lines that run the payload from the project root: the Julia command of the
 pipeline, or the launch script run inside its directory; for an array job, the case of
-the task (Slurm) or a loop over every case (local).
+the task (Slurm) or a loop that runs every case and exits with the status of the last
+failing one (local).
 """
 function payload_lines(spec::JobSpec, settings::LaunchSettings)
     julia = julia_command(spec, settings)
     r = spec.resources
     if !is_array(spec)
-        spec.payload == "launcher" && return [
-            "cd $(shell_quote(dirname(spec.script)))",
-            "bash $(shell_quote(basename(spec.script)))",
-        ]
+        if spec.payload == "launcher"
+            directory = dirname(spec.script)
+            # a launch script at the project root needs no cd, and cd '' fails in bash
+            lines = isempty(directory) ? String[] : ["cd $(shell_quote(directory))"]
+            return push!(lines, "bash $(shell_quote(basename(spec.script)))")
+        end
         flags = ["--project=.", "--threads=$(r.threads)"]
         isempty(r.heap_size_hint) || push!(flags, "--heap-size-hint=$(r.heap_size_hint)")
         return [
@@ -937,17 +957,20 @@ function payload_lines(spec::JobSpec, settings::LaunchSettings)
     list = shell_quote(cases_file(spec, settings))
     run_case =
         spec.payload == "julia" ?
-        "$julia --project=. --threads=\"\$threads\" \${heap:+--heap-size-hint=\"\$heap\"} $(shell_quote(spec.script)) --config \"\$case/$(spec.run_config)\" --output-dir \"\$case\"" :
+        "$julia --project=. --threads=\"\$threads\" \${heap:+--heap-size-hint=\"\$heap\"} $(shell_quote(spec.script)) --config \"\$case\"/$(shell_quote(spec.run_config)) --output-dir \"\$case\"" :
         "(cd \"\$case\" && bash $(shell_quote(spec.script)))"
     fields = spec.payload == "julia" ? "case threads heap" : "case"
     spec.backend == "slurm" && return [
         "IFS=\$'\\t' read -r $fields <<< \"\$(sed -n \"\${SLURM_ARRAY_TASK_ID}p\" $list)\"",
         run_case,
     ]
+    # every case runs, as the tasks of a Slurm array do, despite set -e
     return [
+        "status=0",
         "while IFS=\$'\\t' read -r $fields; do",
-        "    $run_case < /dev/null",
+        "    $run_case < /dev/null || status=\$?",
         "done < $list",
+        "exit \"\$status\"",
     ]
 end
 
@@ -984,12 +1007,13 @@ function render_script(spec::JobSpec, settings::LaunchSettings)
         println(io, "cd $(shell_quote(spec.target))")
         println(io, "mkdir -p $(shell_quote(settings.log_directory))")
         println(io, "exec >> $(shell_quote(log_file(spec, settings))) 2>&1")
-        # a signal must end the script with 128 + its number, not with the status of
-        # the last command before it
         println(
             io,
-            "trap 'echo \$? > $(joinpath(spec.target, exit_file(spec, settings)))' EXIT",
+            "exit_file=$(shell_quote(joinpath(spec.target, exit_file(spec, settings))))",
         )
+        # a signal must end the script with 128 + its number, not with the status of
+        # the last command before it
+        println(io, "trap 'echo \$? > \"\$exit_file\"' EXIT")
         println(io, "trap 'exit 143' TERM")
         println(io, "trap 'exit 130' INT")
     end
@@ -1038,8 +1062,9 @@ record_path(spec::JobSpec) = joinpath(spec.project, spec.output_directory, RECOR
     write_record(spec, settings, job_id) -> String
 
 The submission record beside the run (`submission.toml` in its output directory): job
-id, backend, cluster, partition, files, configuration and hash, commit, submission time
-and the request, so that a queue job can be joined to its run directory.
+id, backend, cluster, partition, files, configuration and hash, commit (suffixed
+`-dirty` with uncommitted changes, absent without git), submission time and the
+request, so that a queue job can be joined to its run directory.
 """
 function write_record(spec::JobSpec, settings::LaunchSettings, job_id::AbstractString)
     r = spec.resources
@@ -1052,13 +1077,12 @@ function write_record(spec::JobSpec, settings::LaunchSettings, job_id::AbstractS
         "payload" => spec.payload,
         "project" => spec.project,
         "target_project" => spec.target,
-        "script" => job_script(spec, settings),
+        "job_script" => job_script(spec, settings),
         "log" => log_file(spec, settings),
         "exit_file" => spec.backend == "local" ? exit_file(spec, settings) : "",
         "output_directory" => spec.output_directory,
         "run_config" => spec.run_config,
         "config_hash" => spec.config_hash,
-        "commit" => spec.commit,
         "dirty" => spec.dirty,
         "submitted" => now(),
         "after" => spec.after,
@@ -1074,6 +1098,9 @@ function write_record(spec::JobSpec, settings::LaunchSettings, job_id::AbstractS
             "time_limit" => spec.cluster === nothing ? "" : spec.cluster.time_limit,
         ),
     )
+    if spec.commit != "unavailable"
+        record["commit"] = spec.dirty ? spec.commit * "-dirty" : spec.commit
+    end
     path = record_path(spec)
     mkpath(dirname(path))
     open(io -> TOML.print(io, record; sorted = true), path, "w")
@@ -1089,7 +1116,9 @@ function read_record(path::AbstractString)
     file = isdir(path) ? joinpath(path, RECORD_NAME) : path
     isfile(file) || throw(ArgumentError("no submission record at $path"))
     record = parse_toml(file)
-    for key in ("job_id", "backend", "project", "output_directory")
+    required = ["job_id", "backend", "name", "project", "output_directory"]
+    get(record, "backend", nothing) == "local" && push!(required, "exit_file")
+    for key in required
         haskey(record, key) ||
             throw(ArgumentError("$file lacks '$key'; not a submission record"))
     end
@@ -1113,9 +1142,7 @@ end
 
 function require_command(name::AbstractString)
     Sys.which(name) === nothing && throw(
-        ArgumentError(
-            "$name not found; Slurm commands run where the scheduler is, on the cluster's login node",
-        ),
+        ArgumentError("$name not found; run Slurm commands on the cluster's login node"),
     )
     return nothing
 end
@@ -1150,10 +1177,36 @@ function submit_job(spec::JobSpec, settings::LaunchSettings, script::AbstractStr
 end
 
 """
+    summarise_states(states::Vector{String}) -> (state, counts)
+
+One state for the tasks of a job: their common state and `""` when all agree, else
+`"MIXED"` and every distinct state with its count in order of first appearance, as in
+`"2 COMPLETED, 1 OUT_OF_MEMORY"`.
+"""
+function summarise_states(states::Vector{String})
+    distinct = unique(states)
+    length(distinct) == 1 && return (only(distinct), "")
+    return ("MIXED", join(("$(count(==(s), states)) $s" for s in distinct), ", "))
+end
+
+"""
+    local_job_alive(id, script) -> Bool
+
+Whether the process `id` exists and runs the job script `script`: its command line
+(`ps -ww -p <id> -o args=`, at unlimited width) must hold the script's file name, since
+a process id is reused once the job has gone.
+"""
+function local_job_alive(id::AbstractString, script::AbstractString)
+    ok, out, _ = capture(`ps -ww -p $id -o args=`)
+    return ok && occursin(basename(script), out)
+end
+
+"""
     job_state(record) -> (state, detail)
 
 State of the job of a submission record. Slurm: `squeue` while queued or running, then
-`sacct`. Local: the exit status the script records on exit, or whether the process is
+`sacct`, one line per array task summarised by `summarise_states`. Local: the exit
+status the script records on exit, or whether the process running the job script is
 still alive.
 """
 function job_state(record::AbstractDict)
@@ -1162,16 +1215,25 @@ function job_state(record::AbstractDict)
         if Sys.which("squeue") !== nothing
             ok, out, _ = capture(`squeue -h -j $id -o "%T|%M|%R"`)
             if ok && !isempty(out)
-                state, elapsed, reason =
-                    (split(first(split(out, '\n')), '|')..., "", "")[1:3]
-                return (String(state), "elapsed $elapsed, $reason")
+                lines = filter(!isempty, strip.(split(out, '\n')))
+                state, counts =
+                    summarise_states([String(first(split(l, '|'))) for l in lines])
+                state == "MIXED" && return (state, counts)
+                _, elapsed, reason = (split(first(lines), '|')..., "", "")[1:3]
+                return (state, "elapsed $elapsed, $reason")
             end
         end
         if Sys.which("sacct") !== nothing
             ok, out, _ = capture(`sacct -n -X -P -j $id -o State,ExitCode,Elapsed`)
             if ok && !isempty(out)
-                state, code, elapsed = (split(first(split(out, '\n')), '|')..., "", "")[1:3]
-                return (String(first(split(state))), "exit code $code, elapsed $elapsed")
+                lines = filter(!isempty, strip.(split(out, '\n')))
+                # "CANCELLED by 1000" reads CANCELLED
+                state, counts = summarise_states([
+                    String(get(split(first(split(l, '|'))), 1, "")) for l in lines
+                ])
+                state == "MIXED" && return (state, counts)
+                _, code, elapsed = (split(first(lines), '|')..., "", "")[1:3]
+                return (state, "exit code $code, elapsed $elapsed")
             end
         end
         return ("UNKNOWN", "neither squeue nor sacct reports job $id here")
@@ -1184,9 +1246,8 @@ function job_state(record::AbstractDict)
         code > 128 && return ("TERMINATED", "signal $(code - 128)")
         return ("FAILED", "exit $code")
     end
-    alive = success(pipeline(ignorestatus(`kill -0 $id`); stderr = devnull))
-    alive && return ("RUNNING", "process $id")
-    return ("TERMINATED", "process $id is gone without an exit status")
+    local_job_alive(id, record["job_script"]) && return ("RUNNING", "process $id")
+    return ("TERMINATED", "process $id ended without recording an exit status")
 end
 
 """
@@ -1376,15 +1437,12 @@ function main(args::Vector{String} = ARGS; io::IO = stdout, timestamp::DateTime 
                 io,
                 "$(record["name"]): job $(record["job_id"]) is $state ($detail); its output may be incomplete",
             )
-            target = joinpath(
-                get(record, "target_project", record["project"]),
-                record["output_directory"],
-            )
+            target = joinpath(record["target_project"], record["output_directory"])
             println(io, "$(record["name"]): output $target")
             if !isempty(settings.fetch_command)
                 command = replace(
                     settings.fetch_command,
-                    "{project}" => get(record, "target_project", record["project"]),
+                    "{project}" => record["target_project"],
                     "{output_directory}" => record["output_directory"],
                 )
                 println(io, "fetch with: ", command)

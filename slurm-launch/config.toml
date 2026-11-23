@@ -7,7 +7,7 @@ julia = "julia"  # command that starts Julia where the job runs; a cluster table
 job_directory = "jobs"  # path relative to the project root; job scripts, case lists and Slurm logs
 log_directory = "data/logs"  # path relative to the project root; logs of local jobs
 memory_margin = 0.2  # float in [0, 1]; fraction added to the memory derived from the run configuration
-fetch_command = ""  # template printed by fetch, {project} and {output_directory} substituted; empty prints the paths only
+fetch_command = ""  # template printed by fetch, with {project} and {output_directory} substituted; empty prints the paths only
 
 [derivation.julia]
 threads = "hardware.max_threads"  # dotted key of the run configuration; integer >= 1, or "auto" (local backend only)

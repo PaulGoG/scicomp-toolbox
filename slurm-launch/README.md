@@ -1,9 +1,8 @@
 # slurm-launch
 
 Job scripts for Julia pipelines and for wrapped native launch scripts, with the resource
-request derived from the run's own configuration so that the two cannot drift. Jobs are
-submitted, watched, cancelled and located on a Slurm cluster, or run as detached local
-processes on a workstation. The tool opens no SSH connection: on a cluster it runs on the
+request derived from the run configuration. Jobs are submitted, watched, cancelled and
+located on a Slurm cluster, or run as detached local processes on a workstation. The tool opens no SSH connection: on a cluster it runs on the
 login node, beside the deployed project.
 
 ```
@@ -27,19 +26,18 @@ directory); every path must lie inside the project.
 ```bash
 julia ~/scicomp-toolbox/run.jl slurm-launch --run-config config/run.toml --output-dir data/runs/run_0001
 julia ~/scicomp-toolbox/run.jl slurm-launch submit --run-config config/run.toml --output-dir data/runs/run_0001
-julia ~/scicomp-toolbox/run.jl slurm-launch submit --backend slurm --cluster lisa \
+julia ~/scicomp-toolbox/run.jl slurm-launch submit --backend slurm --cluster hpc \
       --run-config config/run.toml --output-dir data/runs/run_0002
-julia ~/scicomp-toolbox/run.jl slurm-launch submit --backend slurm --cluster lisa \
+julia ~/scicomp-toolbox/run.jl slurm-launch submit --backend slurm --cluster hpc \
       --cases runs/sweep --run-config config.toml --parallel 4
-julia ~/scicomp-toolbox/run.jl slurm-launch submit --payload launcher --backend slurm --cluster lisa \
+julia ~/scicomp-toolbox/run.jl slurm-launch submit --payload launcher --backend slurm --cluster hpc \
       --cases runs/sweep_showcase --run-config run.toml --after data/runs/run_0002
 julia ~/scicomp-toolbox/run.jl slurm-launch status data/runs/run_0002 runs/sweep
 julia ~/scicomp-toolbox/run.jl slurm-launch cancel data/runs/run_0002
 julia ~/scicomp-toolbox/run.jl slurm-launch fetch data/runs/run_0002
 ```
 
-`generate`, the default verb, writes the job script and prints it, so the first thing to
-read is the exact text that would be queued. `submit` writes it, queues it with
+`generate`, the default verb, writes the job script and prints it. `submit` writes it, queues it with
 `sbatch --parsable` (Slurm) or starts it as a detached process group (local), and writes
 the submission record. `status`, `cancel` and `fetch` take submission records or the
 directories that hold them. `--after JOB` adds `--dependency=afterok:JOB`, where JOB is a
@@ -56,22 +54,24 @@ julia --project=. --threads=<threads> [--heap-size-hint=<heap>] <script> --confi
 The project needs a `Project.toml`; `--script` defaults to `scripts/run_pipeline.jl`.
 
 **`launcher`**: an existing launch script, such as the `_launch.sh` that a native code
-writes per run, run inside its own directory with `bash`. The script is wrapped, not
-rewritten: its `ulimit`, environment and `mpirun` line stay as they are, and the paths it
-holds must be valid where the job runs. The job requests the resources its configuration
+writes per run, run inside its own directory with `bash`. The script runs as it
+stands: its `ulimit`, environment and `mpirun` line are kept, and the paths it holds must
+be valid where the job runs. The job requests the resources its configuration
 declares.
 
 With `--cases DIR`, every subdirectory of `DIR` that holds the run configuration is a
 case and the job is an array of them: `--array=1-<n>` on Slurm (`%K` with
-`--parallel K`), one case after another locally. `--run-config`, and for the launcher
+`--parallel K`), one case after another locally, where every case runs and the job
+fails when one of them does. `--run-config`, and for the launcher
 `--script` (default `_launch.sh`), then name files inside each case directory. Each Julia
 case keeps its own `--threads` and heap hint, listed in the case file of the job; the
-directive block requests the largest value of every quantity over the cases.
+directive block requests the largest value of every quantity over the cases and the GPU
+type with the most memory among those they need.
 
 ## Resource derivation
 
-Nothing about size is invented: every quantity is read from the run configuration
-through the dotted keys of `[derivation]`.
+Every quantity is read from the run configuration through the dotted keys of
+`[derivation]`.
 
 | Payload | Quantity (default key) | Request |
 | :--- | :--- | :--- |
@@ -90,26 +90,29 @@ the tool with the name of the key; `max_threads = "auto"` is accepted by the loc
 backend only. An absent memory key leaves `--mem` to the partition default, an absent
 `max_vram_gb` leaves the GPU type open; both are reported as notes.
 
+The launcher payload does not fix the number of nodes. `--mem` and `--gres` are per node
+in Slurm, so an MPI job spread over several nodes receives them on each.
+
 ## Clusters
 
-The site settings cannot be derived and are never guessed: the slurm backend refuses to
-run until `config.toml` holds a table for the cluster. The values below only illustrate
-the format.
+The site settings cannot be derived from a run: the slurm backend refuses to run until
+`config.toml` holds a table for the cluster. The values below only illustrate the
+format.
 
 ```toml
-[clusters.lisa]
-partition = "gpu"                       # required
+[clusters.hpc]
+partition = "gpu"                       # required; no white space
 time_limit = "1-00:00:00"               # required, [D-]HH:MM:SS
-account = "my-account"
-qos = "normal"
+account = "my-account"                  # no white space
+qos = "normal"                          # no white space
 julia = "julia"                         # Julia command on the cluster (default [defaults].julia)
 setup = ["module load Julia/1.12"]      # shell lines run before the payload
-remote_root = "/home/me/projects"       # the project runs in remote_root/<project name>
-constraint = ""
-mail_type = "END,FAIL"
-mail_user = ""
-gpu_types = { a40 = 48, a100 = 80 }     # GPU types and their memory [GB]
-directives = ["--exclusive"]            # further sbatch options, verbatim
+remote_root = "/home/me/projects"       # absolute; the project runs in remote_root/<project name>
+constraint = ""                         # no white space
+mail_type = "END,FAIL"                  # comma-separated sbatch mail types
+mail_user = ""                          # no white space
+gpu_types = { a40 = 48, a100 = 80 }     # GPU types and their memory [GB], finite and > 0
+directives = ["--exclusive"]            # further sbatch options, each starting with -- and free of white space
 ```
 
 Without `remote_root` (or `--remote-project`), the job runs where the project is when the
@@ -133,17 +136,20 @@ second takes a `_2` suffix.
 
 The submission record sits beside the run so that a queue job can be joined to its run
 directory: job id, backend, cluster and partition, the project here and on the target,
-script, log, output directory, run configuration and its SHA-256, commit and whether
-tracked files were modified, submission time, dependency, number of cases, and the
-request. `submit` refuses an output directory that already holds one. `run-index` reads
+job script, log, output directory, run configuration and its SHA-256 (for an array, the
+hash of the hashes of its cases), commit (with the suffix `-dirty` when tracked files
+were modified, absent outside git), submission time, dependency, number of cases, and
+the request. `submit` refuses an output directory that already holds one. `run-index` reads
 the record inside a run directory and lists its `job_id`; an array job has one record, in
 the directory of its cases.
 
 ## States
 
 Slurm jobs report the `squeue` state while queued or running and the `sacct` state
-afterwards. A local job is `RUNNING` while its process lives, then `COMPLETED` or
-`FAILED` from the exit status its script records, or `TERMINATED` after a signal.
+afterwards; an array reports the state its tasks share, or `MIXED` with the count of
+each. A local job is `RUNNING` while the process that runs its script lives, then
+`COMPLETED` or `FAILED` from the exit status the script records, or `TERMINATED` after a
+signal.
 `fetch` prints where the output of the job lies and, with `fetch_command` set, the
 transfer command for it; it moves no data itself.
 

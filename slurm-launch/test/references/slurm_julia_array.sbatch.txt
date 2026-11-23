@@ -21,4 +21,4 @@
 set -euo pipefail
 module load Julia/1.12
 IFS=$'\t' read -r case threads heap <<< "$(sed -n "${SLURM_ARRAY_TASK_ID}p" jobs/sweep_2026-10-29_09-30-00.cases)"
-julia --project=. --threads="$threads" ${heap:+--heap-size-hint="$heap"} scripts/run_pipeline.jl --config "$case/config.toml" --output-dir "$case"
+julia --project=. --threads="$threads" ${heap:+--heap-size-hint="$heap"} scripts/run_pipeline.jl --config "$case"/config.toml --output-dir "$case"

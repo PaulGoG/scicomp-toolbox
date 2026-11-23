@@ -137,7 +137,8 @@ end
     with_stubs(f, dir)
 
 Run `f(log)` with stub `sbatch`, `squeue`, `sacct` and `scancel` first on `PATH`; every
-call is appended to `log`. Job 4242 is running, job 4243 has completed.
+call is appended to `log`. Job 4242 is running, job 4243 has completed, the two tasks of
+array job 4245 ended COMPLETED and OUT_OF_MEMORY, and job 4246 was cancelled.
 """
 function with_stubs(f, dir)
     bin = mkpath(joinpath(dir, "bin"))
@@ -145,7 +146,12 @@ function with_stubs(f, dir)
     stubs = Dict(
         "sbatch" => "echo \"sbatch \$*\" >> \"\$STUB_LOG\"\necho \"4242;testsite\"",
         "squeue" => "echo \"squeue \$*\" >> \"\$STUB_LOG\"\ncase \"\$*\" in *\"-j 4242 \"*) echo \"RUNNING|1:23|node07\";; esac",
-        "sacct" => "echo \"sacct \$*\" >> \"\$STUB_LOG\"\ncase \"\$*\" in *\"-j 4243 \"*) echo \"COMPLETED|0:0|00:10:00\";; esac",
+        "sacct" =>
+            "echo \"sacct \$*\" >> \"\$STUB_LOG\"\ncase \"\$*\" in " *
+            "*\"-j 4243 \"*) echo \"COMPLETED|0:0|00:10:00\";; " *
+            "*\"-j 4245 \"*) echo \"COMPLETED|0:0|00:01:00\"; " *
+            "echo \"OUT_OF_MEMORY|0:125|00:02:00\";; " *
+            "*\"-j 4246 \"*) echo \"CANCELLED by 1000|0:0|00:00:05\";; esac",
         "scancel" => "echo \"scancel \$*\" >> \"\$STUB_LOG\"",
     )
     for (name, body) in stubs
@@ -201,8 +207,8 @@ end
         @test_throws "log_directory" bad(
             Dict("defaults" => Dict("log_directory" => "../up")),
         )
-        @test_throws "[defaults].cluster 'lisa'" bad(
-            Dict("defaults" => Dict("cluster" => "lisa")),
+        @test_throws "[defaults].cluster 'hpc'" bad(
+            Dict("defaults" => Dict("cluster" => "hpc")),
         )
         @test_throws "[derivation.julia].threads" bad(
             Dict("derivation" => Dict("julia" => Dict("threads" => "a..b"))),
@@ -304,7 +310,7 @@ end
             "slurm",
             cluster,
         )
-        both = combine([r, plain])
+        both = combine([r, plain], cluster)
         @test (both.cpus_per_task, both.memory_gb, both.gpus) == (8, 39, 1)
         @test shell_quote("a/b_c.toml") == "a/b_c.toml" &&
               shell_quote("it's") == "'it'\\''s'"
@@ -473,9 +479,9 @@ end
                     "run-config" => "config/run.toml",
                     "output-dir" => "data/x",
                 )
-                @test_throws "no [clusters.lisa]" spec(
+                @test_throws "no [clusters.hpc]" spec(
                     "backend" => "slurm",
-                    "cluster" => "lisa",
+                    "cluster" => "hpc",
                     "run-config" => "config/run.toml",
                     "output-dir" => "data/x",
                 )
@@ -556,7 +562,8 @@ end
                     @test occursin("submitted slurm job 4242", String(take!(io)))
                     record = read_record(submitted.record)
                     @test record["job_id"] == "4242" && record["cluster"] == "testsite"
-                    @test record["commit"] == projects.commit
+                    # Project.toml was edited under "Specification errors"
+                    @test record["commit"] == projects.commit * "-dirty"
                     @test record["resources"]["memory_gb"] == 39
                     @test record["config_hash"] == bytes2hex(sha256(read(run_config)))
                     @test record["output_directory"] == "data/runs/run_0003"
@@ -776,6 +783,219 @@ end
                 )
                 @test occursin("--threads=auto", read(auto.script, String))
             end
+        end
+
+        @testset "Review fixes" begin
+            review = mkpath(joinpath(root, "review"))
+            config = tool_config(review; julia = joinpath(Sys.BINDIR, "julia"))
+            settings = load_settings(config)
+            site = validate_settings(TOML.parse(CLUSTER))
+            cluster = site.clusters["testsite"]
+
+            # a) array request carries the GPU type with the most memory
+            request(vram) = derive_resources(
+                "julia",
+                TOML.parse(
+                    "[hardware]\nmax_threads = 2\ngpu_backend = \"cuda\"\n[safety]\nmax_vram_gb = $vram\n",
+                ),
+                "v.toml",
+                site,
+                "slurm",
+                cluster,
+            )
+            a100, a40 = request(60), request(20)
+            untyped = derive_resources(
+                "julia",
+                TOML.parse("[hardware]\nmax_threads = 2\n"),
+                "u.toml",
+                site,
+                "slurm",
+                cluster,
+            )
+            @test combine([a100, a40], cluster).gpu_type == "a100"
+            @test combine([a40, a100], cluster).gpu_type == "a100"
+            @test combine([untyped, untyped], cluster).gpu_type == ""
+
+            # b) states of array tasks
+            @test summarise_states(["COMPLETED", "COMPLETED"]) == ("COMPLETED", "")
+            @test summarise_states(["COMPLETED", "OUT_OF_MEMORY", "COMPLETED"]) ==
+                  ("MIXED", "2 COMPLETED, 1 OUT_OF_MEMORY")
+            with_stubs(review) do _
+                slurm_record(id) = Dict{String, Any}("job_id" => id, "backend" => "slurm")
+                mixed = job_state(slurm_record("4245"))
+                @test first(mixed) == "MIXED" && occursin("1 OUT_OF_MEMORY", last(mixed))
+                @test first(job_state(slurm_record("4246"))) == "CANCELLED"
+            end
+
+            # c) project path holding a single quote
+            quoted = joinpath(review, "it's")
+            mkpath(joinpath(quoted, "scripts"))
+            mkpath(joinpath(quoted, "config"))
+            write(joinpath(quoted, "Project.toml"), "name = \"Quoted\"\n")
+            write(joinpath(quoted, "scripts", "run_pipeline.jl"), PIPELINE)
+            write(joinpath(quoted, "config", "run.toml"), pipeline_config(2))
+            generated = main(
+                [
+                    "generate",
+                    "--project",
+                    quoted,
+                    "--run-config",
+                    joinpath(quoted, "config", "run.toml"),
+                    "--output-dir",
+                    joinpath(quoted, "data", "x"),
+                    "--name",
+                    "quoted",
+                    "--config",
+                    config,
+                ];
+                io = IOBuffer(),
+            )
+            script = generated.script
+            @test "trap 'echo \$? > \"\$exit_file\"' EXIT" in
+                  split(read(script, String), '\n')
+            @test success(run(ignorestatus(`bash -n $script`)))
+
+            # d) run configuration name holding a space
+            spaced = joinpath(review, "Spaced")
+            mkpath(joinpath(spaced, "scripts"))
+            mkpath(joinpath(spaced, "runs", "001"))
+            write(joinpath(spaced, "Project.toml"), "name = \"Spaced\"\n")
+            write(joinpath(spaced, "scripts", "run_pipeline.jl"), PIPELINE)
+            write(joinpath(spaced, "runs", "001", "run config.toml"), pipeline_config(2))
+            array = main(
+                [
+                    "generate",
+                    "--project",
+                    spaced,
+                    "--cases",
+                    joinpath(spaced, "runs"),
+                    "--run-config",
+                    "run config.toml",
+                    "--config",
+                    config,
+                ];
+                io = IOBuffer(),
+            )
+            @test any(
+                contains("\"\$case\"/'run config.toml'"),
+                payload_lines(array.spec, settings),
+            )
+
+            # e) launch script at the project root
+            rooted = mkpath(joinpath(review, "Rooted"))
+            write(joinpath(rooted, "_launch.sh"), "#!/bin/bash\ntrue\n")
+            write(joinpath(rooted, "run.toml"), "[simulation]\nomp_threads = 1\n")
+            launcher = build_spec(
+                Dict(
+                    "payload" => "launcher",
+                    "project" => rooted,
+                    "run-config" => joinpath(rooted, "run.toml"),
+                    "script" => joinpath(rooted, "_launch.sh"),
+                ),
+                settings;
+                timestamp = STAMP,
+            )
+            @test !any(startswith("cd "), payload_lines(launcher, settings))
+
+            # f) identity of a local job
+            @test local_job_alive(string(getpid()), "definitely-not-this-script.sh") ==
+                  false
+            @test local_job_alive(string(getpid()), basename(Base.julia_cmd().exec[1])) ==
+                  true
+
+            # g) submission record of a dirty working tree
+            write(
+                joinpath(projects.pipeline, "Project.toml"),
+                "name = \"Pipeline\"\n# edited\n",
+            )
+            dirty = build_spec(
+                Dict(
+                    "project" => projects.pipeline,
+                    "run-config" => run_config,
+                    "output-dir" =>
+                        joinpath(projects.pipeline, "data", "runs", "review"),
+                ),
+                settings;
+                timestamp = STAMP,
+            )
+            record = read_record(write_record(dirty, settings, "1"))
+            @test endswith(record["commit"], "-dirty")
+            @test haskey(record, "job_script") && !haskey(record, "script")
+
+            # h) settings and run configuration values
+            cluster_with(change) = Dict(
+                "clusters" => Dict(
+                    "s" => Dict{String, Any}(
+                        "partition" => "p",
+                        "time_limit" => "02:00:00",
+                        change,
+                    ),
+                ),
+            )
+            @test_throws "gpu_types" validate_settings(
+                cluster_with("gpu_types" => Dict("a 40" => 48)),
+            )
+            @test_throws "constraint" validate_settings(cluster_with("constraint" => "a b"))
+            @test_throws ArgumentError derive_resources(
+                "julia",
+                Dict{String, Any}(
+                    "hardware" =>
+                        Dict{String, Any}("max_threads" => 2, "heap_size_hint_gb" => Inf),
+                ),
+                "h.toml",
+                settings,
+                "local",
+                nothing,
+            )
+
+            # i) trailing separator of --project
+            options = Dict(
+                "project" => projects.pipeline,
+                "run-config" => run_config,
+                "output-dir" => joinpath(projects.pipeline, "data", "x"),
+            )
+            @test build_spec(
+                merge(options, Dict("project" => projects.pipeline * "/")),
+                settings;
+                timestamp = STAMP,
+            ).name == build_spec(options, settings; timestamp = STAMP).name
+
+            # j) a failing case does not stop the local array
+            failing = joinpath(review, "Failing")
+            mkpath(joinpath(failing, "scripts"))
+            write(joinpath(failing, "Project.toml"), "name = \"Failing\"\n")
+            write(
+                joinpath(failing, "scripts", "run_pipeline.jl"),
+                """
+                config = ARGS[findfirst(==("--config"), ARGS) + 1]
+                output = ARGS[findfirst(==("--output-dir"), ARGS) + 1]
+                occursin("fail = true", read(config, String)) && exit(3)
+                write(joinpath(output, "marker"), "done\\n")
+                """,
+            )
+            for (case, extra) in (("001_fail", "fail = true\n"), ("002_pass", ""))
+                mkpath(joinpath(failing, "runs", case))
+                write(
+                    joinpath(failing, "runs", case, "config.toml"),
+                    extra * "[hardware]\nmax_threads = 1\n",
+                )
+            end
+            sweep = main(
+                [
+                    "submit",
+                    "--project",
+                    failing,
+                    "--cases",
+                    joinpath(failing, "runs"),
+                    "--run-config",
+                    "config.toml",
+                    "--config",
+                    config,
+                ];
+                io = IOBuffer(),
+            )
+            @test wait_for(sweep.record, ("COMPLETED", "FAILED", "TERMINATED")) == "FAILED"
+            @test isfile(joinpath(failing, "runs", "002_pass", "marker"))
         end
     end
 end
