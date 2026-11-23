@@ -19,10 +19,14 @@ updates:
       - "/standalone"
     schedule:
       interval: "weekly"
+    groups:
+      # one pull request for the compatible updates of the week instead of one per package
+      julia-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     ignore:
-      # KernelAbstractions 0.10 moves the CPU backend to PoCL; adopting it is a
-      # deliberate migration, not a version bump. The GPU packages are bounded to
-      # the series that still accept KernelAbstractions 0.9 for the same reason.
+      # KernelAbstractions 0.10 moves the CPU backend to PoCL and needs a migration; the
+      # GPU packages are held to the series that accept KernelAbstractions 0.9.
       - dependency-name: "KernelAbstractions"
       - dependency-name: "CUDA"
       - dependency-name: "AMDGPU"

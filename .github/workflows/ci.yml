@@ -25,14 +25,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # the declared compat floor and the current stable release
-        version: ['1.12', '1']
+        # the compat floor declared by the environments and the current stable release
+        version: ['min', '1']
         os: [ubuntu-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: julia-actions/setup-julia@da908477b5db94c10ffce8cfea9f2b3b9d5db687 # v3.0.3
         with:
           version: ${{ matrix.version }}
+          # 'min' reads the julia compat entry of this environment; all declare the same
+          project: hardware-diagnostics
       - uses: julia-actions/cache@9353db09a0f2bbbdec6f41791918c75d37391b36 # v3.5.0
       - name: Test suites of every sub-environment
         run: julia --color=yes test.jl
