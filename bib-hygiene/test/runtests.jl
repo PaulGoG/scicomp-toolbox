@@ -240,13 +240,9 @@ end
         @test err isa BibParseError && err.line == 3
         @test sprint(showerror, err) == "line 3: " * err.message
         undefined = "@string{a = {b}}\n@article{y, journal = nosuch, year = 2020}\n"
-        err = try
-            parse_bibtex(undefined)
-        catch e
-            e
-        end
-        @test err isa BibParseError && err.line == 2
-        @test err.message == "undefined string nosuch"
+        parsed, _, _, missing_macros = parse_bibtex(undefined)
+        @test field(only(parsed), "journal") == "nosuch"
+        @test missing_macros == [("y", "nosuch", 2)]
         @test_throws "entry without key" parse_bibtex("@article{, title = {x}}")
         @test isempty(parse_entries("no entries here, only an address user@example.org"))
     end
@@ -292,7 +288,10 @@ end
         @test only(found).detail == "same title as good2020"
 
         found = check_missing_field(entries)
-        @test [(f.key, f.detail) for f in found] == [("nojournal2019", "missing journal"), ("thesis2015", "missing school")]
+        @test [(f.key, f.detail) for f in found] == [
+            ("nojournal2019", "missing journal or journaltitle"),
+            ("thesis2015", "missing school or institution"),
+        ]
         book = parse_entries("@book{b, title = {T}, publisher = {P}, year = 1}")
         @test [f.detail for f in check_missing_field(book)] == ["missing author or editor"]
 
@@ -419,18 +418,19 @@ end
         @test counter[] == length(responses)
         @test count(==(defaults.doi_delay_s), pauses) == length(responses) - 2
         @test haskey(cache, "doi") && haskey(cache, "arxiv")
-        @test cache["doi"]["10.1000/notfound"]["status"] == 404
+        @test !haskey(cache["doi"], "10.1000/notfound")
         @test cache["doi"]["10.1103/physrevd.101.000001"]["status"] == 302
         @test cache["arxiv"]["2301.00001"]["doi"] == "10.1103/PhysRevD.108.000003"
         @test cache["arxiv"]["2301.00001"]["journal_ref"] == ""
 
+        # the unresolved DOI is not cached and is requested again
         counter[] = 0
         again = lookup()
-        @test counter[] == 0
+        @test counter[] == 1
         @test filter(f -> f.check in ONLINE_CHECKS, again) ==
               filter(f -> f.check in ONLINE_CHECKS, found)
         lookup(; refresh = true)
-        @test counter[] == length(responses)
+        @test counter[] == 1 + length(responses)
 
         offline_arxiv = delete!(copy(responses), ARXIV_QUERY)
         found = run_checks(
@@ -476,7 +476,7 @@ end
             @test load_cache(path) == Dict{String, Any}()
             save_cache(path, cache)
             @test load_cache(path) == cache
-            @test occursin("[doi.\"10.1000/notfound\"]", read(path, String))
+            @test occursin("[doi.\"10.1103/physrevd.101.000001\"]", read(path, String))
         end
     end
 
@@ -608,8 +608,106 @@ end
                   ["press2024"]
             @test isfile(cache_path)
             stored = TOML.parsefile(cache_path)
-            @test stored["doi"]["10.1000/notfound"]["status"] == 404
+            @test !haskey(stored["doi"], "10.1000/notfound")
             @test haskey(stored["arxiv"], "2301.00001")
+        end
+    end
+
+    @testset "Review fixes" begin
+        # DOI prefixes: only the doi.org resolver and the doi: scheme are stripped
+        @test bare_doi("https://www.doi.org/10.1103/X") == "10.1103/X"
+        @test bare_doi("http://dx.doi.org/10.1103/X") == "10.1103/X"
+        @test bare_doi("doi: 10.1103/X") == "10.1103/X"
+        @test bare_doi("https://link.aps.org/doi/10.1103/X") ==
+              "https://link.aps.org/doi/10.1103/X"
+        @test corrected_value("doi", "{https://link.aps.org/doi/10.1103/X}") ==
+              "{https://link.aps.org/doi/10.1103/X}"
+        @test corrected_value("doi", "{https://doi.org/10.1103/X}") == "{10.1103/X}"
+
+        # DOI URLs
+        @test doi_url("10.1103/PhysRevLett.116.061102") ==
+              "https://doi.org/10.1103/PhysRevLett.116.061102"
+        @test doi_url("10.1175/1520-0469(1979)036<0367:XX>2.0.CO;2") ==
+              "https://doi.org/10.1175/1520-0469(1979)036%3C0367:XX%3E2.0.CO;2"
+        @test doi_url("10.1/a#b?c") == "https://doi.org/10.1/a%23b%3Fc"
+
+        # page ranges
+        @test corrected_value("pages", "{3-1--3-15}") == "{3-1--3-15}"
+        @test corrected_value("pages", "{123-130}") == "{123--130}"
+        @test corrected_value("pages", "{L12-L15}") == "{L12--L15}"
+        @test corrected_value("pages", "{1-3, 7-9}") == "{1--3, 7--9}"
+        @test corrected_value("pages", "{12---15}") == "{12---15}"
+        @test corrected_value("pages", "{061102}") == "{061102}"
+
+        # title capitals
+        @test unprotected_capitals("Gravitational waves: Theory and data") == String[]
+        @test unprotected_capitals("Tests of General relativity") == ["General"]
+        @test unprotected_capitals("Tests of {G}eneral relativity") == String[]
+        @test !isempty(unprotected_capitals("The {\\\"O}ffnung"))
+
+        # journal spellings
+        journals = """
+            @article{a, journal = {Annals of Physics}}
+            @article{b, journal = {Ann. Phys.}}
+            @article{c, journal = {Annalen der Physik}}
+            """
+        found = check_journal_spelling(parse_entries(journals))
+        @test length(found) == 1 && only(found).check == :journal_spelling
+        @test occursin("Annals of Physics", only(found).detail)
+        @test occursin("Ann. Phys.", only(found).detail)
+        @test !occursin("Annalen der Physik", only(found).detail)
+        sections = "@article{a, journal = {J. Phys. A}}\n@article{b, journal = {J. Phys.}}"
+        @test isempty(check_journal_spelling(parse_entries(sections)))
+
+        # undefined string macros
+        ieee = "@article{ieee, title = {T}, journal = IEEE_J_PROC, year = 2020}"
+        found = run_checks(parse_bibtex(ieee)...; settings = defaults)
+        macros = filter(f -> f.check == :undefined_string, found)
+        @test length(macros) == 1
+        @test only(macros).key == "ieee" && only(macros).severity == :warning
+
+        # multi-citation commands
+        @test first(citation_keys("\\cites{a}{b} and \\cite[p.~3]{c,d}")) ==
+              Set(["a", "b", "c", "d"])
+
+        # biblatex field names
+        bl = "@article{bl, author = {A}, title = {T}, journaltitle = {J}, date = {2020}}"
+        @test isempty(check_missing_field(parse_entries(bl)))
+
+        # arXiv request spacing
+        @test_throws "arxiv_delay_s" validate_settings(
+            Dict("network" => Dict("arxiv_delay_s" => 1)),
+        )
+
+        mktempdir() do dir
+            # a 404 is reported but not cached; an unreadable cache starts empty
+            gone = parse_entries("@article{gone, title = {T}, doi = {10.1000/gone}}")
+            responses = Dict("https://doi.org/10.1000/gone" => (404, ""))
+            cache = Dict{String, Any}()
+            found = check_doi_unresolved(
+                gone,
+                defaults;
+                fetch = stub_fetcher(responses, Ref(0)),
+                pause = _ -> nothing,
+                cache,
+            )
+            @test keys_of(filter(f -> f.check == :doi_unresolved, found)) == ["gone"]
+            path = joinpath(dir, "cache.toml")
+            save_cache(path, cache)
+            stored = load_cache(path)
+            @test !haskey(get(stored, "doi", Dict{String, Any}()), "10.1000/gone")
+            broken = joinpath(dir, "broken.toml")
+            write(broken, "not toml [")
+            loaded = @test_logs (:warn,) match_mode = :any load_cache(broken)
+            @test loaded == Dict{String, Any}()
+
+            empty_bib = joinpath(dir, "empty.bib")
+            write(empty_bib, "% no entries\n")
+            @test_throws ArgumentError main([empty_bib]; io = IOBuffer())
+
+            bib = joinpath(dir, "refs.bib")
+            write(bib, FIXTURE)
+            @test_throws ArgumentError main([bib, "--refresh"]; io = IOBuffer())
         end
     end
 end

@@ -35,6 +35,7 @@ const CHECKS = (
     :pages_dash,
     :year,
     :duplicate_field,
+    :undefined_string,
     :uncited,
     :undefined_citation,
     :doi_unresolved,
@@ -152,6 +153,12 @@ function validate_settings(raw::AbstractDict)
         )
     doi_delay_s = nonnegative_seconds(network, "doi_delay_s", 0.5)
     arxiv_delay_s = nonnegative_seconds(network, "arxiv_delay_s", 3.0)
+    # the arXiv API terms ask for at least 3 s between requests
+    arxiv_delay_s >= 3 || throw(
+        ArgumentError(
+            "[network].arxiv_delay_s must be a number >= 3 [s], got $arxiv_delay_s",
+        ),
+    )
     arxiv_batch = get(network, "arxiv_batch", 20)
     (arxiv_batch isa Integer && !(arxiv_batch isa Bool) && 1 <= arxiv_batch <= 100) ||
         throw(
@@ -340,13 +347,21 @@ end
 collapse(text::AbstractString) = String(strip(replace(text, r"\s+" => " ")))
 
 """
-    parse_value(src, i, strings, entry_line) -> (value, span, next)
+    parse_value(src, i, strings, entry_line, key, undefined) -> (value, span, next)
 
 The value expression that starts at or after `i`: braced and quoted parts, unsigned
-integers and string names joined by `#`. Returns the collapsed value, the byte span of
-the expression and the position after it.
+integers and string names joined by `#`. A string name absent from `strings` and not a
+month stands for itself and is recorded in `undefined` as `(key, name, line)`. Returns
+the collapsed value, the byte span of the expression and the position after it.
 """
-function parse_value(src::BibSource, i::Int, strings::Dict{String, String}, entry_line::Int)
+function parse_value(
+    src::BibSource,
+    i::Int,
+    strings::Dict{String, String},
+    entry_line::Int,
+    key::String,
+    undefined::Vector{Tuple{String, String, Int}},
+)
     n = byte_count(src)
     parts = String[]
     i = skip_space(src, i)
@@ -381,7 +396,9 @@ function parse_value(src::BibSource, i::Int, strings::Dict{String, String}, entr
             elseif name in MONTHS
                 push!(parts, name)
             else
-                throw(BibParseError("undefined string $name", line_at(src, i)))
+                # BibTeX warns and goes on with the name as the value
+                push!(parts, name)
+                push!(undefined, (key, name, line_at(src, i)))
             end
         else
             throw(
@@ -399,11 +416,13 @@ function parse_value(src::BibSource, i::Int, strings::Dict{String, String}, entr
 end
 
 """
-    parse_fields(src, i, closer, strings, entry_line, key, duplicates) -> (fields, close)
+    parse_fields(src, i, closer, strings, entry_line, key, duplicates, undefined)
+        -> (fields, close)
 
 The `name = value` list that starts at `i`, up to the `closer` byte of the entry; a
 trailing comma is allowed. A name repeated within the list keeps its first value and is
-recorded in `duplicates`. Returns the fields and the position of the closer.
+recorded in `duplicates`; undefined string names are recorded in `undefined`
+([`parse_value`](@ref)). Returns the fields and the position of the closer.
 """
 function parse_fields(
     src::BibSource,
@@ -413,6 +432,7 @@ function parse_fields(
     entry_line::Int,
     key::String,
     duplicates::Vector{Tuple{String, String, Int}},
+    undefined::Vector{Tuple{String, String, Int}},
 )
     n = byte_count(src)
     fields = BibField[]
@@ -428,7 +448,7 @@ function parse_fields(
         i = skip_space(src, stop)
         (i <= n && byte_at(src, i) == UInt8('=')) ||
             throw(BibParseError("expected '=' after field $name", line))
-        value, span, i = parse_value(src, i + 1, strings, entry_line)
+        value, span, i = parse_value(src, i + 1, strings, entry_line, key, undefined)
         if any(f -> f.name == name, fields)
             push!(duplicates, (key, name, line))
         else
@@ -453,15 +473,17 @@ function parse_fields(
 end
 
 """
-    parse_bibtex(text::AbstractString) -> (entries, strings, duplicates)
+    parse_bibtex(text::AbstractString) -> (entries, strings, duplicates, undefined)
 
 Parse BibTeX source. Text outside entries is ignored; `@comment` and `@preamble` are
 skipped; `@string` definitions fill the macro table `strings` (lowercase names), through
-which bare identifiers in later values resolve, the month names `jan` to `dec` resolving
+which bare identifiers in later values resolve; the month names `jan` to `dec` resolve
 to themselves. An entry opens with `{` or `(`, its key runs to the first comma, and its
 fields follow. `duplicates` lists `(key, field, line)` for every field name repeated
-within an entry. Throws a [`BibParseError`](@ref) on an entry without key, an undefined
-string, unbalanced braces or the end of input inside an entry.
+within an entry; `undefined` lists `(key, name, line)` for every string name not defined
+before its use, which stands for itself (key `""` within an `@string`). Throws a
+[`BibParseError`](@ref) on an entry without key, unbalanced braces or the end of input
+inside an entry.
 """
 function parse_bibtex(text::AbstractString)
     src = BibSource(text)
@@ -470,6 +492,7 @@ function parse_bibtex(text::AbstractString)
     entries = BibEntry[]
     strings = Dict{String, String}()
     duplicates = Tuple{String, String, Int}[]
+    undefined = Tuple{String, String, Int}[]
     i = 1
     while i <= n
         at = findnext(==(UInt8('@')), bytes, i)
@@ -498,6 +521,7 @@ function parse_bibtex(text::AbstractString)
                 line,
                 "",
                 Tuple{String, String, Int}[],
+                undefined,
             )
             for definition in definitions
                 strings[definition.name] = definition.value
@@ -514,11 +538,11 @@ function parse_bibtex(text::AbstractString)
         isempty(key) && throw(BibParseError("entry without key", line))
         fields, close =
             byte_at(src, k) == closer ? (BibField[], k) :
-            parse_fields(src, k + 1, closer, strings, line, key, duplicates)
+            parse_fields(src, k + 1, closer, strings, line, key, duplicates, undefined)
         push!(entries, BibEntry(type, key, fields, line, at:close))
         i = close + 1
     end
-    return entries, strings, duplicates
+    return entries, strings, duplicates, undefined
 end
 
 """
@@ -544,14 +568,16 @@ has_value(entry::BibEntry, name::AbstractString) =
 
 # --- identifiers ------------------------------------------------------------------------
 
-const DOI_PREFIX = r"^(?:https?://|(?:dx\.)?doi\.org/|doi:)"i
+const DOI_PREFIX = r"^(?:(?:https?://)?(?:www\.|dx\.)?doi\.org/|doi:\s*)"i
 const DOI_SYNTAX = r"^10\.\d{4,9}/\S+$"
 
 """
     bare_doi(value::AbstractString) -> String
 
-`value` without surrounding whitespace and without the prefixes `http://`, `https://`,
-`doi.org/`, `dx.doi.org/` and `doi:` (case-insensitive, in any combination).
+`value` without surrounding whitespace and without the resolver prefixes `doi.org/`,
+`www.doi.org/` and `dx.doi.org/`, each optionally preceded by `http://` or `https://`,
+and `doi:` (case-insensitive, repeated prefixes removed in turn). Other URLs are
+returned whole.
 """
 function bare_doi(value::AbstractString)
     doi = strip(value)
@@ -561,6 +587,31 @@ function bare_doi(value::AbstractString)
         doi = lstrip(SubString(doi, ncodeunits(m.match) + 1))
     end
     return String(doi)
+end
+
+# bytes of a DOI left unencoded in its URL besides ASCII letters and digits
+const URL_SAFE_BYTES = codeunits("-._~!\$&'()*+,;=:@/")
+
+"""
+    doi_url(doi::AbstractString) -> String
+
+The doi.org URL of a bare `doi`: every byte other than an ASCII letter, a digit or one
+of `-._~!\$&'()*+,;=:@/` is percent-encoded as `%XX` with uppercase hexadecimal digits.
+"""
+function doi_url(doi::AbstractString)
+    io = IOBuffer()
+    print(io, "https://doi.org/")
+    for b in codeunits(doi)
+        if UInt8('A') <= b <= UInt8('Z') ||
+           UInt8('a') <= b <= UInt8('z') ||
+           is_digit(b) ||
+           b in URL_SAFE_BYTES
+            write(io, b)
+        else
+            print(io, '%', uppercase(string(b; base = 16, pad = 2)))
+        end
+    end
+    return String(take!(io))
 end
 
 const ARXIV_NEW = "\\d{4}\\.\\d{4,5}"
@@ -574,20 +625,15 @@ const ARXIV_TEXT_FIELDS = ("journal", "note", "url", "howpublished")
     arxiv_id(entry::BibEntry) -> Union{String, Nothing}
 
 The arXiv identifier of an entry, without version, taken in order from: the `eprint`
-field, when `archiveprefix` or `eprinttype` is `arxiv` or the field itself has the form
-of an identifier; a DOI `10.48550/arXiv.<id>`; an `arxiv.org/abs/<id>` or `arXiv:<id>`
-in `journal`, `note`, `url` or `howpublished`. Identifiers are of the form
-`2301.00001` or, in the old style, `hep-th/9901001`.
+field, when it has the form of an identifier; a DOI `10.48550/arXiv.<id>`; an
+`arxiv.org/abs/<id>` or `arXiv:<id>` in `journal`, `note`, `url` or `howpublished`.
+Identifiers are of the form `2301.00001` or, in the old style, `hep-th/9901001`.
 """
 function arxiv_id(entry::BibEntry)
     eprint = field(entry, "eprint")
     if eprint !== nothing && !isempty(eprint)
         m = match(ARXIV_WHOLE, eprint)
         m === nothing || return String(m.captures[1]::AbstractString)
-        any(
-            name -> lowercase(something(field(entry, name), "")) == "arxiv",
-            ("archiveprefix", "eprinttype"),
-        ) && return eprint
     end
     doi = field(entry, "doi")
     if doi !== nothing
@@ -638,22 +684,23 @@ struct Finding
 end
 
 """
-Required fields per entry type, as in standard BibTeX; `a|b` means one of the two
-suffices. Types absent from the table require nothing.
+Required fields per entry type, as in standard BibTeX, with the biblatex names
+`journaltitle`, `date` and `institution` accepted for `journal`, `year` and `school`;
+`a|b` means one of the two suffices. Types absent from the table require nothing.
 """
 const REQUIRED_FIELDS = Dict{String, Vector{String}}(
-    "article" => ["author", "title", "journal", "year"],
-    "book" => ["author|editor", "title", "publisher", "year"],
+    "article" => ["author", "title", "journal|journaltitle", "year|date"],
+    "book" => ["author|editor", "title", "publisher", "year|date"],
     "booklet" => ["title"],
-    "inbook" => ["author|editor", "title", "chapter|pages", "publisher", "year"],
-    "incollection" => ["author", "title", "booktitle", "publisher", "year"],
-    "inproceedings" => ["author", "title", "booktitle", "year"],
-    "conference" => ["author", "title", "booktitle", "year"],
+    "inbook" => ["author|editor", "title", "chapter|pages", "publisher", "year|date"],
+    "incollection" => ["author", "title", "booktitle", "publisher", "year|date"],
+    "inproceedings" => ["author", "title", "booktitle", "year|date"],
+    "conference" => ["author", "title", "booktitle", "year|date"],
     "manual" => ["title"],
-    "mastersthesis" => ["author", "title", "school", "year"],
-    "phdthesis" => ["author", "title", "school", "year"],
-    "proceedings" => ["title", "year"],
-    "techreport" => ["author", "title", "institution", "year"],
+    "mastersthesis" => ["author", "title", "school|institution", "year|date"],
+    "phdthesis" => ["author", "title", "school|institution", "year|date"],
+    "proceedings" => ["title", "year|date"],
+    "techreport" => ["author", "title", "institution", "year|date"],
     "unpublished" => ["author", "title", "note"],
     "misc" => String[],
     "online" => ["title", "url"],
@@ -765,7 +812,8 @@ end
 """
     check_doi_prefix(entries) -> Vector{Finding}
 
-Warnings for DOIs written with a resolver or scheme prefix ([`bare_doi`](@ref)).
+Warnings for DOIs written with a resolver or scheme prefix ([`bare_doi`](@ref)) whose
+bare form has the syntax of a DOI.
 """
 function check_doi_prefix(entries::Vector{BibEntry})
     findings = Finding[]
@@ -773,7 +821,7 @@ function check_doi_prefix(entries::Vector{BibEntry})
         f = field_of(entry, "doi")
         f === nothing && continue
         bare = bare_doi(f.value)
-        bare == strip(f.value) && continue
+        (bare == strip(f.value) || !occursin(DOI_SYNTAX, bare)) && continue
         push!(
             findings,
             Finding(
@@ -840,7 +888,7 @@ function check_doi_missing(entries::Vector{BibEntry})
 end
 
 const JOURNAL_STOPWORDS =
-    ("of", "the", "and", "for", "on", "in", "de", "der", "und", "et", "a", "an")
+    ("of", "the", "and", "for", "on", "in", "de", "der", "und", "et", "an")
 
 """
     journal_tokens(name::AbstractString) -> Vector{String}
@@ -863,51 +911,46 @@ same_journal(a::Vector{String}, b::Vector{String}) =
     length(a) == length(b) &&
     all(startswith(x, y) || startswith(y, x) for (x, y) in zip(a, b))
 
-function find_root!(parent::Vector{Int}, k::Int)
-    while parent[k] != k
-        parent[k] = parent[parent[k]]
-        k = parent[k]
-    end
-    return k
-end
-
 """
     check_journal_spelling(entries) -> Vector{Finding}
 
-File-level warnings for journals written in more than one way. Entries are grouped with
-union-find over [`same_journal`](@ref); every group with more than one distinct spelling
-gives one finding listing the spellings in order of first appearance, each with its
-keys, on the line of the first entry of the group.
+File-level warnings for journals written in more than one way. The distinct spellings,
+in order of first appearance, are grouped greedily: a spelling joins the first group all
+of whose members it matches under [`same_journal`](@ref), a relation that is not
+transitive, or else opens a new group. Every group of more than one spelling gives one
+finding listing its spellings, each with its keys, on the line of the first entry of the
+group.
 """
 function check_journal_spelling(entries::Vector{BibEntry})
-    members = Int[]
     names = String[]
     tokens = Vector{String}[]
+    holders = Vector{Int}[]
     for (i, entry) in enumerate(entries)
         value = field(entry, "journal")
         value === nothing && continue
         words = journal_tokens(value)
         isempty(words) && continue
-        push!(members, i)
-        push!(names, value)
-        push!(tokens, words)
+        k = findfirst(==(value), names)
+        if k === nothing
+            push!(names, value)
+            push!(tokens, words)
+            push!(holders, [i])
+        else
+            push!(holders[k], i)
+        end
     end
-    parent = collect(eachindex(members))
-    for b in eachindex(members), a in 1:(b - 1)
-        same_journal(tokens[a], tokens[b]) || continue
-        ra, rb = find_root!(parent, a), find_root!(parent, b)
-        ra == rb || (parent[max(ra, rb)] = min(ra, rb))
+    groups = Vector{Int}[]
+    for k in eachindex(names)
+        g = findfirst(group -> all(m -> same_journal(tokens[m], tokens[k]), group), groups)
+        g === nothing ? push!(groups, [k]) : push!(groups[g], k)
     end
     findings = Finding[]
-    for k in eachindex(members)
-        find_root!(parent, k) == k || continue
-        group = [m for m in eachindex(members) if find_root!(parent, m) == k]
-        spellings = unique(names[group])
-        length(spellings) > 1 || continue
+    for group in groups
+        length(group) > 1 || continue
         parts = String[]
-        for s in spellings
-            spelled = [entries[members[m]].key for m in group if names[m] == s]
-            push!(parts, "'$s' (" * join(spelled, ", ") * ")")
+        for k in group
+            spelled = [entries[i].key for i in holders[k]]
+            push!(parts, "'$(names[k])' (" * join(spelled, ", ") * ")")
         end
         push!(
             findings,
@@ -916,7 +959,7 @@ function check_journal_spelling(entries::Vector{BibEntry})
                 :journal_spelling,
                 :warning,
                 "journal written as " * join(parts, ", ", " and "),
-                entries[members[first(group)]].line,
+                entries[first(holders[first(group)])].line,
             ),
         )
     end
@@ -1012,33 +1055,43 @@ end
 """
     unprotected_capitals(value::AbstractString) -> Vector{String}
 
-The distinct words, the first word of `value` excepted, that hold an uppercase letter at
-brace depth 0, which a bibliography style may lowercase.
+The distinct words that hold an uppercase letter at brace depth 0 or inside a special
+character (a brace group at depth 0 opening with a backslash, such as `{\\"O}`), which a
+bibliography style may lowercase. The first word of `value` and a word following one
+that ends in `:` are excepted, as `change.case\$` keeps their first letter.
 """
 function unprotected_capitals(value::AbstractString)
+    text = value * " "
     found = String[]
     depth = 0
-    position = 0
+    special = false
     word = Char[]
     flagged = false
-    for c in value * " "
+    exempt = true
+    for i in eachindex(text)
+        c = text[i]
         if isspace(c)
             isempty(word) && continue
-            position += 1
-            if flagged && position > 1
+            if flagged && !exempt
                 w = String(strip(String(word), ['.', ',', ';', ':', '!', '?', '(', ')']))
                 w in found || push!(found, w)
             end
+            exempt = last(word) == ':'
             empty!(word)
             flagged = false
             continue
         end
         push!(word, c)
         if c == '{'
+            if depth == 0
+                j = nextind(text, i)
+                special = j <= ncodeunits(text) && text[j] == '\\'
+            end
             depth += 1
         elseif c == '}'
             depth = max(depth - 1, 0)
-        elseif depth == 0 && isuppercase(c)
+            depth == 0 && (special = false)
+        elseif (depth == 0 || special) && isuppercase(c)
             flagged = true
         end
     end
@@ -1049,8 +1102,8 @@ end
     check_title_case(entries) -> Vector{Finding}
 
 Warnings for capitals not protected by braces in `title` ([`unprotected_capitals`](@ref)),
-listing up to five words. The standard styles lower the case of the title only, so
-`booktitle` is left alone.
+listing up to five words. The standard styles lowercase only the title, so
+`booktitle` is not checked.
 """
 function check_title_case(entries::Vector{BibEntry})
     findings = Finding[]
@@ -1073,20 +1126,22 @@ function check_title_case(entries::Vector{BibEntry})
     return findings
 end
 
-# a hyphen, en dash or em dash between two digits; "--" never matches
-const PAGE_DASH = r"(\d)(?:-|\x{2013}|\x{2014})(?=\d)"
+# a hyphen, en dash or em dash between a digit and a page number with an optional
+# leading letter; "--" never matches
+const PAGE_DASH = r"(\d)(?:-|\x{2013}|\x{2014})(?=[A-Za-z]?\d)"
 
 """
     check_pages_dash(entries) -> Vector{Finding}
 
 Warnings for page ranges joined by a single hyphen, an en dash or an em dash instead of
-`--`.
+`--`. A value that already holds `--` is left alone: its single hyphens belong to
+section-page numbers such as `3-1--3-15`.
 """
 function check_pages_dash(entries::Vector{BibEntry})
     findings = Finding[]
     for entry in entries
         f = field_of(entry, "pages")
-        f === nothing && continue
+        (f === nothing || occursin("--", f.value)) && continue
         corrected = replace(f.value, PAGE_DASH => s"\1--")
         corrected == f.value && continue
         push!(
@@ -1162,21 +1217,51 @@ check_duplicate_field(duplicates::Vector{Tuple{String, String, Int}}) = [
     ) for (key, name, line) in duplicates
 ]
 
-const CITE_COMMAND = r"\\[A-Za-z]*cite[A-Za-z]*\*?(?:\[[^\]]*\]){0,2}\{([^}]*)\}"
+"""
+    check_undefined_string(undefined) -> Vector{Finding}
+
+Warnings for the string macros used without definition recorded by
+[`parse_bibtex`](@ref), one per use.
+"""
+check_undefined_string(undefined::Vector{Tuple{String, String, Int}}) = [
+    Finding(
+        key,
+        :undefined_string,
+        :warning,
+        "string macro $name is not defined in this file",
+        line,
+    ) for (key, name, line) in undefined
+]
+
+const CITE_COMMAND = r"\\([A-Za-z]*cite[A-Za-z]*)\*?(?:\[[^\]]*\]){0,2}\{([^}]*)\}"
+# a further key group of a multi-citation command such as \cites
+const CITE_GROUP = r"\G(?:\[[^\]]*\]){0,2}\{([^}]*)\}"
 
 """
     citation_keys(text::AbstractString) -> (keys::Set{String}, nocite_all::Bool)
 
 The keys cited in LaTeX source by any `\\...cite...` command (`\\cite`, `\\citep`,
 `\\parencite`, `\\textcite`, `\\autocite`, `\\nocite`, the starred forms and the like),
-after removing `%` comments; `nocite_all` is set by `\\nocite{*}`.
+after removing `%` comments; `nocite_all` is set by `\\nocite{*}`. A command whose name
+ends in `s` (`\\cites`, `\\parencites`, ...) contributes the keys of every consecutive
+`[...][...]{...}` group that follows it.
 """
 function citation_keys(text::AbstractString)
     source = replace(text, r"(?<!\\)%[^\n]*" => "")
     found = Set{String}()
     nocite_all = false
     for m in eachmatch(CITE_COMMAND, source)
-        for item in split(m.captures[1]::AbstractString, ',')
+        groups = [m.captures[2]::SubString{String}]
+        if endswith(m.captures[1]::SubString{String}, "s")
+            next = m.offset + ncodeunits(m.match)
+            while true
+                g = match(CITE_GROUP, source, next)
+                g === nothing && break
+                push!(groups, g.captures[1]::SubString{String})
+                next += ncodeunits(g.match)
+            end
+        end
+        for group in groups, item in split(group, ',')
             key = String(strip(item))
             isempty(key) && continue
             if key == "*"
@@ -1275,7 +1360,8 @@ end
 """
     load_cache(path::AbstractString) -> Dict{String, Any}
 
-The lookup cache stored at `path`, empty when the file is absent.
+The lookup cache stored at `path`, empty when the file is absent or, with a warning,
+not valid TOML.
 """
 function load_cache(path::AbstractString)
     isfile(path) || return Dict{String, Any}()
@@ -1283,21 +1369,26 @@ function load_cache(path::AbstractString)
         return TOML.parsefile(path)
     catch err
         err isa TOML.ParserError || rethrow()
-        throw(ArgumentError("$path: $(sprint(showerror, err))"))
+        @warn "lookup cache $path is not valid TOML; starting empty"
+        return Dict{String, Any}()
     end
 end
 
 """
     save_cache(path::AbstractString, cache::AbstractDict) -> path
 
-Write the lookup cache as TOML, creating the parent directory.
+Write the lookup cache as TOML, creating the parent directory. The cache is written to a
+temporary file beside `path` and moved over it, so an interrupted write leaves the
+previous cache intact.
 """
 function save_cache(path::AbstractString, cache::AbstractDict)
     directory = dirname(path)
     isempty(directory) || mkpath(directory)
-    open(path, "w") do io
+    tmp = tempname(isempty(directory) ? "." : directory)
+    open(tmp, "w") do io
         TOML.print(io, cache; sorted = true)
     end
+    mv(tmp, path; force = true)
     return path
 end
 
@@ -1330,12 +1421,12 @@ end
     check_doi_unresolved(entries, settings; fetch, pause, cache, refresh, now_time)
         -> Vector{Finding}
 
-Resolve every syntactically valid DOI with `HEAD https://doi.org/<doi>`, without
+Resolve every syntactically valid DOI with `HEAD` on its [`doi_url`](@ref), without
 following the redirect: a 3xx status resolves, 404 or 410 is an error, anything else a
-`doi_unchecked` warning that is not cached. Requests are separated by
-`pause(settings.doi_delay_s)`; outcomes are read from and written to `cache["doi"]`,
-keyed by the lowercase DOI, unless `refresh` is set or the record is older than
-`settings.cache_ttl_days`.
+`doi_unchecked` warning. Requests are separated by `pause(settings.doi_delay_s)`;
+resolved DOIs are read from and written to `cache["doi"]`, keyed by the lowercase DOI,
+unless `refresh` is set or the record is older than `settings.cache_ttl_days`. Other
+outcomes are not cached, since a DOI may be registered after it is issued.
 """
 function check_doi_unresolved(
     entries::Vector{BibEntry},
@@ -1366,10 +1457,10 @@ function check_doi_unresolved(
                 outcomes[id] = (Int(cached_status), "")
             else
                 requests > 0 && pause(settings.doi_delay_s)
-                status, body = fetch("HEAD", "https://doi.org/" * doi)
+                status, body = fetch("HEAD", doi_url(doi))
                 requests += 1
                 outcomes[id] = (Int(status), String(body))
-                if 300 <= status <= 399 || status in (404, 410)
+                if 300 <= status <= 399
                     table[id] =
                         Dict{String, Any}("status" => Int(status), "checked" => stamp)
                 end
@@ -1534,9 +1625,10 @@ end
 # --- driver -----------------------------------------------------------------------------
 
 """
-    run_checks(entries, strings, duplicates; tex_sources = Pair{String, String}[],
-               settings, online = false, fetch = default_fetch, pause = sleep,
-               cache = Dict{String, Any}(), refresh = false) -> Vector{Finding}
+    run_checks(entries, strings, duplicates, undefined = Tuple{String, String, Int}[];
+               tex_sources = Pair{String, String}[], settings, online = false,
+               fetch = default_fetch, pause = sleep, cache = Dict{String, Any}(),
+               refresh = false) -> Vector{Finding}
 
 Run every check of [`CHECKS`](@ref) not disabled in `settings` on the output of
 [`parse_bibtex`](@ref), in order. The citation checks need `tex_sources` (name => text)
@@ -1547,7 +1639,8 @@ Nothing is read from disk.
 function run_checks(
     entries::Vector{BibEntry},
     strings::Dict{String, String},
-    duplicates::Vector{Tuple{String, String, Int}};
+    duplicates::Vector{Tuple{String, String, Int}},
+    undefined::Vector{Tuple{String, String, Int}} = Tuple{String, String, Int}[];
     tex_sources::Vector{Pair{String, String}} = Pair{String, String}[],
     settings::HygieneSettings,
     online::Bool = false,
@@ -1571,6 +1664,7 @@ function run_checks(
     enabled(:pages_dash) && append!(findings, check_pages_dash(entries))
     enabled(:year) && append!(findings, check_year(entries))
     enabled(:duplicate_field) && append!(findings, check_duplicate_field(duplicates))
+    enabled(:undefined_string) && append!(findings, check_undefined_string(undefined))
     enabled(:uncited) && append!(findings, check_uncited(entries, tex_sources))
     enabled(:undefined_citation) &&
         append!(findings, check_undefined_citation(entries, tex_sources))
@@ -1703,15 +1797,18 @@ function single_group(raw::AbstractString)
     return false
 end
 
-# the corrected raw text of a field, or nothing when the field is not corrected
+# the corrected raw text of a doi or pages field, the raw text when it needs no
+# correction; nothing for other fields and for a doi that is not a single group
 function corrected_value(name::AbstractString, raw::AbstractString)
     if name == "doi"
         single_group(raw) || return nothing
         inner = raw[2:prevind(raw, lastindex(raw))]
         bare = bare_doi(inner)
-        bare == strip(inner) && return nothing
+        (bare == strip(inner) || !occursin(DOI_SYNTAX, bare)) && return String(raw)
         return raw[1:1] * bare * raw[end:end]
     elseif name == "pages"
+        # single hyphens beside "--" belong to section-page numbers such as 3-1--3-15
+        occursin("--", raw) && return String(raw)
         return replace(raw, PAGE_DASH => s"\1--")
     end
     return nothing
@@ -1720,10 +1817,10 @@ end
 """
     write_corrected(source, entries, path; input) -> Int
 
-Write to `path` a copy of `source` in which prefixed DOIs are reduced to the bare DOI,
-the delimiters kept, and page ranges joined by a hyphen, an en dash or an em dash are
+Write to `path` a copy of `source` in which prefixed DOIs are reduced to the bare DOI
+within their delimiters, and page ranges joined by a hyphen, an en dash or an em dash are
 joined by `--`. The edits go through the field spans, applied from the end of the text
-backwards; nothing else changes. Refuses with an `ArgumentError` when `path` is the
+backwards. Refuses with an `ArgumentError` when `path` is the
 `input` file. Returns the number of replacements.
 """
 function write_corrected(
@@ -1878,20 +1975,27 @@ function main(
         i += 1
     end
     bib === nothing && throw(ArgumentError("no BibTeX file given; see --help"))
+    (refresh && !online) &&
+        throw(ArgumentError("--refresh applies to the online checks; pass --online"))
     settings = load_settings(config_path)
     isfile(bib) || throw(ArgumentError("BibTeX file not found: $bib"))
     (fixed !== nothing && normpath(abspath(fixed)) == normpath(abspath(bib))) &&
         throw(ArgumentError("the corrected copy must not overwrite the input"))
     source = read(bib, String)
-    entries, strings, duplicates = try
+    entries, strings, duplicates, undefined = try
         parse_bibtex(source)
     catch err
         err isa BibParseError || rethrow()
         throw(ArgumentError("parse error in $bib, line $(err.line): $(err.message)"))
     end
+    isempty(entries) && throw(ArgumentError("$bib holds no BibTeX entry"))
     tex_sources = Pair{String, String}[]
-    for path in tex_paths, file in tex_files(path)
-        push!(tex_sources, file => read(file, String))
+    for path in tex_paths
+        files = tex_files(path)
+        isempty(files) && throw(ArgumentError("--tex $path: no .tex file found"))
+        for file in files
+            push!(tex_sources, file => read(file, String))
+        end
     end
     cache_path =
         isabspath(settings.cache_file) ? settings.cache_file :
@@ -1900,7 +2004,8 @@ function main(
     findings = run_checks(
         entries,
         strings,
-        duplicates;
+        duplicates,
+        undefined;
         tex_sources,
         settings,
         online,
@@ -1909,6 +2014,7 @@ function main(
         cache,
         refresh,
     )
+    online && save_cache(cache_path, cache)
     print_report(io, findings, entries; online)
     fixed_path = nothing
     if fixed !== nothing
@@ -1932,7 +2038,6 @@ function main(
         println(io)
         println(io, "CSV written to ", csv_path)
     end
-    online && save_cache(cache_path, cache)
     failed =
         any(f -> f.severity == :error, findings) ||
         (strict && any(f -> f.severity == :warning, findings))

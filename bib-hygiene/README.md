@@ -5,14 +5,15 @@ fields, DOI and arXiv identifiers, journal names written in several ways, encodi
 escaping, capitals that a style would lowercase, page ranges, years, and the citations of
 the manuscript against the entries. The tool works offline by default; the network is
 used only with `--online`, and then every lookup is rate-limited and cached on disk. The
-input file is never rewritten: the mechanical corrections go to a separate copy.
+input file is not modified; the mechanical corrections go to a separate copy.
 
 ```
 bib-hygiene/
 ├── activate.jl                  # environment activation
 ├── bib-hygiene.jl               # entry point, parser and checks
 ├── config.toml                  # disabled checks and network settings, validated on load
-├── Project.toml
+├── Manifest.toml
+├── Project.toml                 # HTTP; Test serves the suite only
 ├── README.md
 └── test/
     └── runtests.jl              # parser, settings, every check, stub fetcher, corrected copy, CLI
@@ -37,9 +38,9 @@ corrected copy; neither overwrites an existing file (`#1`, `#2`, ... suffixes), 
 `--fixed` refuses the input path itself.
 
 The exit status is 0 when the file passes, 1 when there is an error (or, with `--strict`,
-a warning), and 2 for invalid arguments, an invalid configuration or a file that does not
-parse. A manuscript build can therefore run `bib-hygiene --tex . --strict` as a gate and
-stop on a non-zero status.
+a warning), and 2 for invalid arguments, an invalid configuration, a file that does not
+parse or holds no entry, and a `--tex` path without a `.tex` file. A manuscript build can
+run `bib-hygiene --tex . --strict` as a gate and stop on a non-zero status.
 
 ## Checks
 
@@ -47,17 +48,18 @@ stop on a non-zero status.
 | :--- | :--- | :--- |
 | `duplicate_key` | error | a key already used by an earlier entry, compared case-insensitively |
 | `duplicate_entry` | warning | two entries with the same DOI or the same normalized title (letters and digits, at least 20 characters) |
-| `missing_field` | error | a field required by the standard BibTeX entry type (`author or editor` where either suffices) |
-| `doi_prefix` | warning | a DOI written as a URL or with `doi:` |
+| `missing_field` | error | a field required by the standard BibTeX entry type (`author or editor` where either suffices; the biblatex names `journaltitle`, `date` and `institution` stand for `journal`, `year` and `school`) |
+| `doi_prefix` | warning | a DOI written as a doi.org URL or with `doi:` |
 | `doi_syntax` | error | a DOI that does not have the form `10.NNNN/suffix` |
 | `doi_missing` | warning | an article, inproceedings or incollection with neither a DOI nor an arXiv identifier |
 | `journal_spelling` | warning | one journal written in several ways, such as `Phys. Rev. D` and `Physical Review D` |
 | `non_ascii` | warning | characters above U+007F outside `url`, `doi`, `file` and `eprint` |
-| `unescaped` | warning | `&`, `%`, `#` or `_` without a backslash, outside `\url{}`, math and the identifier fields |
-| `title_case` | warning | capitals in `title`, after the first word, not protected by braces (styles lower the case of the title, not of the booktitle) |
-| `pages_dash` | warning | a page range joined by `-`, an en dash or an em dash instead of `--` |
+| `unescaped` | warning | `&`, `%`, `#` or `_` without a backslash, outside `\url{}`, math, the identifier fields and `howpublished` |
+| `title_case` | warning | capitals in `title` not protected by braces, except in the first word and in the word after a colon (styles lower the case of the title, not of the booktitle) |
+| `pages_dash` | warning | a page range joined by `-`, an en dash or an em dash instead of `--`; a value that already holds `--` is left alone |
 | `year` | error, warning | a year that is neither an integer nor `in press`, `forthcoming` or `submitted` (error); an integer outside [1500, next year] (warning) |
 | `duplicate_field` | warning | a field repeated within an entry; the first value is the one kept |
+| `undefined_string` | warning | a string macro used without an `@string` definition before it in the file; its name stands for the value |
 | `uncited` | warning | an entry that no LaTeX source cites (none when a source has `\nocite{*}`) |
 | `undefined_citation` | error | a cited key that matches no entry |
 | `doi_unresolved` | error | with `--online`: a DOI for which doi.org answers 404 or 410 |
@@ -65,12 +67,15 @@ stop on a non-zero status.
 
 Two journal names are taken as the same journal when, after removing braces and
 punctuation and dropping short function words, they have the same number of words and
-each word is a prefix of the other at its position. The citation scan recognises every
-`\...cite...` command with optional arguments and starred forms (`\cite`, `\citep`,
-`\textcite`, `\autocite*`, `\nocite`, ...) and ignores commented lines.
+each word is a prefix of the other at its position. Spellings are grouped only when each
+matches every other of its group, so an abbreviation shared by two journals does not
+merge them. The citation scan recognises every `\...cite...` command with optional
+arguments and starred forms (`\cite`, `\citep`, `\textcite`, `\autocite*`, `\nocite`,
+...), takes every key group of the multi-citation commands (`\cites`, `\parencites`,
+...) and ignores commented lines.
 
-The arXiv identifier of an entry comes from `eprint` (with `archiveprefix` or
-`eprinttype` set to `arXiv`, or in identifier form), from a DOI `10.48550/arXiv.<id>`, or
+The arXiv identifier of an entry comes from an `eprint` in identifier form, from a DOI
+`10.48550/arXiv.<id>`, or
 from an `arxiv.org/abs/<id>` or `arXiv:<id>` in `journal`, `note`, `url` or
 `howpublished`. An entry with an arXiv identifier and no other DOI counts as a preprint.
 
@@ -85,10 +90,10 @@ the answer indicate a published version. A failed request or an identifier missi
 the answer gives an `arxiv_unchecked` warning.
 
 Requests are spaced by `doi_delay_s` (doi.org) and `arxiv_delay_s` (arXiv, whose API
-terms ask for three seconds). Settled outcomes are kept in the TOML file `cache_file`
-and reused for `cache_ttl_days` days; failures are not cached, and `--refresh` ignores
-the cache. When `contact_email` is set, it travels in the User-Agent header as
-`mailto:`, the polite form that Crossref asks of automated clients.
+terms ask for three seconds, the lower bound of the setting). Resolved DOIs and arXiv
+answers are kept in the TOML file `cache_file` and reused for `cache_ttl_days` days;
+unresolved DOIs and failed requests are not cached, and `--refresh` ignores the cache.
+When `contact_email` is set, it is sent in the User-Agent header as `mailto:`.
 
 ## Corrected copy
 
