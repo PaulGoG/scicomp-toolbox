@@ -23,6 +23,8 @@ updates:
       # one pull request for the compatible updates of the week instead of one per package
       julia-minor-and-patch:
         patterns: ["*"]
+        # a formatter update can change the formatting and gets a pull request of its own
+        exclude-patterns: ["JuliaFormatter"]
         update-types: ["minor", "patch"]
     ignore:
       # KernelAbstractions 0.10 moves the CPU backend to PoCL and needs a migration; the
