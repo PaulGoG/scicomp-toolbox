@@ -484,3 +484,69 @@ end
     @test code == 1
     @test occursin("Outside the repository", out)
 end
+
+# Cases of the review of the fix round (2026-11-25); the expected kinds follow from
+# resolving each path with normpath from the file and from the repository root.
+@testset "workspace-audit: climbs with inner steps and tracked targets" begin
+    # inner `.` and `..` steps are resolved over the whole path
+    repo = make_repository(mktempdir())
+    write_fixture(
+        repo,
+        "configs/run.toml",
+        [
+            "a = \"" * up(1) * "./..\"",
+            "b = \"" * up(1) * "./notes/x.md\"",
+            "c = \"" * up(1) * "configs/" * up(2) * "notes/x.md\"",
+        ],
+    )
+    commit_fixtures(repo)
+    @test hits(scan_self_containment(repo; home = "/home/nobody")) == [
+        ("configs/run.toml", 1, :outside),
+        ("configs/run.toml", 2, :outside),
+        ("configs/run.toml", 3, :outside),
+    ]
+
+    # a byte that is not UTF-8 on one line hides no joinpath climb on another
+    repo = make_repository(mktempdir())
+    mkpath(joinpath(repo, "src"))
+    write(
+        joinpath(repo, "src", "a.jl"),
+        "x = joinpath(@__DIR__" * ", \"..\", \"..\")\n# " * String([0xff]) * "\n",
+    )
+    commit_fixtures(repo)
+    @test hits(scan_self_containment(repo; home = "/home/nobody")) ==
+          [("src/a.jl", 1, :outside)]
+
+    # a file to be written into a tracked directory is no finding; into an untracked
+    # directory named like the workspace layout it is
+    repo = make_repository(mktempdir())
+    write_fixture(repo, "paper/.gitkeep", String[])
+    write_fixture(repo, "scripts/plot.jl", ["save(\"" * up(1) * "paper/fig.pdf\", f)"])
+    commit_fixtures(repo)
+    @test isempty(scan_self_containment(repo; home = "/home/nobody"))
+    repo = make_repository(mktempdir())
+    write_fixture(repo, "scripts/plot.jl", ["save(\"" * up(1) * "paper/fig.pdf\", f)"])
+    commit_fixtures(repo)
+    @test hits(scan_self_containment(repo; home = "/home/nobody")) ==
+          [("scripts/plot.jl", 1, :outside)]
+
+    # existence is judged on tracked paths: an untracked directory does not hide a climb
+    repo = make_repository(mktempdir())
+    write_fixture(repo, "configs/run.toml", ["out = \"" * up(1) * "artefacts/runs\""])
+    commit_fixtures(repo)
+    mkpath(joinpath(repo, "artefacts", "runs"))
+    @test hits(scan_self_containment(repo; home = "/home/nobody")) ==
+          [("configs/run.toml", 1, :outside)]
+
+    # one climb, one finding: the quoted argument of a joinpath is not read twice
+    repo = make_repository(mktempdir())
+    write_fixture(
+        repo,
+        "scripts/run.jl",
+        ["p = joinpath(@__DIR__" * ", \"" * up(1) * "..\", \"x\")"],
+    )
+    commit_fixtures(repo)
+    result = scan_self_containment(repo; home = "/home/nobody")
+    @test hits(result) == [("scripts/run.jl", 1, :outside)]
+    @test startswith(only(result).match, "@__DIR__")
+end

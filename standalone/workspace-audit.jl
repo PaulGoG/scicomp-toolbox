@@ -726,25 +726,56 @@ function link_leaves_repository(rel::AbstractString, target::AbstractString)
 end
 
 """
-    climb_target_kind(repo, rel, climbs, tail, reserved) -> Union{Symbol, Nothing}
+    tracked_paths(files) -> Set{String}
 
-Judge a relative path in the file `rel` that climbs `climbs` levels, at most the depth of
-`rel`, then names `tail`; trailing `.` of `tail`, such as a full stop, are dropped.
-Returns `nothing` when the target exists in `repo`; `:outside` when the first component
-of `tail` is a top-level workspace name in `reserved`, since read from the repository root
-the path leads into the workspace around it; `:unresolved` otherwise.
+Paths of the tracked `files` (relative to the repository root, `/` separators) and of
+every directory that holds one, with `"."` for the root.
+"""
+function tracked_paths(files::Vector{String})
+    paths = Set{String}(["."])
+    for file in files
+        push!(paths, file)
+        parts = split(file, '/')
+        for k in 1:(length(parts) - 1)
+            push!(paths, join(parts[1:k], '/'))
+        end
+    end
+    return paths
+end
+
+"""
+    climb_target_kind(rel, path, tracked, reserved) -> Union{Symbol, Nothing}
+
+Judge the relative `path`, which begins with `../`, found in the file `rel`. Trailing `.`
+of its last component, such as a full stop, are dropped. Resolved from the directory of
+`rel` it is `:outside` when it leads above the repository root. Inside the repository it
+is no finding when it names a tracked path or a path in a tracked directory, the case of a
+file that a script writes beside tracked ones. Otherwise it is read from the repository
+root, as a run configuration or a working directory reads it: `:outside` when its first
+component below the climbs is a top-level workspace name in `reserved`, `:unresolved`
+when not. Existence is judged against `tracked`, never the checkout, so the result does
+not depend on untracked or ignored files.
 """
 function climb_target_kind(
-    repo::AbstractString,
     rel::AbstractString,
-    climbs::Integer,
-    tail::AbstractString,
+    path::AbstractString,
+    tracked::Set{String},
     reserved::Set{String},
 )
-    rest = rstrip(tail, '.')
-    target = normpath(dirname(rel) * "/" * repeat("../", climbs) * rest)
-    ispath(joinpath(repo, target)) && return nothing
-    return first(split(rest, '/')) in reserved ? :outside : :unresolved
+    parts = split(rstrip(path, '/'), '/')
+    last(parts) in (".", "..") || (parts[end] = rstrip(parts[end], '.'))
+    clean = join(filter(!isempty, parts), '/')
+    directory = dirname(rel)
+    from_file = normpath(isempty(directory) ? clean : directory * "/" * clean)
+    from_file = rstrip(from_file, '/')
+    isempty(from_file) && (from_file = ".")
+    (from_file == ".." || startswith(from_file, "../")) && return :outside
+    from_file in tracked && return nothing
+    parent = dirname(from_file)
+    !isempty(parent) && parent in tracked && return nothing
+    below = filter(part -> part != "..", split(normpath(clean), '/'))
+    isempty(below) && return :unresolved
+    return first(below) in reserved ? :outside : :unresolved
 end
 
 """
@@ -757,18 +788,22 @@ function within_any(ranges::Vector{UnitRange{Int}}, first_unit::Integer, last_un
 end
 
 """
-    dir_climb_hits(rel, text, depth) -> Vector{Tuple{Int, Int, Int, ContainmentFinding}}
+    dir_climb_hits(rel, text, depth) -> (hits, ranges)
 
 Climbs `joinpath(@__DIR__, "..", ...)` with more `..` than `depth` in the whole `text` of
-the file `rel`, so that a call wrapped over several lines is seen. Each hit is
-`(line, position, rank, finding)`, line and position being those of `@__DIR__`; the
-`match` of the finding has every run of whitespace collapsed to one space.
+the file `rel`, so that a call wrapped over several lines is seen; text that is not valid
+UTF-8 elsewhere in the file does not hide them. Each hit is `(line, position, rank,
+finding)`, line and position being those of `@__DIR__`; the `match` of the finding has
+every run of whitespace collapsed to one space. `ranges` are the code units of every
+match, hit or not, in which the per-line forms are not reported again.
 """
 function dir_climb_hits(rel::AbstractString, text::String, depth::Integer)
     hits = Tuple{Int, Int, Int, ContainmentFinding}[]
+    ranges = UnitRange{Int}[]
     units = codeunits(text)
     newline = UInt8('\n')
     for m in eachmatch(DIR_CLIMB_PATTERN, text)
+        push!(ranges, m.offset:(m.offset + ncodeunits(m.match) - 1))
         count("..", m.captures[1]) > depth || continue
         lineno = 1 + count(==(newline), @view units[1:(m.offset - 1)])
         line_start = something(findprev(==(newline), units, m.offset - 1), 0)
@@ -776,7 +811,7 @@ function dir_climb_hits(rel::AbstractString, text::String, depth::Integer)
         finding = ContainmentFinding(rel, lineno, :outside, matched)
         push!(hits, (lineno, m.offset - line_start, KIND_ORDER.outside, finding))
     end
-    return hits
+    return hits, ranges
 end
 
 """
@@ -787,9 +822,8 @@ and the rank of `KIND_ORDER`. A text file (a plain file up to `MAX_SCANNED_BYTES
 NUL in the first 8000 bytes) is searched line by line, lines that are not valid UTF-8
 skipped, for
 
-  - a relative path climbing with `../`: `:outside` when it climbs more levels than the
-    file has directory components; otherwise, when a path follows, nothing if that path
-    exists, `:outside` if it starts with a top-level workspace name, else `:unresolved`;
+  - a relative path climbing with `../`, judged by `climb_target_kind` on the whole
+    path, inner `..` and `.` steps included;
   - a quoted lone `..` in a `.toml` file at the repository root: `:outside`;
   - `joinpath(@__DIR__, "..", ...)`, matched on the whole text, and `@__DIR__` joined as
     a string with `/..`: `:outside` when they climb above the root;
@@ -814,6 +848,7 @@ function scan_self_containment(repo::AbstractString; home::AbstractString = home
 
     findings = ContainmentFinding[]
     files = sort!(String.(split(payload, '\0'; keepempty = false)))
+    tracked = tracked_paths(files)
     for rel in files
         full = layout_path(repo, rel)
         if islink(full)
@@ -834,8 +869,9 @@ function scan_self_containment(repo::AbstractString; home::AbstractString = home
         depth = count(==('/'), rel)
         # a quoted lone ".." climbs one level, so only out of a file at the root
         toml_climb = endswith(rel, ".toml") && depth < 1
-        hits = Tuple{Int, Int, Int, ContainmentFinding}[]
-        isvalid(text) && append!(hits, dir_climb_hits(rel, text, depth))
+        hits, dir_ranges = dir_climb_hits(rel, text, depth)
+        # code unit at which each line starts, to place per-line matches in `dir_ranges`
+        line_starts = [1; findall(==(UInt8('\n')), codeunits(text)) .+ 1]
         for (lineno, line) in enumerate(eachline(IOBuffer(text)))
             isvalid(line) || continue
             machine_ranges = UnitRange{Int}[]
@@ -875,17 +911,12 @@ function scan_self_containment(repo::AbstractString; home::AbstractString = home
             end
 
             for m in eachmatch(RELATIVE_CLIMB_PATTERN, line)
-                tail = m.captures[2]
-                climbs = div(ncodeunits(m.captures[1]), 3) + (tail == ".." ? 1 : 0)
-                kind = if climbs > depth
-                    :outside
-                elseif tail === nothing || isempty(tail) || tail == ".."
-                    nothing
-                else
-                    climb_target_kind(repo, rel, climbs, tail, reserved)
-                end
-                kind === nothing && continue
                 last_unit = m.offset + ncodeunits(m.match) - 1
+                # inside a joinpath from @__DIR__, which that form has judged
+                start = line_starts[lineno] - 1
+                within_any(dir_ranges, start + m.offset, start + last_unit) && continue
+                kind = climb_target_kind(rel, m.match, tracked, reserved)
+                kind === nothing && continue
                 kind === :unresolved &&
                     within_any(machine_ranges, m.offset, last_unit) &&
                     continue
