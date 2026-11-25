@@ -526,3 +526,43 @@ end
         end
     end
 end
+
+# Cases of the review of the second round (2026-11-25).
+@testset "commit-guard: review of the second round" begin
+    # a repository reached through a symbolic link gets the hook, its parent does not
+    mktempdir() do dir
+        outer = make_repository(joinpath(dir, "outer"))
+        inner = make_repository(joinpath(outer, "real"))
+        mkpath(joinpath(inner, "sub"))
+        symlink(joinpath("real", "sub"), joinpath(outer, "link_sub"))
+        @test CommitGuard.install_hook(joinpath(outer, "link_sub")) == :installed
+        @test isfile(joinpath(inner, ".git", "hooks", "commit-msg"))
+        @test !isfile(joinpath(outer, ".git", "hooks", "commit-msg"))
+    end
+
+    # git's cut followed by a submodule log rather than a diff
+    cut = "# ------------------------ >8 ------------------------\n"
+    @test found(
+        "feat: a\n" *
+        cut *
+        "# Do not modify or remove the line above.\n" *
+        "Submodule lib 0123abc..4567def:\n  > Generated with Claude\n";
+        comments = true,
+    ) == []
+
+    # the attribution names the tool in the same clause, after an optional subject
+    @test found("feat: a\n\nWritten with Julia; replaces Copilot.\n") == []
+    @test found("feat: a\n\nPatch generated with Claude\n") == [(:attribution, 3)]
+    @test found("feat: a\n\nGenerated with Jules\n") == [(:attribution, 3)]
+    @test found("feat: a\n\nhttps://app.claude.ai/code/1\n") == [(:session_url, 3)]
+    @test found("docs: mention https://myclaude.ai/x\n") == []
+
+    # strip: a sign-off stays whatever it names; a co-author line with a session link or
+    # the robot face goes
+    signed = "feat: a\n\nSigned-off-by: Claude <noreply@anthropic.com>\n"
+    @test stripped(signed) == (signed, [])
+    @test stripped("feat: a\n\nCo-authored-by: x (https://jules.google.com/task/1)\n") ==
+          ("feat: a\n\n", [(:trailer, 3)])
+    @test stripped("feat: a\n\nCo-authored-by: \U1F916\n") ==
+          ("feat: a\n\n", [(:trailer, 3)])
+end

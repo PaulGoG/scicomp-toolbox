@@ -103,6 +103,8 @@ const AI_NAMES = (
     "grok",
     "deepseek",
     "devin",
+    "jules",
+    "ampcode",
     "llm",
 )
 # Regex text naming an AI tool: AI_NAMES or a GPT model in any case, AI in capitals only,
@@ -111,11 +113,13 @@ const NAMES = raw"(?i:\b(?:" * join(AI_NAMES, "|") * raw")\b|\bgpt-?[0-9])|\bAI\
 
 # Co-author, co-developer and sign-off trailers.
 const TRAILER_PATTERN = r"^\s*(co-authored-by|co-developed-by|signed-off-by)\s*:"i
-# Line that begins with a phrase crediting an AI tool or model with the change.
+# Line that begins with a phrase crediting an AI tool or model with the change, the name
+# within the same clause; an optional subject such as "This commit was" or "Patch" leads.
 const ATTRIBUTION_PATTERN = Regex(
-    raw"^\W*(?i:(?:this (?:commit|change|patch|code|message) (?:was|is) )?" *
+    raw"^\W*(?i:(?:(?:this|the)\s+)?" *
+    raw"(?:(?:commit|change|patch|code|message|diff)\s+(?:(?:was|is|has\s+been)\s+)?)?" *
     raw"(?:generated|written|created|authored|produced|assisted|co-?authored|made)" *
-    raw"\s+(?:with|by|using|via)\b).*?(?:" *
+    raw"\s+(?:with|by|using|via)\b)[^.;:!?]*?(?:" *
     NAMES *
     ")",
 )
@@ -132,9 +136,10 @@ const AI_COAUTHOR_PATTERN = Regex(
 )
 # Address that Anthropic tools put in co-author trailers.
 const ANTHROPIC_ADDRESS_PATTERN = r"noreply@anthropic\.com"i
-# Link to a session of a hosted AI assistant: a host with a path, scheme optional.
+# Link to a session of a hosted AI assistant: a host or one of its subdomains with a path,
+# scheme optional.
 const SESSION_URL_PATTERN = Regex(
-    raw"(?<![\w.@-])(?:https?://)?(?:www\.)?(?:claude\.ai|claude\.com|chatgpt\.com|" *
+    raw"(?<![\w.@-])(?:https?://)?(?:[\w-]+\.)*(?:claude\.ai|claude\.com|chatgpt\.com|" *
     raw"chat\.openai\.com|gemini\.google\.com|g\.co/gemini|aistudio\.google\.com|" *
     raw"copilot\.microsoft\.com|cursor\.com|jules\.google\.com|antigravity\.google|" *
     raw"ampcode\.com)/\S",
@@ -293,8 +298,12 @@ Every line of `message`, split at `\\n`: its 1-based number, its text without a 
 `\\r`, and its kind, `:message`, `:comment` for a line starting with `#` above the cut, or
 `:discarded` for a line from the cut on. Without `comments` every line is a message line.
 With `comments`, a line matching `SCISSORS_PATTERN` is git's cut only when the first line
-after it that does not start with `#` begins with `diff --git `, or when there is none;
-an author may type such a line in the message, and git cuts at its own line only.
+after it that does not start with `#` begins with `diff --git ` or, under
+`diff.submodule=log`, with `Submodule `, or when there is none; an author may type such a
+line in the message, and git cuts at its own line only. The hook cannot see whether git
+will clean the message up (an editor session) or keep it as written (`-m`, `-F`): a
+scissors line and a diff typed into `-m` hide what follows from the hook, and a `#` line
+typed there is recorded as text. `check_history` judges the recorded message.
 """
 function message_lines(message::AbstractString; comments::Bool = false)
     lines = [String(chopsuffix(line, "\r")) for line in split(message, '\n')]
@@ -303,7 +312,9 @@ function message_lines(message::AbstractString; comments::Bool = false)
     for (index, line) in enumerate(lines)
         occursin(SCISSORS_PATTERN, line) || continue
         following = findnext(other -> !startswith(other, '#'), lines, index + 1)
-        if following === nothing || startswith(lines[following], "diff --git ")
+        if following === nothing ||
+           startswith(lines[following], "diff --git ") ||
+           startswith(lines[following], "Submodule ")
             cut = index
             break
         end
@@ -384,12 +395,14 @@ end
     is_removable(line) -> Bool
 
 Whether strip removes `line`: a co-author trailer that names an AI tool
-(`AI_COAUTHOR_PATTERN`), or a line whose `line_rule` is `:attribution` or `:session_url`.
-A co-author that names no AI tool and every `Signed-off-by` line stay.
+(`AI_COAUTHOR_PATTERN`), or a line that is an attribution or holds a session link, a
+co-author trailer included (`Co-authored-by: x (https://jules.google.com/task/1)`). A
+co-author that names no AI tool and every `Signed-off-by` line stay.
 """
 function is_removable(line::AbstractString)
+    occursin(r"^\s*signed-off-by\s*:"i, line) && return false
     occursin(AI_COAUTHOR_PATTERN, line) && return true
-    return line_rule(line) in (:attribution, :session_url)
+    return is_attribution(line) || occursin(SESSION_URL_PATTERN, line)
 end
 
 """
@@ -487,9 +500,13 @@ function hooks_directory(repo::AbstractString)
                 "directory of a repository only",
             ),
         )
-    ok, common = git(repo, "rev-parse", "--git-common-dir")
+    # absolute: a relative answer is relative to the physical working directory of git,
+    # which differs from `repo` when `repo` is reached through a symbolic link
+    ok, common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
     ok || throw(ArgumentError("not inside a git work tree: $repo ($common)"))
-    common = realpath(isabspath(common) ? common : abspath(joinpath(repo, common)))
+    isabspath(common) ||
+        throw(ArgumentError("git gave no absolute git directory for $repo: $common"))
+    common = realpath(common)
     hooks = joinpath(common, "hooks")
     if islink(hooks) || (ispath(hooks) && realpath(hooks) != hooks)
         throw(ArgumentError("$hooks leads outside the git directory of the repository"))

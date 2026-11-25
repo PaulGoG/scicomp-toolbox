@@ -167,15 +167,16 @@ which set the exit status:
 - a relative path with more parent-directory steps than the file lies deep, also when
   written with `@__DIR__` and `".."` components in Julia source, as a string appended to
   `@__DIR__`, or as a lone `".."` in a TOML file at the root;
-- a relative path that stays inside the repository when read from its file, names nothing
-  that exists there, and leads to one of the directories of the tree above: read from the
-  repository root, it points into the workspace;
+- a relative path that stays inside the repository when read from its file, names no
+  tracked path and no file in a tracked directory, and leads to one of the directories of
+  the tree above: read from the repository root, it points into the workspace;
 - a tracked symbolic link whose target lies outside;
 - a path under the home directory of the user.
 
 Listed for review without changing the exit status, since an example path in
 documentation is one: other absolute paths outside the system directories, paths written
-with `~` or `$HOME`, and relative paths that name nothing in the repository.
+with `~` or `$HOME`, and relative paths that name nothing in the repository. Existence is
+judged on the tracked files, so an untracked or ignored directory hides nothing.
 
 The scan is lexical and reads the working tree. It does not see a path assembled at run
 time, a chain of `dirname` calls, a line that is not valid UTF-8 or a file larger than
@@ -217,7 +218,9 @@ did not install unless `--force`, which keeps the old one as `commit-msg.backup`
 `core.hooksPath`, git ignores the hooks of the repository, and the script can be copied
 into the shared directory as `commit-msg` by hand. The hook starts Julia through `env -S`
 (GNU coreutils 8.30 or later, or a BSD `env`) with `--compile=min` and takes about 0.3 s
-per commit. It assumes the default comment character `#` in message files.
+per commit. It assumes the default comment character `#` in message files, and it cannot
+see whether git will clean the message up: a `#` line or a scissors line typed into
+`git commit -m` is judged as git's own, while git records it as written.
 `git commit --no-verify` bypasses it, and git does not run it for cherry-picks and
 rebases, where `commit-guard log` is the check.
 
