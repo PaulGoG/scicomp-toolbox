@@ -10,7 +10,6 @@ index itself is written as a CSV file.
 run-index/
 ├── activate.jl                  # environment activation
 ├── config.toml                  # discovery rules and provenance keys, validated on load
-├── Manifest.toml                # pinned dependencies (PrettyTables)
 ├── Project.toml
 ├── README.md
 ├── run-index.jl                 # entry point and indexing functions

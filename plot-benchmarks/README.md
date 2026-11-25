@@ -9,7 +9,6 @@ accelerators and the host processors of all of them, side by side.
 plot-benchmarks/
 ├── activate.jl              # environment activation
 ├── config.toml              # input location and figure settings, validated on load
-├── Manifest.toml            # pinned dependencies (CairoMakie, CSV, DataFrames, MathTeXEngine)
 ├── plot-benchmarks.jl       # entry point and plotting functions
 ├── Project.toml
 ├── README.md

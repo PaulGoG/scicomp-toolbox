@@ -12,6 +12,9 @@ a change belongs to it.
   pipeline script activates its own environment; a script whose text names no activation
   is reported with a note. A project that relied on the flag exports `JULIA_PROJECT` in
   the `setup` lines of its cluster table.
+- No `Manifest.toml` is tracked. Every environment bounds its dependencies in `[compat]`
+  and is resolved by the Julia release that runs it; the formatter is pinned by
+  `JuliaFormatter = "=2.14.12"` in `formatter/Project.toml`.
 
 ## 2026-11-23
 

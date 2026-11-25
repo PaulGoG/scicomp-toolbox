@@ -12,7 +12,6 @@ bib-hygiene/
 ├── activate.jl                  # environment activation
 ├── bib-hygiene.jl               # entry point, parser and checks
 ├── config.toml                  # disabled checks and network settings, validated on load
-├── Manifest.toml
 ├── Project.toml                 # HTTP; Test serves the suite only
 ├── README.md
 └── test/

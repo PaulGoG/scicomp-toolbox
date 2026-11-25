@@ -59,9 +59,9 @@ julia run.jl plot-benchmarks --compare                       # both figures abov
 
 ## Two tiers
 
-A **tier 1 tool** is a directory with its own `Project.toml` and committed `Manifest.toml`,
-an `activate.jl`, a validated `config.toml`, the entry point `<name>/<name>.jl`, a test
-suite under `test/` and a README. A tool that outgrows a script becomes a package inside
+A **tier 1 tool** is a directory with its own `Project.toml`, an `activate.jl`, a
+validated `config.toml`, the entry point `<name>/<name>.jl`, a test suite under `test/`
+and a README. A tool that outgrows a script becomes a package inside
 that directory (`name` and `uuid` in `Project.toml`, `src/<Name>.jl`); the dispatcher and
 the test runner handle both forms. Tools never share an environment, so their
 dependencies cannot conflict. A new tool starts as a pruned copy of `plot-benchmarks/`.
@@ -74,9 +74,9 @@ never needs it, and the dispatcher does not list `standalone/` as a tool.
 ## Requirements
 
 Julia 1.12 or later through [juliaup](https://github.com/JuliaLang/juliaup). Every
-environment declares `julia = "1.12"`, and the committed manifests are resolved with the
-current stable release (1.13); that of `figure-audit` is resolved with 1.12, for the
-reason its README gives. Linux is the primary platform and the one CI covers;
+environment declares `julia = "1.12"` and bounds each dependency in `[compat]`. Manifests
+are not tracked: an environment is resolved on its first run by the Julia release that
+runs it. Linux is the primary platform and the one CI covers;
 `hardware-diagnostics` has also run on macOS/arm64 with the Metal backend. GPU packages
 (`CUDA`, `AMDGPU`, `Metal`, `oneAPI`) are not dependencies of any tool: install the one
 matching the hardware into the default environment and the tool resolves it through the
@@ -157,11 +157,10 @@ loaded.
 
 Run outputs go to `<tool>/data/` and figures to `<tool>/plots/`; both are ignored by git,
 as are logs, CSV and binary data files. The datasets under `reference-runs/` are committed
-because the README figures and the backend validation rest on them. The manifests of the
-tools, the formatter and `standalone/` are committed; those of `test/` subdirectories are
-not. Commits follow Conventional Commits and `CHANGELOG.md` records notable changes.
-Formatting is enforced with the JuliaFormatter version pinned in
-`formatter/Manifest.toml`.
+because the README figures and the backend validation rest on them. No `Manifest.toml`
+is committed. Commits follow Conventional Commits and `CHANGELOG.md` records notable
+changes. Formatting is enforced with the JuliaFormatter version that
+`formatter/Project.toml` pins exactly.
 
 ## Full tree
 
@@ -185,12 +184,11 @@ scicomp-toolbox/
 │   └── README.md                  # hardware, configuration and outcome of each run
 ├── run.jl                         # dispatcher: list and run tools
 ├── test.jl                        # global test runner
-├── formatter/                     # pinned JuliaFormatter environment (Project + Manifest)
+├── formatter/                     # pinned JuliaFormatter environment
 │   ├── activate.jl
 │   └── format.jl                  # formats a tree; used by check.jl and format.yml
 ├── standalone/                    # tier 2: single-file scripts on the standard library
 │   ├── Project.toml               # test environment only; the scripts run without it
-│   ├── Manifest.toml
 │   ├── sysinfo.jl                 # host and runtime introspection
 │   ├── workspace-audit.jl         # git and artifact state of a workspace
 │   └── test/
@@ -198,7 +196,6 @@ scicomp-toolbox/
 │   ├── activate.jl
 │   ├── config.toml
 │   ├── hardware-diagnostics.jl    # entry point
-│   ├── Manifest.toml
 │   ├── Project.toml
 │   ├── README.md
 │   ├── ext/                       # HardwareDiagnostics{CUDA,AMDGPU,Metal,oneAPI}Ext
@@ -208,7 +205,6 @@ scicomp-toolbox/
 │   ├── activate.jl
 │   ├── config.toml
 │   ├── plot-benchmarks.jl         # entry point
-│   ├── Manifest.toml
 │   ├── Project.toml
 │   ├── README.md
 │   └── test/
@@ -216,7 +212,6 @@ scicomp-toolbox/
 │   ├── activate.jl
 │   ├── config.toml
 │   ├── run-index.jl               # entry point
-│   ├── Manifest.toml
 │   ├── Project.toml
 │   ├── README.md
 │   └── test/                      # synthetic DrWatson workspace built at test time
@@ -224,7 +219,6 @@ scicomp-toolbox/
 │   ├── activate.jl
 │   ├── config.toml                # ships no cluster table
 │   ├── slurm-launch.jl            # entry point
-│   ├── Manifest.toml
 │   ├── Project.toml
 │   ├── README.md
 │   └── test/                      # golden job scripts, stub scheduler, local jobs
@@ -232,7 +226,6 @@ scicomp-toolbox/
 │   ├── activate.jl
 │   ├── config.toml
 │   ├── convergence.jl             # entry point
-│   ├── Manifest.toml
 │   ├── Project.toml
 │   ├── README.md
 │   ├── src/
@@ -241,7 +234,6 @@ scicomp-toolbox/
 │   ├── activate.jl
 │   ├── config.toml
 │   ├── figure-audit.jl            # entry point
-│   ├── Manifest.toml
 │   ├── Project.toml
 │   ├── README.md
 │   └── test/                      # fixtures drawn with Cairo at test time
@@ -249,7 +241,6 @@ scicomp-toolbox/
     ├── activate.jl
     ├── bib-hygiene.jl             # entry point
     ├── config.toml
-    ├── Manifest.toml
     ├── Project.toml
     ├── README.md
     └── test/                      # fixture bib and tex, stub fetcher

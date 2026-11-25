@@ -9,7 +9,6 @@ login node, beside the deployed project.
 slurm-launch/
 ├── activate.jl                  # environment activation
 ├── config.toml                  # defaults, derivation keys, clusters; validated on load
-├── Manifest.toml                # standard library only
 ├── Project.toml
 ├── README.md
 ├── slurm-launch.jl              # entry point and functions

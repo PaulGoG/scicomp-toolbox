@@ -14,7 +14,6 @@ hardware-diagnostics/
 ├── activate.jl                        # environment activation
 ├── config.toml                        # parameters, validated on load
 ├── hardware-diagnostics.jl            # entry point
-├── Manifest.toml                      # pinned dependencies (KernelAbstractions and stdlib)
 ├── Project.toml                       # package, weak dependencies and extensions
 ├── README.md
 ├── ext/
@@ -129,7 +128,7 @@ load path (`auto` tries every backend applicable to the operating system), the
 corresponding extension adds the device probe of its backend, and functional devices
 enter the run. A backend requested by name that is missing or not functional produces a
 warning and the run continues on the remaining devices. Because the GPU package comes
-from the default environment, its version is not pinned by this tool's manifest; the
+from the default environment, this tool's environment does not fix its version; the
 provenance sidecar records the package's `versioninfo` output for that reason. The
 `[compat]` entries bound each GPU package to its last series on KernelAbstractions 0.9
 (CUDA 6.4, AMDGPU 2.9, Metal 1.11, oneAPI 2.9). KernelAbstractions 0.10, which the later

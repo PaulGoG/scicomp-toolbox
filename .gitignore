@@ -16,9 +16,9 @@ hardware_benchmark_*
 !assets/**
 !reference-runs/**
 
-# test environments regenerate their manifests; the manifests of tools, the formatter
-# and standalone/ are version-controlled
-*/test/Manifest.toml
+# manifests are not tracked: an environment is resolved where it runs, within the
+# [compat] bounds of its Project.toml
+Manifest*.toml
 
 # editor and OS metadata
 *.swp
