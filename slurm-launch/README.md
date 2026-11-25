@@ -48,10 +48,14 @@ job id or a submission record, so that stages sharing a run id form a chain.
 **`julia`**: a pipeline started as
 
 ```
-julia --project=. --threads=<threads> [--heap-size-hint=<heap>] <script> --config <run config> --output-dir <dir>
+julia --threads=<threads> [--heap-size-hint=<heap>] <script> --config <run config> --output-dir <dir>
 ```
 
-The project needs a `Project.toml`; `--script` defaults to `scripts/run_pipeline.jl`.
+The command carries no `--project`: the script activates its own environment, as in
+`include(joinpath(@__DIR__, "..", "activate.jl"))` or `@quickactivate`. A script whose
+text names no activation is reported with a note, since the job would run in the default
+environment. The project needs a `Project.toml`; `--script` defaults to
+`scripts/run_pipeline.jl`.
 
 **`launcher`**: an existing launch script, such as the `_launch.sh` that a native code
 writes per run, run inside its own directory with `bash`. The script runs as it

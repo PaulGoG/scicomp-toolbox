@@ -4,6 +4,15 @@ Notable changes to the workbench. The repository itself carries no version; the
 `HardwareDiagnostics` package follows semantic versioning and its version is given where
 a change belongs to it.
 
+## 2026-11-25
+
+### Changed
+
+- `slurm-launch`: the Julia command of a job script carries no `--project=.`. The
+  pipeline script activates its own environment; a script whose text names no activation
+  is reported with a note. A project that relied on the flag exports `JULIA_PROJECT` in
+  the `setup` lines of its cluster table.
+
 ## 2026-11-23
 
 Outcome of an independent review of every tool; the entries below are its confirmed

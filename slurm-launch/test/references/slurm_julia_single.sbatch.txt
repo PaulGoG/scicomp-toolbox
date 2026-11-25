@@ -19,4 +19,4 @@
 
 set -euo pipefail
 module load Julia/1.12
-julia --project=. --threads=8 --heap-size-hint=24G scripts/run_pipeline.jl --config config/run.toml --output-dir data/runs/run_0001
+julia --threads=8 --heap-size-hint=24G scripts/run_pipeline.jl --config config/run.toml --output-dir data/runs/run_0001

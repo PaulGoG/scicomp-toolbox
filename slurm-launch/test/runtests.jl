@@ -38,13 +38,17 @@ function git_run(dir::AbstractString, args::AbstractString...)
 end
 
 const PIPELINE = """
-    # stand-in for scripts/run_pipeline.jl: echoes its arguments and the thread count
+    # stand-in for scripts/run_pipeline.jl: activates the project as a pipeline script
+    # does, then echoes its arguments, the thread count and the active environment
+    using Pkg
+    Pkg.activate(joinpath(@__DIR__, ".."); io = devnull)
     config = ARGS[findfirst(==("--config"), ARGS) + 1]
     output = ARGS[findfirst(==("--output-dir"), ARGS) + 1]
     m = match(r"sleep_s\\s*=\\s*([0-9.]+)", read(config, String))
     m === nothing || sleep(parse(Float64, m.captures[1]))
     mkpath(output)
     write(joinpath(output, "result.txt"), "threads \$(Threads.nthreads())\\n")
+    write(joinpath(output, "environment.txt"), basename(dirname(Base.active_project())))
     println("pipeline done: ", config)
     """
 
@@ -714,6 +718,17 @@ end
                     ),
                     String,
                 ) == "threads 8\n"
+                # no --project in the job script: the environment is the script's own
+                @test read(
+                    joinpath(
+                        projects.pipeline,
+                        "data",
+                        "runs",
+                        "local_single",
+                        "environment.txt",
+                    ),
+                    String,
+                ) == "Pipeline"
                 log = joinpath(projects.pipeline, read_record(single.record)["log"])
                 @test occursin("pipeline done: config/run.toml", read(log, String))
 
@@ -996,6 +1011,15 @@ end
             )
             @test wait_for(sweep.record, ("COMPLETED", "FAILED", "TERMINATED")) == "FAILED"
             @test isfile(joinpath(failing, "runs", "002_pass", "marker"))
+            # its script names no activation and is reported; the pipeline's activates
+            @test any(
+                contains("names no environment activation"),
+                sweep.spec.resources.notes,
+            )
+            @test !any(
+                contains("activation"),
+                build_spec(options, settings; timestamp = STAMP).resources.notes,
+            )
 
             # k) array tasks are listed one per line
             with_stubs(review) do log

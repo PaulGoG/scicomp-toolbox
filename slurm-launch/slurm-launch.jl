@@ -684,6 +684,19 @@ function pipeline_script(project::AbstractString, options::AbstractDict)
     return script
 end
 
+"""
+    activation_note(project, script) -> String
+
+Note for a pipeline script whose text names no activation (`activate.jl`,
+`Pkg.activate`, `@quickactivate`), empty otherwise. The job starts Julia without
+`--project`, so such a script runs in the default environment unless `JULIA_PROJECT` is
+set where the job runs.
+"""
+function activation_note(project::AbstractString, script::AbstractString)
+    occursin("activate", read(joinpath(project, script), String)) && return ""
+    return "$script names no environment activation: the job starts Julia without --project"
+end
+
 function file_hash(paths::Vector{String})
     length(paths) == 1 && return bytes2hex(sha256(read(only(paths))))
     return bytes2hex(sha256(join(bytes2hex(sha256(read(p))) for p in paths)))
@@ -864,6 +877,10 @@ function build_spec(
         k += 1
         stem = "$(base)_$k"
     end
+    if payload == "julia"
+        note = activation_note(project, script)
+        isempty(note) || push!(resources.notes, note)
+    end
     commit, dirty = project_commit(project)
     return JobSpec(
         payload,
@@ -945,7 +962,7 @@ function payload_lines(spec::JobSpec, settings::LaunchSettings)
             lines = isempty(directory) ? String[] : ["cd $(shell_quote(directory))"]
             return push!(lines, "bash $(shell_quote(basename(spec.script)))")
         end
-        flags = ["--project=.", "--threads=$(r.threads)"]
+        flags = ["--threads=$(r.threads)"]
         isempty(r.heap_size_hint) || push!(flags, "--heap-size-hint=$(r.heap_size_hint)")
         return [
             join(
@@ -965,7 +982,7 @@ function payload_lines(spec::JobSpec, settings::LaunchSettings)
     list = shell_quote(cases_file(spec, settings))
     run_case =
         spec.payload == "julia" ?
-        "$julia --project=. --threads=\"\$threads\" \${heap:+--heap-size-hint=\"\$heap\"} $(shell_quote(spec.script)) --config \"\$case\"/$(shell_quote(spec.run_config)) --output-dir \"\$case\"" :
+        "$julia --threads=\"\$threads\" \${heap:+--heap-size-hint=\"\$heap\"} $(shell_quote(spec.script)) --config \"\$case\"/$(shell_quote(spec.run_config)) --output-dir \"\$case\"" :
         "(cd \"\$case\" && bash $(shell_quote(spec.script)))"
     fields = spec.payload == "julia" ? "case threads heap" : "case"
     spec.backend == "slurm" && return [

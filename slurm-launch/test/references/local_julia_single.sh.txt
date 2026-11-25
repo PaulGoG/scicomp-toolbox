@@ -10,4 +10,4 @@ exit_file=<root>/Pipeline/jobs/Pipeline_2026-10-29_09-30-00.exit
 trap 'echo $? > "$exit_file"' EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
-julia --project=. --threads=8 --heap-size-hint=24G scripts/run_pipeline.jl --config config/run.toml --output-dir data/runs/run_0002
+julia --threads=8 --heap-size-hint=24G scripts/run_pipeline.jl --config config/run.toml --output-dir data/runs/run_0002
