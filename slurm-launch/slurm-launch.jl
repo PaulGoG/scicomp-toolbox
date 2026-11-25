@@ -1228,6 +1228,22 @@ function local_job_alive(id::AbstractString, script::AbstractString)
 end
 
 """
+    recorded_state(exit_path) -> Union{Nothing, Tuple{String, String}}
+
+State of a local job from the exit status its script wrote to `exit_path`: `COMPLETED`,
+`FAILED`, `TERMINATED` after a signal, or `UNKNOWN` when the file holds no number (the
+shell has created it and not yet written). `nothing` while the file does not exist.
+"""
+function recorded_state(exit_path::AbstractString)
+    isfile(exit_path) || return nothing
+    code = tryparse(Int, strip(read(exit_path, String)))
+    code === nothing && return ("UNKNOWN", "unreadable exit status in $exit_path")
+    code == 0 && return ("COMPLETED", "exit 0")
+    code > 128 && return ("TERMINATED", "signal $(code - 128)")
+    return ("FAILED", "exit $code")
+end
+
+"""
     job_state(record) -> (state, detail)
 
 State of the job of a submission record. Slurm: `squeue` while queued or running, then
@@ -1267,14 +1283,12 @@ function job_state(record::AbstractDict)
     end
     # the script records its status where it runs
     exit_path = joinpath(record["target_project"], record["exit_file"])
-    if isfile(exit_path)
-        code = tryparse(Int, strip(read(exit_path, String)))
-        code === nothing && return ("UNKNOWN", "unreadable exit status in $exit_path")
-        code == 0 && return ("COMPLETED", "exit 0")
-        code > 128 && return ("TERMINATED", "signal $(code - 128)")
-        return ("FAILED", "exit $code")
-    end
+    recorded = recorded_state(exit_path)
+    recorded === nothing || return recorded
     local_job_alive(id, record["job_script"]) && return ("RUNNING", "process $id")
+    # a script that ended between the two checks has recorded its status by now
+    recorded = recorded_state(exit_path)
+    recorded === nothing || return recorded
     return ("TERMINATED", "process $id ended without recording an exit status")
 end
 

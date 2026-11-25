@@ -39,6 +39,9 @@ a change belongs to it.
 - `slurm-launch`: the compat entry `SHA = "1"` excluded Julia 1.12, whose standard
   library carries SHA 0.7; the environment could not be resolved there without the
   manifest. The entry is `"0.7, 1"`.
+- `slurm-launch`: a local job that ended between the look for its exit file and the look
+  for its process was reported `TERMINATED` although it had recorded its status. The
+  recorded status is read again once the process is gone.
 
 ## 2026-11-23
 

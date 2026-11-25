@@ -1029,6 +1029,42 @@ end
                 @test occursin(r"sacct .*--array.* -j 4245", calls)
             end
 
+            # m) a job that ends between the look for its exit file and the look for its
+            # process has recorded its status; polled without pause, the window is hit
+            mktempdir() do dir
+                states = String[]
+                for k in 1:20
+                    script = joinpath(dir, "job_$k.sh")
+                    write(
+                        script,
+                        "#!/bin/bash\nexit_file=$(joinpath(dir, "job_$k.exit"))\n" *
+                        "trap 'echo \$? > \"\$exit_file\"' EXIT\nsleep 0.05\nexit 3\n",
+                    )
+                    process = run(
+                        pipeline(
+                            detach(`bash $script`);
+                            stdout = devnull,
+                            stderr = devnull,
+                        );
+                        wait = false,
+                    )
+                    record = Dict{String, Any}(
+                        "job_id" => string(getpid(process)),
+                        "backend" => "local",
+                        "job_script" => "job_$k.sh",
+                        "exit_file" => "job_$k.exit",
+                        "target_project" => dir,
+                    )
+                    state = "RUNNING"
+                    while state in ("RUNNING", "UNKNOWN")
+                        state = first(job_state(record))
+                    end
+                    push!(states, state)
+                    wait(process)
+                end
+                @test all(==("FAILED"), states)
+            end
+
             # l) records of an earlier layout are refused with their missing key
             mktempdir() do dir
                 old = joinpath(dir, "submission.toml")
