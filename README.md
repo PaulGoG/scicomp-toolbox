@@ -17,7 +17,7 @@ scicomp-toolbox/
 ├── test.jl                 # global test runner
 ├── check.jl                # pre-commit: format, then test
 ├── formatter/              # pinned JuliaFormatter environment
-├── standalone/             # tier 2: sysinfo, workspace-audit
+├── standalone/             # tier 2: sysinfo, workspace-audit, commit-guard
 ├── hardware-diagnostics/   # tier 1: host and GPU benchmark, package HardwareDiagnostics
 ├── plot-benchmarks/        # tier 1: figures from its datasets
 ├── run-index/              # tier 1: catalogue of run directories
@@ -90,6 +90,9 @@ julia run.jl sysinfo                                    # standalone script
 julia run.jl workspace-audit                            # git state of the surrounding workspace
 julia run.jl workspace-audit ~/projects --dirty-only    # another root, only what needs attention
 julia run.jl workspace-audit ~/projects --depth 1       # areas that are themselves repositories
+julia run.jl workspace-audit . --layout --self-contained  # workspace layout, paths that leave the repository
+julia run.jl commit-guard install                       # commit-msg hook of the repository in the working directory
+julia run.jl commit-guard log                           # commit messages of the history against the conventions
 julia run.jl hardware-diagnostics --quick --cpu-only    # tool; arguments are forwarded
 julia run.jl plot-benchmarks --format png               # figures from the newest dataset
 julia run.jl plot-benchmarks --compare                  # cross-host figures from reference-runs/
@@ -120,7 +123,8 @@ julia -i hardware-diagnostics/activate.jl
 | Tool | Tier | Purpose | Entry point |
 | :--- | :--- | :--- | :--- |
 | [`sysinfo`](standalone/sysinfo.jl) | 2 | CPU topology (physical and logical), memory, thread pools, BLAS library, repository revision | `standalone/sysinfo.jl` |
-| [`workspace-audit`](standalone/workspace-audit.jl) | 2 | Branch, working-tree state, distance from upstream, stashes, untracked weight and regenerable backup artifacts of every repository under a workspace root, searched two levels deep; areas under no version control are named | `standalone/workspace-audit.jl` |
+| [`workspace-audit`](standalone/workspace-audit.jl) | 2 | Branch, working-tree state, distance from upstream, stashes, untracked weight and regenerable backup artifacts of every repository under a workspace root, searched two levels deep; areas under no version control are named. On request: the root checked against the [workspace layout](#workspace-layout) and completed, and the tracked files of a repository scanned for paths that lead outside it | `standalone/workspace-audit.jl` |
+| [`commit-guard`](standalone/commit-guard.jl) | 2 | Commit messages checked against the [commit conventions](#commit-conventions): Conventional Commits header, blank second line, no co-author or sign-off trailer, no attribution to an AI tool, no link to an AI session; as a `commit-msg` hook, on a message file, or over the history | `standalone/commit-guard.jl` |
 | [`hardware-diagnostics`](hardware-diagnostics/) | 1 | Host and accelerator introspection; dual-GEMM throughput through the vendor library and two KernelAbstractions kernels (naive, tiled), with thread scaling and cross-engine verification | `hardware-diagnostics/hardware-diagnostics.jl` |
 | [`plot-benchmarks`](plot-benchmarks/) | 1 | Thread-scaling and throughput figures (CairoMakie) from one hardware-diagnostics dataset, or across the machines of several (`--compare`) | `plot-benchmarks/plot-benchmarks.jl` |
 | [`run-index`](run-index/) | 1 | Catalogue of DrWatson-style run directories: commit and configuration, hardware, wall time, disk usage; flags missing or unreproducible provenance, seed replicates and repeats, and figures whose run is gone | `run-index/run-index.jl` |
@@ -129,13 +133,65 @@ julia -i hardware-diagnostics/activate.jl
 | [`figure-audit`](figure-audit/) | 1 | Exported PDF, PNG and SVG figures checked against a column width: printed size and the scaling LaTeX would apply, page count, font embedding and subsetting, smallest text size after scaling, raster resolution, colour space; non-zero exit on failure | `figure-audit/figure-audit.jl` |
 | [`bib-hygiene`](bib-hygiene/) | 1 | BibTeX validation before submission: duplicate keys and entries, required fields, DOI form, journal names written in several ways, encoding and escaping, unprotected capitals, page ranges, years, citations of the manuscript; optional cached DOI and arXiv lookups; corrected copy in a separate file | `bib-hygiene/bib-hygiene.jl` |
 
+## Workspace layout
+
+`workspace-audit --layout` checks a workspace, the directory that holds one project
+repository and the material around it, against this tree, and `--scaffold` creates what
+is missing:
+
+```
+<workspace>/
+├── context/            # input material, read-only
+│   ├── code/
+│   └── knowledge/
+├── <project>/          # the git repository
+├── notes/              # 00-index.md, worklog.md, dated notes YYYY-MM-DD-topic.md
+├── paper/
+├── showcase/           # optional
+├── utilities/
+├── artefacts/
+│   ├── data/
+│   ├── plots/
+│   └── runs/
+└── tmp/                # scratch, empty between tasks
+```
+
+Reported: a missing directory or notes file, no repository or several at the root, an
+entry at the root that the tree does not name, anything left in `tmp/`, a note that
+`notes/00-index.md` does not list or lists without the file existing, and a note whose
+name is not `YYYY-MM-DD-topic.md`.
+
+`--self-contained` reads the tracked text files of a repository line by line. A relative
+path with more parent-directory steps than the file lies deep, the same climb written
+with `@__DIR__` and `".."` components in Julia source, and a path under the home
+directory of the user are findings. Other absolute paths outside the system directories are listed for review
+without changing the exit status, since an example path in documentation is one. The scan
+is lexical: a path assembled at run time is not seen.
+
+## Commit conventions
+
+`commit-guard` accepts a message whose first line reads `<type>[(scope)][!]: <description>`
+with a type among `feat`, `fix`, `refactor`, `docs`, `test`, `perf`, `chore`, `build`,
+`ci`, `style` and `revert`, or a header that git writes itself (`Merge`, `Revert`,
+`fixup!`, `squash!`, `amend!`), followed by a blank line. It refuses `Co-authored-by` and
+`Signed-off-by` trailers, a line that credits an AI tool or model with the change, and a
+link to a session of a hosted assistant.
+
+`commit-guard install` copies the script into the hooks directory of one repository. It
+does not write into a directory that `core.hooksPath` shares between repositories: with
+that setting git ignores the hooks of the repository, and the shared `commit-msg` hook
+can call `standalone/commit-guard.jl check "$1"` instead. The hook starts Julia through
+`env -S` (GNU coreutils 8.30 or later, or a BSD `env`) with `--compile=min` and takes
+about 0.3 s per commit. `git commit --no-verify` bypasses it.
+
 ## Status
 
 | Component | State |
 | :--- | :--- |
 | Dispatcher, test runner, formatting gate | in use; exercised by CI on Julia 1.12 and the current stable release, Ubuntu |
 | `sysinfo` | in use; parsing covered by the `standalone` suite |
-| `workspace-audit` | in use; read-only by construction, tested against repositories built in `mktempdir()` |
+| `workspace-audit` | in use; writes only with `--scaffold`, tested against repositories and workspaces built in `mktempdir()`; the layout check and the scan are new and have run on one workspace |
+| `commit-guard` | new; every rule tested on messages, the history check and the hook on repositories built in `mktempdir()`, the installed hook through real commits |
 | `hardware-diagnostics`, CPU path | tested (unit tests, static QA with Aqua, JET and ExplicitImports, end-to-end run); seven host processors in [`reference-runs/`](reference-runs/), x86_64 and arm64 |
 | `hardware-diagnostics`, CUDA extension | run on four devices (RTX 5090, RTX 5070 Ti, RTX 2080 Super Max-Q, Tesla T4), all three engines, verification passed |
 | `hardware-diagnostics`, AMDGPU extension | run on two devices (Radeon Pro W7900, Radeon RX 7700 XT), all three engines, verification passed |
@@ -190,7 +246,8 @@ scicomp-toolbox/
 ├── standalone/                    # tier 2: single-file scripts on the standard library
 │   ├── Project.toml               # test environment only; the scripts run without it
 │   ├── sysinfo.jl                 # host and runtime introspection
-│   ├── workspace-audit.jl         # git and artifact state of a workspace
+│   ├── workspace-audit.jl         # git and artifact state, layout, self-containment
+│   ├── commit-guard.jl            # commit messages against the conventions; commit-msg hook
 │   └── test/
 ├── hardware-diagnostics/          # tier 1: HardwareDiagnostics package with GPU extensions
 │   ├── activate.jl

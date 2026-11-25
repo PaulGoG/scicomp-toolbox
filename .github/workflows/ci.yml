@@ -44,6 +44,8 @@ jobs:
         run: |
           julia --color=yes run.jl sysinfo
           julia --color=yes run.jl workspace-audit --dirty-only
+          julia --color=yes run.jl workspace-audit . --self-contained
+          julia --color=yes run.jl commit-guard log --rules trailer,attribution,session_url
       - name: run-index smoke test (the checkout holds no runs)
         run: julia --color=yes run.jl run-index --no-csv
       - name: slurm-launch smoke test

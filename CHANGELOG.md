@@ -6,7 +6,22 @@ a change belongs to it.
 
 ## 2026-11-25
 
+### Added
+
+- `workspace-audit --layout` checks a workspace root against the layout the README
+  describes, `--scaffold` creates the directories and notes files it lacks, and
+  `--self-contained` scans the tracked files of a repository for relative paths that
+  climb out of it and for paths under the home directory. The exit status is 1 when a
+  requested check has a finding.
+- `commit-guard`, a standalone script: commit messages against the Conventional Commits
+  header and against trailers, AI attribution and session links, as a `commit-msg` hook,
+  on a message file and over the history.
+
 ### Changed
+
+- The test runner starts every suite with `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM`
+  set, so that the hooks and settings of the user do not reach the temporary repositories
+  of the tests.
 
 - `slurm-launch`: the Julia command of a job script carries no `--project=.`. The
   pipeline script activates its own environment; a script whose text names no activation
