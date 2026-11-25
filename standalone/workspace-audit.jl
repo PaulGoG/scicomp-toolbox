@@ -756,7 +756,7 @@ command or a relative path in Julia file I/O reads it from a working directory a
 root, and the first component below its climbs is taken. When that component is a
 top-level workspace name in `reserved` the result is `:outside`, or `:unresolved` when the
 path lies in a tracked directory other than the root, where it may name a file that a
-script writes beside tracked ones (`save("../paper/fig.pdf")` beside a tracked `paper/`):
+script writes beside tracked ones (a figure saved one level up into a tracked `paper/`):
 both readings are plausible there, and only a reader can tell. Other paths in a tracked
 directory are no finding; the rest are `:unresolved`. Existence is judged against
 `tracked`, never the checkout, so the result does not depend on untracked or ignored

@@ -177,8 +177,9 @@ which set the exit status:
 Listed for review without changing the exit status, since an example path in
 documentation is one: other absolute paths outside the system directories, paths written
 with `~` or `$HOME`, relative paths that name nothing in the repository, and a path into
-a tracked directory named like an entry of the tree above (`../paper/fig.pdf` beside a
-tracked `paper/`), which leads into the workspace when read from the repository root.
+a tracked directory named like an entry of the tree above (a figure that a script saves one
+level up into a tracked `paper/`), which leads into the workspace when read from the
+repository root.
 Existence is judged on the tracked files, so an untracked or ignored directory hides
 nothing.
 
