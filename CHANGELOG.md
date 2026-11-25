@@ -9,13 +9,16 @@ a change belongs to it.
 ### Added
 
 - `workspace-audit --layout` checks a workspace root against the layout the README
-  describes, `--scaffold` creates the directories and notes files it lacks, and
+  describes, and `--scaffold PATH` creates the directories and notes files it lacks.
   `--self-contained` scans the tracked files of a repository for relative paths that
-  climb out of it and for paths under the home directory. The exit status is 1 when a
-  requested check has a finding.
+  climb out of it, symbolic links that lead outside and paths under the home directory;
+  other absolute paths, `~` and `$HOME` paths and relative paths that name nothing are
+  listed for review. The exit status is 1 when a requested check has a finding and 2
+  when there is no repository to scan.
 - `commit-guard`, a standalone script: commit messages against the Conventional Commits
-  header and against trailers, AI attribution and session links, as a `commit-msg` hook,
-  on a message file and over the history.
+  header and against trailers, AI attribution and session links, on a message file and
+  over the history. As a `commit-msg` hook it refuses the commit or, with
+  `commit-guard.mode = strip`, removes the attribution lines and lets it through.
 
 ### Changed
 

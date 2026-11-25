@@ -124,7 +124,7 @@ julia -i hardware-diagnostics/activate.jl
 | :--- | :--- | :--- | :--- |
 | [`sysinfo`](standalone/sysinfo.jl) | 2 | CPU topology (physical and logical), memory, thread pools, BLAS library, repository revision | `standalone/sysinfo.jl` |
 | [`workspace-audit`](standalone/workspace-audit.jl) | 2 | Branch, working-tree state, distance from upstream, stashes, untracked weight and regenerable backup artifacts of every repository under a workspace root, searched two levels deep; areas under no version control are named. On request: the root checked against the [workspace layout](#workspace-layout) and completed, and the tracked files of a repository scanned for paths that lead outside it | `standalone/workspace-audit.jl` |
-| [`commit-guard`](standalone/commit-guard.jl) | 2 | Commit messages checked against the [commit conventions](#commit-conventions): Conventional Commits header, blank second line, no co-author or sign-off trailer, no attribution to an AI tool, no link to an AI session; as a `commit-msg` hook, on a message file, or over the history | `standalone/commit-guard.jl` |
+| [`commit-guard`](standalone/commit-guard.jl) | 2 | Commit messages checked against the [commit conventions](#commit-conventions): Conventional Commits header, blank second line, no co-author or sign-off trailer, no attribution to an AI tool, no link to an AI session; as a `commit-msg` hook that refuses or strips, on a message file, or over the history | `standalone/commit-guard.jl` |
 | [`hardware-diagnostics`](hardware-diagnostics/) | 1 | Host and accelerator introspection; dual-GEMM throughput through the vendor library and two KernelAbstractions kernels (naive, tiled), with thread scaling and cross-engine verification | `hardware-diagnostics/hardware-diagnostics.jl` |
 | [`plot-benchmarks`](plot-benchmarks/) | 1 | Thread-scaling and throughput figures (CairoMakie) from one hardware-diagnostics dataset, or across the machines of several (`--compare`) | `plot-benchmarks/plot-benchmarks.jl` |
 | [`run-index`](run-index/) | 1 | Catalogue of DrWatson-style run directories: commit and configuration, hardware, wall time, disk usage; flags missing or unreproducible provenance, seed replicates and repeats, and figures whose run is gone | `run-index/run-index.jl` |
@@ -161,28 +161,65 @@ entry at the root that the tree does not name, anything left in `tmp/`, a note t
 `notes/00-index.md` does not list or lists without the file existing, and a note whose
 name is not `YYYY-MM-DD-topic.md`.
 
-`--self-contained` reads the tracked text files of a repository line by line. A relative
-path with more parent-directory steps than the file lies deep, the same climb written
-with `@__DIR__` and `".."` components in Julia source, and a path under the home
-directory of the user are findings. Other absolute paths outside the system directories are listed for review
-without changing the exit status, since an example path in documentation is one. The scan
-is lexical: a path assembled at run time is not seen.
+`--self-contained` reads the tracked text files of a repository. It reports as findings,
+which set the exit status:
+
+- a relative path with more parent-directory steps than the file lies deep, also when
+  written with `@__DIR__` and `".."` components in Julia source, as a string appended to
+  `@__DIR__`, or as a lone `".."` in a TOML file at the root;
+- a relative path that stays inside the repository when read from its file, names nothing
+  that exists there, and leads to one of the directories of the tree above: read from the
+  repository root, it points into the workspace;
+- a tracked symbolic link whose target lies outside;
+- a path under the home directory of the user.
+
+Listed for review without changing the exit status, since an example path in
+documentation is one: other absolute paths outside the system directories, paths written
+with `~` or `$HOME`, and relative paths that name nothing in the repository.
+
+The scan is lexical and reads the working tree. It does not see a path assembled at run
+time, a chain of `dirname` calls, a line that is not valid UTF-8 or a file larger than
+5 MiB, and it cannot tell a shell command meant for another working directory from a
+climb: `cd test && julia` followed by a path one level up is reported in a file at the
+root.
 
 ## Commit conventions
 
 `commit-guard` accepts a message whose first line reads `<type>[(scope)][!]: <description>`
 with a type among `feat`, `fix`, `refactor`, `docs`, `test`, `perf`, `chore`, `build`,
 `ci`, `style` and `revert`, or a header that git writes itself (`Merge`, `Revert`,
-`fixup!`, `squash!`, `amend!`), followed by a blank line. It refuses `Co-authored-by` and
-`Signed-off-by` trailers, a line that credits an AI tool or model with the change, and a
-link to a session of a hosted assistant.
+`Reapply`, `fixup!`, `squash!`, `amend!`), followed by a blank line. It refuses
+`Co-authored-by`, `Co-developed-by` and `Signed-off-by` trailers, a line that credits an
+AI tool or model with the change, and a link to a session of a hosted assistant.
 
-`commit-guard install` copies the script into the hooks directory of one repository. It
-does not write into a directory that `core.hooksPath` shares between repositories: with
-that setting git ignores the hooks of the repository, and the shared `commit-msg` hook
-can call `standalone/commit-guard.jl check "$1"` instead. The hook starts Julia through
-`env -S` (GNU coreutils 8.30 or later, or a BSD `env`) with `--compile=min` and takes
-about 0.3 s per commit. `git commit --no-verify` bypasses it.
+An attribution is a line that begins with the phrase, as the footers of such tools do:
+`Generated with …`, `Written by …`, `This commit was created using …`, followed by the
+name of a tool, or a trailer such as `Assisted-by:` or `Claude-Session:`. A sentence that
+mentions a model, an instrument or a function of the same name further in
+(`spectra produced by Gemini/GMOS`, `values generated by Ai(x)`) is no attribution, and
+neither is one phrased mid-sentence.
+
+```bash
+julia run.jl commit-guard check FILE     # a message file, as the hook sees it
+julia run.jl commit-guard strip FILE     # remove the attribution lines instead of refusing
+julia run.jl commit-guard log main..     # the messages of a range
+julia run.jl commit-guard install        # commit-msg hook of this repository
+```
+
+The installed hook refuses by default. With `git config commit-guard.mode strip` it
+removes the lines instead and lets the commit through: co-author trailers that name an AI
+tool, attribution lines and session links. Co-authors that name no tool, sign-offs and the
+header stay, and nothing else is judged in that mode.
+
+`install` copies the script into the hooks directory of one repository. It refuses when
+`core.hooksPath` is set, when that hooks directory is a symbolic link, and over a hook it
+did not install unless `--force`, which keeps the old one as `commit-msg.backup`. With
+`core.hooksPath`, git ignores the hooks of the repository, and the script can be copied
+into the shared directory as `commit-msg` by hand. The hook starts Julia through `env -S`
+(GNU coreutils 8.30 or later, or a BSD `env`) with `--compile=min` and takes about 0.3 s
+per commit. It assumes the default comment character `#` in message files.
+`git commit --no-verify` bypasses it, and git does not run it for cherry-picks and
+rebases, where `commit-guard log` is the check.
 
 ## Status
 
@@ -191,7 +228,7 @@ about 0.3 s per commit. `git commit --no-verify` bypasses it.
 | Dispatcher, test runner, formatting gate | in use; exercised by CI on Julia 1.12 and the current stable release, Ubuntu |
 | `sysinfo` | in use; parsing covered by the `standalone` suite |
 | `workspace-audit` | in use; writes only with `--scaffold`, tested against repositories and workspaces built in `mktempdir()`; the layout check and the scan are new and have run on one workspace |
-| `commit-guard` | new; every rule tested on messages, the history check and the hook on repositories built in `mktempdir()`, the installed hook through real commits |
+| `commit-guard` | new; every rule tested on messages, the history check and the installer on repositories built in `mktempdir()`, both hook modes through real commits; the strip mode compared once with a `sed` hook on a corpus of lines |
 | `hardware-diagnostics`, CPU path | tested (unit tests, static QA with Aqua, JET and ExplicitImports, end-to-end run); seven host processors in [`reference-runs/`](reference-runs/), x86_64 and arm64 |
 | `hardware-diagnostics`, CUDA extension | run on four devices (RTX 5090, RTX 5070 Ti, RTX 2080 Super Max-Q, Tesla T4), all three engines, verification passed |
 | `hardware-diagnostics`, AMDGPU extension | run on two devices (Radeon Pro W7900, Radeon RX 7700 XT), all three engines, verification passed |
