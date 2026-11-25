@@ -79,6 +79,13 @@ function run_suite(name::String)
     cmd =
         is_package(dir) ? `$julia -e 'using Pkg; Pkg.test()'` :
         `$julia $(joinpath(dir, "test", "runtests.jl"))`
+    # the suites commit to temporary repositories; the hooks, identity and signing
+    # settings of the user and of the system stay out of them
+    cmd = addenv(
+        cmd,
+        "GIT_CONFIG_GLOBAL" => (Sys.iswindows() ? "NUL" : "/dev/null"),
+        "GIT_CONFIG_NOSYSTEM" => "1",
+    )
     process = run(ignorestatus(cmd))
     elapsed = time() - t_start
     passed = success(process)

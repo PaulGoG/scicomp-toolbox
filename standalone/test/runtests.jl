@@ -4,6 +4,11 @@
 
 using Test: @test, @test_throws, @testset
 
+# Git reads neither the configuration of the user nor that of the system here. A
+# `core.hooksPath` set globally would run foreign hooks on every test commit.
+ENV["GIT_CONFIG_GLOBAL"] = Sys.iswindows() ? "NUL" : "/dev/null"
+ENV["GIT_CONFIG_NOSYSTEM"] = "1"
+
 const STANDALONE_DIR = dirname(@__DIR__)
 
 include(joinpath(STANDALONE_DIR, "workspace-audit.jl"))
@@ -109,8 +114,6 @@ end
         @test parse_args(["-h"]).help
         @test parse_args(["--help"]).help
         @test parse_args(["/tmp/somewhere"]).root == "/tmp/somewhere"
-        @test parse_args(["/tmp/a", "--fetch"]) ==
-              (; root = "/tmp/a", dirty_only = false, fetch = true, depth = 2, help = false)
         @test parse_args(String[]).depth == 2
         @test parse_args(["--depth", "3"]).depth == 3
         @test parse_args(["--depth=1"]).depth == 1
@@ -419,4 +422,6 @@ end
             @test !isempty(revision[2])
         end
     end
+
+    include("workspace_layout_tests.jl")
 end

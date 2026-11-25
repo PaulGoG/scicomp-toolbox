@@ -2,15 +2,66 @@
 # workspace-audit.jl — git and artifact state of every repository under a workspace root,
 # with the standard library only. Reports branch, working-tree cleanliness, distance
 # from the upstream branch, stashes, untracked weight and regenerable backup artifacts, so
-# that unsynced work and deletable leftovers are visible in one command.
+# that unsynced work and deletable leftovers are visible in one command. On request it
+# checks the root against the workspace layout below, creates what the layout lacks, and
+# scans the tracked files of a repository for paths that lead outside it.
 #
-# The tool is read-only: it prints the candidates and the command that
-# would remove them.
+# Workspace layout:
+#   <workspace>/
+#   ├── context/{code,knowledge}/  # input material, read-only
+#   ├── <project>/                 # single git repository at the workspace root
+#   ├── notes/                     # 00-index.md, worklog.md, YYYY-MM-DD-topic.md
+#   ├── paper/
+#   ├── showcase/                  # optional
+#   ├── utilities/
+#   ├── artefacts/{data,plots,runs}/
+#   └── tmp/                       # scratch, empty between tasks
+#
+# Options: --depth N, --dirty-only, --fetch, --layout, --scaffold, --self-contained.
+# Return values: 0, or 1 when a requested check has a finding, when git is missing or
+# when the root is not a directory; 2 on invalid arguments and on a root that --layout,
+# --scaffold or --self-contained cannot take.
+#
+# Without --scaffold the tool writes, commits and deletes nothing, and it fetches only
+# with --fetch. With --scaffold it creates the missing directories and the two notes
+# files of the layout; nothing that exists is modified.
 
+using Dates: Date
 using Printf: @printf, @sprintf
 
 const BACKUP_SUFFIXES = (".backup.bundle", ".git.backup")
 const LARGEST_UNTRACKED_SHOWN = 3
+const LAYOUT_DIRECTORIES = (
+    "context",
+    "context/code",
+    "context/knowledge",
+    "notes",
+    "paper",
+    "utilities",
+    "artefacts",
+    "artefacts/data",
+    "artefacts/plots",
+    "artefacts/runs",
+    "tmp",
+)
+const LAYOUT_OPTIONAL = ("showcase",)
+const LAYOUT_FILES = ("notes/00-index.md", "notes/worklog.md")
+const MAX_SCANNED_BYTES = 5 * 1024^2
+const SYSTEM_ROOTS =
+    ("proc", "sys", "dev", "etc", "usr", "bin", "sbin", "lib", "lib64", "tmp", "var", "run")
+
+# Markdown note filenames referenced as standalone names in notes/00-index.md.
+const NOTE_LINK_PATTERN = r"(?<![\w./-])[\w.-]+\.md\b"
+# Leading ISO-date prefix identifying dated note references.
+const DATED_PREFIX_PATTERN = r"^\d{4}-\d{2}-\d{2}-"
+# Dated note filename pattern YYYY-MM-DD-topic.md with captured date fields.
+const DATED_NOTE_PATTERN = r"^(\d{4})-(\d{2})-(\d{2})-.+\.md$"
+# Relative path containing one or more parent-directory climbs.
+const RELATIVE_CLIMB_PATTERN = r"(?<![\w/.~-])(?:\./)*((?:\.\./)+)([\w.@+-][\w./@+-]*)?"
+# Julia @__DIR__ joinpath climb using one or more ".." segments.
+const DIR_CLIMB_PATTERN = r"@__DIR__\s*,\s*((?:\"\.\.\"\s*,?\s*)+)"
+# Absolute filesystem path starting a line or following a delimiter character.
+const ABSOLUTE_PATH_PATTERN = r"(?<![^\s\"'`=(\[{,<>|])/([A-Za-z][\w.-]*)(/[\w.@+-]+)+"
 
 """
     Leftover
@@ -49,6 +100,33 @@ struct DirectoryReport
     remote::String
     stashes::Int
     leftovers::Vector{Leftover}
+end
+
+"""
+    LayoutFinding
+
+One deviation from the expected workspace layout. `kind` is one of `:missing_directory`,
+`:missing_file`, `:project`, `:stray`, `:tmp`, `:notes_index` or `:notes_name`; `path` is
+relative to the workspace root using `/` separators (empty for `:project`).
+"""
+struct LayoutFinding
+    kind::Symbol
+    path::String
+    message::String
+end
+
+"""
+    ContainmentFinding
+
+One reference to a path outside a repository or to an absolute path in a tracked text file.
+`kind` is `:outside` or `:machine_path` for violations, and `:absolute_path` for a
+candidate outside `SYSTEM_ROOTS` that requires review.
+"""
+struct ContainmentFinding
+    file::String
+    line::Int
+    kind::Symbol
+    match::String
 end
 
 """
@@ -388,6 +466,353 @@ function unversioned_areas(reports::Vector{DirectoryReport}, root::AbstractStrin
     return areas
 end
 
+"""
+    layout_path(root, rel) -> String
+
+Resolve a `/`-separated relative layout path `rel` under `root`.
+"""
+layout_path(root::AbstractString, rel::AbstractString) = joinpath(root, split(rel, '/')...)
+
+"""
+    top_layout_names() -> Set{String}
+
+Top-level directory names reserved by `LAYOUT_DIRECTORIES` and `LAYOUT_OPTIONAL`.
+"""
+function top_layout_names()
+    return Set{String}(
+        first(split(entry, '/')) for entry in (LAYOUT_DIRECTORIES..., LAYOUT_OPTIONAL...)
+    )
+end
+
+"""
+    is_valid_dated_note(name) -> Bool
+
+Whether `name` matches `YYYY-MM-DD-topic.md` with a valid calendar date.
+"""
+function is_valid_dated_note(name::AbstractString)
+    m = match(DATED_NOTE_PATTERN, name)
+    m === nothing && return false
+    year = parse(Int, m.captures[1])
+    month = parse(Int, m.captures[2])
+    day = parse(Int, m.captures[3])
+    try
+        Date(year, month, day)
+        return true
+    catch err
+        err isa ArgumentError || rethrow()
+        return false
+    end
+end
+
+"""
+    layout_file_content(rel) -> String
+
+Initial template text for a file in `LAYOUT_FILES`.
+"""
+function layout_file_content(rel::AbstractString)
+    if rel == "notes/00-index.md"
+        return "# Notes index\n\n" *
+               "- `worklog.md` — running state: where things stand, how to resume.\n"
+    end
+    rel == "notes/worklog.md" && return "# Worklog\n"
+    throw(ArgumentError("unknown layout file: $rel"))
+end
+
+"""
+    check_layout(root) -> Vector{LayoutFinding}
+
+Check `root` against the workspace layout and return findings in rule order. Throws
+`ArgumentError` if `root` is not a directory or is itself a git repository root.
+"""
+function check_layout(root::AbstractString)
+    isdir(root) || throw(ArgumentError("not a directory: $root"))
+    is_repository_root(root) &&
+        throw(ArgumentError("workspace root is a git repository: $root"))
+
+    findings = LayoutFinding[]
+    for entry in LAYOUT_DIRECTORIES
+        isdir(layout_path(root, entry)) ||
+            push!(findings, LayoutFinding(:missing_directory, entry, "directory missing"))
+    end
+    for entry in LAYOUT_FILES
+        isfile(layout_path(root, entry)) ||
+            push!(findings, LayoutFinding(:missing_file, entry, "file missing"))
+    end
+
+    reserved = top_layout_names()
+    projects = String[]
+    for dir in subdirectories(root)
+        name = basename(dir)
+        !(name in reserved) && is_repository_root(dir) && push!(projects, name)
+    end
+    sort!(projects)
+    if isempty(projects)
+        push!(
+            findings,
+            LayoutFinding(:project, "", "no project repository at the workspace root"),
+        )
+    elseif length(projects) >= 2
+        names = join(projects, ", ")
+        push!(
+            findings,
+            LayoutFinding(
+                :project,
+                "",
+                "$(length(projects)) repositories at the workspace root: $names",
+            ),
+        )
+    end
+
+    project_set = Set{String}(projects)
+    for name in sort(readdir(root))
+        startswith(name, '.') && continue
+        (name in reserved || name in project_set) && continue
+        push!(findings, LayoutFinding(:stray, name, "not part of the workspace layout"))
+    end
+
+    tmp_dir = joinpath(root, "tmp")
+    if isdir(tmp_dir)
+        entries = readdir(tmp_dir)
+        if !isempty(entries)
+            n = length(entries)
+            noun = n == 1 ? "entry" : "entries"
+            push!(findings, LayoutFinding(:tmp, "tmp", "$n $noun left in tmp/"))
+        end
+    end
+
+    notes_dir = joinpath(root, "notes")
+    index_path = joinpath(notes_dir, "00-index.md")
+    if isfile(index_path)
+        text = read(index_path, String)
+        listed = Set{String}()
+        for m in eachmatch(NOTE_LINK_PATTERN, text)
+            m.match == "00-index.md" || push!(listed, String(m.match))
+        end
+        present = Set{String}()
+        for name in readdir(notes_dir)
+            name == "00-index.md" && continue
+            endswith(name, ".md") || continue
+            path = joinpath(notes_dir, name)
+            isfile(path) && !islink(path) && push!(present, name)
+        end
+        for name in sort!(collect(setdiff(present, listed)))
+            push!(
+                findings,
+                LayoutFinding(
+                    :notes_index,
+                    "notes/$name",
+                    "not listed in notes/00-index.md",
+                ),
+            )
+        end
+        for name in sort!(collect(setdiff(listed, present)))
+            occursin(DATED_PREFIX_PATTERN, name) || continue
+            push!(
+                findings,
+                LayoutFinding(
+                    :notes_index,
+                    "notes/$name",
+                    "listed in notes/00-index.md but absent",
+                ),
+            )
+        end
+    end
+
+    if isdir(notes_dir)
+        for name in sort(readdir(notes_dir))
+            (name == "00-index.md" || name == "worklog.md") && continue
+            endswith(name, ".md") || continue
+            path = joinpath(notes_dir, name)
+            isfile(path) && !islink(path) || continue
+            is_valid_dated_note(name) || push!(
+                findings,
+                LayoutFinding(
+                    :notes_name,
+                    "notes/$name",
+                    "name is not YYYY-MM-DD-topic.md",
+                ),
+            )
+        end
+    end
+
+    return findings
+end
+
+"""
+    scaffold_layout(root) -> Vector{String}
+
+Create missing `LAYOUT_DIRECTORIES` and `LAYOUT_FILES` under `root` without modifying
+existing entries, returning the relative paths created in order. Throws `ArgumentError` if
+`root` is not a directory, is a git repository root, or a plain file blocks a directory.
+"""
+function scaffold_layout(root::AbstractString)
+    isdir(root) || throw(ArgumentError("not a directory: $root"))
+    is_repository_root(root) &&
+        throw(ArgumentError("workspace root is a git repository: $root"))
+
+    created = String[]
+    for entry in LAYOUT_DIRECTORIES
+        target = layout_path(root, entry)
+        isdir(target) && continue
+        (isfile(target) || islink(target)) &&
+            throw(ArgumentError("cannot create directory $entry: file exists at $target"))
+        mkpath(target)
+        push!(created, entry)
+    end
+
+    for entry in LAYOUT_FILES
+        target = layout_path(root, entry)
+        (ispath(target) || islink(target)) && continue
+        write(target, layout_file_content(entry))
+        push!(created, entry)
+    end
+
+    return created
+end
+
+"""
+    is_machine_path_word_char(c) -> Bool
+
+Whether `c` matches the ASCII token-continuation class `[\\w.-]`.
+"""
+function is_machine_path_word_char(c::Char)
+    return (isascii(c) && (isletter(c) || isdigit(c))) || c in ('_', '.', '-')
+end
+
+"""
+    is_machine_path_stop(c) -> Bool
+
+Whether `c` terminates a `:machine_path` match token.
+"""
+function is_machine_path_stop(c::Char)
+    return isspace(c) || c in ('"', '\'', '`', ')', '>', ']', '}', ',', ';')
+end
+
+"""
+    scan_self_containment(repo; home = homedir()) -> Vector{ContainmentFinding}
+
+Scan tracked text files in `repo` (plain files up to `MAX_SCANNED_BYTES` with no NUL in
+the first 8000 bytes) for climbs outside the repository, `home`-rooted machine paths, and
+absolute paths outside `SYSTEM_ROOTS`. Throws `ArgumentError` unless `repo` is a git
+repository root.
+"""
+function scan_self_containment(repo::AbstractString; home::AbstractString = homedir())
+    is_repository_root(repo) || throw(ArgumentError("not a git repository root: $repo"))
+
+    ok, payload = git(repo, "ls-files", "-z"; strip_output = false)
+    ok || return ContainmentFinding[]
+
+    clean_home = isempty(rstrip(home, '/')) ? "" : String(rstrip(home, '/'))
+    check_home = count(!isempty, split(clean_home, '/')) >= 2
+
+    findings = ContainmentFinding[]
+    files = sort!(String.(split(payload, '\0'; keepempty = false)))
+    for rel in files
+        full = layout_path(repo, rel)
+        !islink(full) && isfile(full) || continue
+        filesize(full) <= MAX_SCANNED_BYTES || continue
+        bytes = read(full)
+        length(bytes) <= MAX_SCANNED_BYTES || continue
+        limit = min(length(bytes), 8000)
+        any(==(0x00), @view bytes[1:limit]) && continue
+
+        depth = count(==('/'), rel)
+        for (lineno, line) in enumerate(eachline(IOBuffer(bytes)))
+            isvalid(line) || continue
+            hits = Tuple{Int, Int, ContainmentFinding}[]
+            machine_ranges = UnitRange{Int}[]
+
+            for m in eachmatch(RELATIVE_CLIMB_PATTERN, line)
+                climbs = div(ncodeunits(m.captures[1]), 3) + (m.captures[2] == ".." ? 1 : 0)
+                climbs > depth || continue
+                push!(
+                    hits,
+                    (
+                        m.offset,
+                        1,
+                        ContainmentFinding(rel, lineno, :outside, String(m.match)),
+                    ),
+                )
+            end
+
+            for m in eachmatch(DIR_CLIMB_PATTERN, line)
+                climbs = count("\"..\"", m.captures[1])
+                climbs > depth || continue
+                push!(
+                    hits,
+                    (
+                        m.offset,
+                        1,
+                        ContainmentFinding(rel, lineno, :outside, String(strip(m.match))),
+                    ),
+                )
+            end
+
+            if check_home
+                idx = firstindex(line)
+                while idx <= lastindex(line)
+                    r = findnext(clean_home, line, idx)
+                    r === nothing && break
+                    after = nextind(line, last(r))
+                    valid_end = if after > lastindex(line)
+                        true
+                    else
+                        c = line[after]
+                        c == '/' || !is_machine_path_word_char(c)
+                    end
+                    if valid_end
+                        stop = after
+                        while stop <= lastindex(line) && !is_machine_path_stop(line[stop])
+                            stop = nextind(line, stop)
+                        end
+                        end_idx = prevind(line, stop)
+                        push!(machine_ranges, first(r):end_idx)
+                        push!(
+                            hits,
+                            (
+                                first(r),
+                                2,
+                                ContainmentFinding(
+                                    rel,
+                                    lineno,
+                                    :machine_path,
+                                    String(line[first(r):end_idx]),
+                                ),
+                            ),
+                        )
+                        idx = stop
+                    else
+                        idx = nextind(line, first(r))
+                    end
+                end
+            end
+
+            for m in eachmatch(ABSOLUTE_PATH_PATTERN, line)
+                m.captures[1] in SYSTEM_ROOTS && continue
+                m_start = m.offset
+                m_end = m.offset + ncodeunits(m.match) - 1
+                any(r -> first(r) <= m_start && m_end <= last(r), machine_ranges) &&
+                    continue
+                push!(
+                    hits,
+                    (
+                        m.offset,
+                        3,
+                        ContainmentFinding(rel, lineno, :absolute_path, String(m.match)),
+                    ),
+                )
+            end
+
+            sort!(hits; by = h -> (h[1], h[2]))
+            for hit in hits
+                push!(findings, hit[3])
+            end
+        end
+    end
+
+    return findings
+end
+
 function print_report(report::DirectoryReport)
     if !report.is_repository
         println("\n", report.name)
@@ -497,18 +922,97 @@ function print_summary(reports::Vector{DirectoryReport}, root::AbstractString)
     return nothing
 end
 
+"""
+    print_scaffold(created) -> Nothing
+
+Print the `Scaffold` section listing the paths created by `scaffold_layout`.
+"""
+function print_scaffold(created::Vector{String})
+    println("Scaffold")
+    if isempty(created)
+        println("  nothing to create")
+    else
+        for path in created
+            println("  ", path)
+        end
+    end
+    println()
+    return nothing
+end
+
+"""
+    print_layout(findings) -> Nothing
+
+Print the `Layout` section summarizing deviations returned by `check_layout`.
+"""
+function print_layout(findings::Vector{LayoutFinding})
+    println("Layout")
+    if isempty(findings)
+        println("  conforms to the workspace layout")
+    else
+        for finding in findings
+            label = isempty(finding.path) ? "-" : finding.path
+            @printf("  %-28s: %s\n", label, finding.message)
+        end
+    end
+    println()
+    return nothing
+end
+
+"""
+    print_self_containment(results) -> Nothing
+
+Print the `Self-containment` section grouped per repository into outside-repository
+violations and absolute-path candidates to review.
+"""
+function print_self_containment(results::Vector{Pair{String, Vector{ContainmentFinding}}})
+    println("Self-containment")
+    if isempty(results)
+        println("  no repositories found")
+        println()
+        return nothing
+    end
+    for (name, findings) in results
+        println("\n", name)
+        outside = filter(f -> f.kind === :outside || f.kind === :machine_path, findings)
+        candidates = filter(f -> f.kind === :absolute_path, findings)
+        if isempty(outside) && isempty(candidates)
+            println("  no reference outside the repository")
+            continue
+        end
+        if !isempty(outside)
+            println("  Outside the repository")
+            for f in outside
+                println("    ", f.file, ":", f.line, "  ", f.match)
+            end
+        end
+        if !isempty(candidates)
+            println("  Absolute paths to review")
+            for f in candidates
+                println("    ", f.file, ":", f.line, "  ", f.match)
+            end
+        end
+    end
+    println()
+    return nothing
+end
+
 function print_help()
     println(
         """
-workspace-audit — git and artifact state of the projects under a workspace
+workspace-audit — git, artifact, layout and self-containment audit of a workspace
 
 Usage:
   julia run.jl workspace-audit [PATH] [options]
 
-  PATH             workspace root to audit (default: the parent of this repository)
-  --depth N        levels below the root to search for repositories (default: 2)
-  --dirty-only     report only directories with uncommitted, unpushed or removable state
-  --fetch          refresh remote-tracking refs first; needs the network and is slower
+  PATH              workspace root to audit (default: the parent of this repository)
+  --depth N         levels below the root to search for repositories (default: 2)
+  --dirty-only      report only directories with uncommitted, unpushed or removable state
+  --fetch           refresh remote-tracking refs first; needs the network and is slower
+  --layout          check the root against the workspace layout below
+  --scaffold        create the directories and notes files the layout lacks, then check it
+  --self-contained  scan the tracked text files of the root repository, or of the
+                    repositories directly under the root, for paths that lead outside
   -h, --help
 
 Each immediate subdirectory of the root is an area, searched --depth levels deep. The
@@ -516,10 +1020,39 @@ default of two suits a workspace whose areas each hold their repository one leve
 --depth 1 treats the areas themselves as the repositories. The walk never descends into a
 repository, and an area with no repository under it is reported as such.
 
+Workspace layout (checked by --layout, completed by --scaffold):
+  <workspace>/
+  ├── context/            # input material, read-only
+  │   ├── code/
+  │   └── knowledge/
+  ├── <project>/          # the git repository
+  ├── notes/              # 00-index.md, worklog.md, dated notes YYYY-MM-DD-topic.md
+  ├── paper/
+  ├── showcase/           # optional
+  ├── utilities/
+  ├── artefacts/
+  │   ├── data/
+  │   ├── plots/
+  │   └── runs/
+  └── tmp/                # scratch, empty between tasks
+
 Without --fetch the distance from the upstream branch is measured against the
 remote-tracking refs already stored, which may be out of date.
 
-The tool writes, commits and deletes nothing, and fetches only with --fetch.
+--self-contained reports two groups. A relative path that climbs out of the repository
+and a path under the home directory of the user count as findings. Other absolute paths
+outside the system directories are listed for review and do not change the return value:
+an example path in documentation is one.
+
+Without --scaffold the tool writes, commits and deletes nothing, and it fetches only with
+--fetch. --scaffold creates the missing directories and the two notes files of the
+layout; nothing that exists is modified.
+
+Return values:
+  0  no finding of a requested check
+  1  --layout, --scaffold or --self-contained has a finding; git is missing; PATH is not
+     a directory
+  2  usage error; a root that the requested check cannot take (--layout on a repository)
 """,
     )
     return nothing
@@ -528,13 +1061,16 @@ end
 """
     parse_args(args) -> NamedTuple
 
-Positional workspace root and the two flags. Throws `ArgumentError` on an unknown option
-or a second positional argument.
+Positional workspace root and command-line flags. Throws `ArgumentError` on an unknown
+option or a second positional argument.
 """
 function parse_args(args::Vector{String})
     root = nothing
     dirty_only = false
     fetch = false
+    layout = false
+    scaffold = false
+    self_contained = false
     help = false
     depth = 2
     expecting_depth = false
@@ -551,6 +1087,13 @@ function parse_args(args::Vector{String})
             dirty_only = true
         elseif arg == "--fetch"
             fetch = true
+        elseif arg == "--layout"
+            layout = true
+        elseif arg == "--scaffold"
+            scaffold = true
+            layout = true
+        elseif arg == "--self-contained"
+            self_contained = true
         elseif arg == "--depth"
             expecting_depth = true
         elseif startswith(arg, "--depth=")
@@ -567,7 +1110,7 @@ function parse_args(args::Vector{String})
         end
     end
     expecting_depth && throw(ArgumentError("--depth takes a positive integer"))
-    return (; root, dirty_only, fetch, depth, help)
+    return (; root, dirty_only, fetch, depth, layout, scaffold, self_contained, help)
 end
 
 """
@@ -618,11 +1161,45 @@ function main(args::Vector{String} = ARGS)
             "No subdirectories found.",
         )
         println()
-        return 0
+    else
+        foreach(print_report, shown)
+        print_summary(reports, root)
     end
-    foreach(print_report, shown)
-    print_summary(reports, root)
-    return 0
+
+    issue_found = false
+    try
+        if options.scaffold
+            created = scaffold_layout(root)
+            print_scaffold(created)
+        end
+        if options.layout || options.scaffold
+            findings = check_layout(root)
+            print_layout(findings)
+            isempty(findings) || (issue_found = true)
+        end
+        if options.self_contained
+            repos = if is_repository_root(root)
+                [root]
+            else
+                filter(is_repository_root, subdirectories(root))
+            end
+            results = Pair{String, Vector{ContainmentFinding}}[]
+            for repo in repos
+                label = basename(rstrip(repo, '/'))
+                findings = scan_self_containment(repo)
+                if any(f -> f.kind === :outside || f.kind === :machine_path, findings)
+                    issue_found = true
+                end
+                push!(results, label => findings)
+            end
+            print_self_containment(results)
+        end
+    catch err
+        err isa ArgumentError || rethrow()
+        println(stderr, "workspace-audit: ", err.msg)
+        return 2
+    end
+    return issue_found ? 1 : 0
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
