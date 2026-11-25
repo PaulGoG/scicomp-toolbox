@@ -58,11 +58,14 @@ const NOTE_LINK_PATTERN = r"(?<![\w./-])[\w.-]+\.md\b"
 const DATED_PREFIX_PATTERN = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}-"
 # Dated note filename pattern YYYY-MM-DD-topic.md with captured date fields.
 const DATED_NOTE_PATTERN = r"^([0-9]{4})-([0-9]{2})-([0-9]{2})-.+\.md$"
-# Relative path containing one or more parent-directory climbs.
-const RELATIVE_CLIMB_PATTERN = r"(?<![\w/.~-])(?:\./)*((?:\.\./)+)([\w.@+-][\w./@+-]*)?"
-# Julia joinpath from @__DIR__ through quoted parent-directory arguments, across line
-# breaks.
-const DIR_CLIMB_PATTERN = r"@__DIR__\s*,\s*((?:\"(?:\.\./)*\.\.\"\s*,?\s*)+)"
+# Relative path containing one or more parent-directory climbs, or the step-only ./..
+const RELATIVE_CLIMB_PATTERN =
+    r"(?<![\w/.~-])(?:\./)*(?:((?:\.\./)+)([\w.@+-][\w./@+-]*)?|(?<=\./)\.\.(?![\w/.-]))"
+# Julia joinpath from @__DIR__ through its literal string arguments, without escapes or
+# interpolation, across line breaks.
+const DIR_CLIMB_PATTERN = r"@__DIR__\s*,\s*((?:\"[^\"\\$\n]*\"\s*,?\s*)+)"
+# One literal string argument inside a DIR_CLIMB_PATTERN capture.
+const QUOTED_ARGUMENT_PATTERN = r"\"([^\"]*)\""
 # Julia @__DIR__ interpolated or concatenated into a string followed by "/.." segments.
 const DIR_STRING_CLIMB_PATTERN = r"@__DIR__(?:\)|\s*\*\s*\")((?:/\.\.)+)"
 # Quoted lone parent reference in a TOML file, as in path = "..".
@@ -746,19 +749,21 @@ end
 """
     climb_target_kind(rel, path, tracked, reserved) -> Union{Symbol, Nothing}
 
-Judge the relative `path`, which begins with `../`, found in the file `rel`. Trailing `.`
-of its last component, such as a full stop, are dropped; a last component of three or
-more dots is `..` followed by one. Resolved from the directory of `rel` it is `:outside`
-when it leads above the repository root, and no finding when it names a tracked path.
+Judge the relative `path`, which climbs with `../` or is `./..`, found in the file `rel`.
+Trailing `.` of its last component, such as a full stop, are dropped; a last component of
+three or more dots is `..` followed by one when it comes after a `..`, and an ellipsis,
+dropped, after a name. Resolved from the directory of `rel` it is `:outside` when it
+leads above the repository root.
 
-Otherwise the path is also read from the repository root, as a run configuration, a shell
-command or a relative path in Julia file I/O reads it from a working directory at the
-root, and the first component below its climbs is taken. When that component is a
-top-level workspace name in `reserved` the result is `:outside`, or `:unresolved` when the
-path lies in a tracked directory other than the root, where it may name a file that a
+Otherwise it lies in the repository when it names a tracked path or lies in a tracked
+directory other than the root. The path is also read from the repository root, as a run
+configuration, a shell command or a relative path in Julia file I/O reads it from a
+working directory at the root, and the first component below its climbs is taken. When
+that component is a top-level workspace name in `reserved` the result is `:outside`, or
+`:unresolved` when the path lies in the repository, where it may name a file that a
 script writes beside tracked ones (a figure saved one level up into a tracked `paper/`):
-both readings are plausible there, and only a reader can tell. Other paths in a tracked
-directory are no finding; the rest are `:unresolved`. Existence is judged against
+both readings are plausible there, and only a reader can tell. Other paths in the
+repository are no finding; the rest are `:unresolved`. Existence is judged against
 `tracked`, never the checkout, so the result does not depend on untracked or ignored
 files.
 """
@@ -771,7 +776,8 @@ function climb_target_kind(
     parts = split(rstrip(path, '/'), '/')
     final = parts[end]
     if all(==('.'), final) && length(final) > 2
-        parts[end] = ".."
+        # dots after a climb are a climb and a full stop, after a name an ellipsis
+        parts[end] = length(parts) > 1 && parts[end - 1] == ".." ? ".." : ""
     elseif !(final in (".", ".."))
         parts[end] = rstrip(final, '.')
     end
@@ -781,13 +787,12 @@ function climb_target_kind(
     from_file = rstrip(from_file, '/')
     isempty(from_file) && (from_file = ".")
     (from_file == ".." || startswith(from_file, "../")) && return :outside
-    from_file in tracked && return nothing
     parent = dirname(from_file)
-    in_tracked_directory = !isempty(parent) && parent in tracked
+    in_repository = from_file in tracked || (!isempty(parent) && parent in tracked)
     below = filter(part -> part != "..", split(normpath(clean), '/'))
     workspace = !isempty(below) && first(below) in reserved
-    workspace && return in_tracked_directory ? :unresolved : :outside
-    return in_tracked_directory ? nothing : :unresolved
+    workspace && return in_repository ? :unresolved : :outside
+    return in_repository ? nothing : :unresolved
 end
 
 """
@@ -800,23 +805,32 @@ function within_any(ranges::Vector{UnitRange{Int}}, first_unit::Integer, last_un
 end
 
 """
-    dir_climb_hits(rel, text, depth) -> (hits, ranges)
+    dir_climb_hits(rel, text) -> (hits, ranges)
 
-Climbs `joinpath(@__DIR__, "..", ...)` with more `..` than `depth` in the whole `text` of
-the file `rel`, so that a call wrapped over several lines is seen; text that is not valid
-UTF-8 elsewhere in the file does not hide them. Each hit is `(line, position, rank,
-finding)`, line and position being those of `@__DIR__`; the `match` of the finding has
-every run of whitespace collapsed to one space. `ranges` are the code units of every
-match, hit or not, in which the per-line forms are not reported again.
+Calls `joinpath(@__DIR__, ...)` in the whole `text` of the file `rel` whose literal string
+arguments, joined and resolved from the directory of `rel`, lead above the repository
+root; a call wrapped over several lines is seen, and text that is not valid UTF-8
+elsewhere in the file does not hide it. A call with an absolute argument is left to the
+absolute-path form. Each hit is `(line, position, rank, finding)`, line and position
+being those of `@__DIR__`; the `match` of the finding has every run of whitespace
+collapsed to one space. `ranges` are the code units of every match, hit or not: relative
+paths inside them are anchored to `@__DIR__`, so the per-line forms do not judge them
+again.
 """
-function dir_climb_hits(rel::AbstractString, text::String, depth::Integer)
+function dir_climb_hits(rel::AbstractString, text::String)
     hits = Tuple{Int, Int, Int, ContainmentFinding}[]
     ranges = UnitRange{Int}[]
     units = codeunits(text)
     newline = UInt8('\n')
+    directory = dirname(rel)
     for m in eachmatch(DIR_CLIMB_PATTERN, text)
         push!(ranges, m.offset:(m.offset + ncodeunits(m.match) - 1))
-        count("..", m.captures[1]) > depth || continue
+        arguments =
+            [a.captures[1] for a in eachmatch(QUOTED_ARGUMENT_PATTERN, m.captures[1])]
+        any(a -> startswith(a, '/'), arguments) && continue
+        joined = join(arguments, '/')
+        target = normpath(isempty(directory) ? joined : directory * "/" * joined)
+        (target == ".." || startswith(target, "../")) || continue
         lineno = 1 + count(==(newline), @view units[1:(m.offset - 1)])
         line_start = something(findprev(==(newline), units, m.offset - 1), 0)
         matched = String(strip(replace(m.match, r"\s+" => " ")))
@@ -834,11 +848,13 @@ and the rank of `KIND_ORDER`. A text file (a plain file up to `MAX_SCANNED_BYTES
 NUL in the first 8000 bytes) is searched line by line, lines that are not valid UTF-8
 skipped, for
 
-  - a relative path climbing with `../`, judged by `climb_target_kind` on the whole
-    path, inner `..` and `.` steps included;
+  - a relative path climbing with `../`, or `./..`, judged by `climb_target_kind` on the
+    whole path, inner `..` and `.` steps included;
   - a quoted lone `..` in a `.toml` file at the repository root: `:outside`;
-  - `joinpath(@__DIR__, "..", ...)`, matched on the whole text, and `@__DIR__` joined as
-    a string with `/..`: `:outside` when they climb above the root;
+  - `joinpath(@__DIR__, ...)` through literal string arguments, matched on the whole
+    text, and `@__DIR__` joined as a string with `/..`: `:outside` when they climb above
+    the root; a relative path among those arguments is anchored to the file and not
+    judged again by the first form;
   - a path under `home`, when it has at least two components: `:machine_path`;
   - an absolute path outside `SYSTEM_ROOTS`: `:absolute_path`; a path written from `~`,
     `\$HOME` or `\${HOME}`: `:home_path`.
@@ -881,7 +897,7 @@ function scan_self_containment(repo::AbstractString; home::AbstractString = home
         depth = count(==('/'), rel)
         # a quoted lone ".." climbs one level, so only out of a file at the root
         toml_climb = endswith(rel, ".toml") && depth < 1
-        hits, dir_ranges = dir_climb_hits(rel, text, depth)
+        hits, dir_ranges = dir_climb_hits(rel, text)
         # code unit at which each line starts, to place per-line matches in `dir_ranges`
         line_starts = [1; findall(==(UInt8('\n')), codeunits(text)) .+ 1]
         for (lineno, line) in enumerate(eachline(IOBuffer(text)))
@@ -1215,7 +1231,8 @@ repository, a relative path that reaches a workspace directory such as notes/ wh
 from the root, and any path under the home directory of the user. Absolute paths to
 review lists the other absolute paths outside the system directories and the paths
 written from ~ or \$HOME, such as an example path in documentation. Relative paths to
-review lists a relative path that stays within the repository but names nothing in it.
+review lists a relative path that stays within the repository but names nothing in it,
+and one to or into a tracked directory named like a workspace directory, such as paper/.
 Only the first group changes the return value. The scan does not see a path assembled at
 run time, a dirname chain, a path in a line that is not valid UTF-8, or a file larger
 than 5 MiB.

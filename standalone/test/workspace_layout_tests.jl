@@ -442,12 +442,15 @@ end
     ]
     @test sort(hits(result)) == sort(expected)
 
+    # a tracked directory named like the layout: read from the root, the path still
+    # leads into the workspace, so it is listed for review
     repo = make_repository(mktempdir())
     write_fixture(repo, "artefacts/runs/keep", ["x"])
     line = "output_dir = \"" * up(1) * "artefacts/runs\""
     write_fixture(repo, "configs/run.toml", [line])
     commit_fixtures(repo)
-    @test isempty(scan_self_containment(repo; home = "/home/nobody"))
+    @test hits(scan_self_containment(repo; home = "/home/nobody")) ==
+          [("configs/run.toml", 1, :unresolved)]
 end
 
 @testset "workspace-audit: home written with a tilde or a variable" begin
@@ -563,7 +566,8 @@ end
 
 # Cases of the third review (2026-11-25).
 @testset "workspace-audit: full stops, the root as a directory, CRLF" begin
-    # `..` followed by a full stop keeps its climb
+    # `..` followed by a full stop keeps its climb; three dots after a name are an
+    # ellipsis, which does not cancel the name before it
     repo = make_repository(mktempdir())
     write_fixture(
         repo,
@@ -572,7 +576,7 @@ end
     )
     commit_fixtures(repo)
     @test hits(scan_self_containment(repo; home = "/home/nobody")) ==
-          [("docs/guide.md", 1, :outside)]
+          [("docs/guide.md", 1, :outside), ("docs/guide.md", 2, :outside)]
 
     # the root is no tracked directory that excuses a bare layout name
     repo = make_repository(mktempdir())
@@ -592,4 +596,79 @@ end
     commit_fixtures(repo)
     @test hits(scan_self_containment(repo; home = "/home/nobody")) ==
           [("scripts/run.jl", 3, :outside)]
+end
+
+# Cases of the fourth review (2026-11-25); each expected kind follows from resolving the
+# path with normpath from the file, and from the repository root unless it is anchored to
+# @__DIR__.
+@testset "workspace-audit: anchored arguments, tracked layout names, step-only climbs" begin
+    # an argument of joinpath(@__DIR__, ...) is anchored to the file: into an untracked
+    # paper/ of the repository it is no finding, above the root it is one
+    repo = make_repository(mktempdir())
+    write_fixture(
+        repo,
+        "scripts/plot.jl",
+        [
+            "a = joinpath(@__DIR__" * ", \"" * up(1) * "paper/fig.pdf\")",
+            "b = joinpath(@__DIR__" * ", \"" * up(2) * "notes/x.md\")",
+        ],
+    )
+    commit_fixtures(repo)
+    result = scan_self_containment(repo; home = "/home/nobody")
+    @test hits(result) == [("scripts/plot.jl", 2, :outside)]
+    @test startswith(only(result).match, "@__DIR__")
+
+    # a tracked directory named like the workspace layout, named itself: listed for review
+    repo = make_repository(mktempdir())
+    write_fixture(repo, "paper/.gitkeep", String[])
+    write_fixture(
+        repo,
+        "scripts/plot.jl",
+        ["f = joinpath(\"" * up(1)[1:2] * "/paper\", \"x\")"],
+    )
+    write_fixture(
+        repo,
+        "configs/run.toml",
+        ["out = \"" * up(1) * "paper\"", "dir = \"" * up(1) * "paper/.\""],
+    )
+    commit_fixtures(repo)
+    @test hits(scan_self_containment(repo; home = "/home/nobody")) == [
+        ("configs/run.toml", 1, :unresolved),
+        ("configs/run.toml", 2, :unresolved),
+        ("scripts/plot.jl", 1, :unresolved),
+    ]
+
+    # step-only climbs above the root
+    repo = make_repository(mktempdir())
+    write_fixture(repo, "Project.toml", ["[sources]", "X = {path = \"./" * ".." * "\"}"])
+    write_fixture(repo, "README.md", ["cd ./" * ".."])
+    commit_fixtures(repo)
+    @test hits(scan_self_containment(repo; home = "/home/nobody")) ==
+          [("Project.toml", 2, :outside), ("README.md", 1, :outside)]
+
+    # code units, not characters, and CRLF counted: a shift of 20 units would report the
+    # argument inside the joinpath and hide the path after it, which lies within the
+    # length of the joinpath range
+    repo = make_repository(mktempdir())
+    mkpath(joinpath(repo, "scripts"))
+    call = "x = joinpath(@__DIR__" * ", \"" * up(1) * "..\")"
+    after = " * \"" * up(1) * "notes/x.md\"\r\n"
+    write(joinpath(repo, "scripts", "run.jl"), repeat("# é\r\n", 20) * call * after)
+    commit_fixtures(repo)
+    result = scan_self_containment(repo; home = "/home/nobody")
+    @test [(f.line, f.kind, f.match) for f in result] == [
+        (21, :outside, "@__DIR__, \"" * up(1) * "..\""),
+        (21, :outside, up(1) * "notes/x.md"),
+    ]
+
+    # a byte that is not UTF-8 before the call
+    repo = make_repository(mktempdir())
+    mkpath(joinpath(repo, "src"))
+    write(
+        joinpath(repo, "src", "a.jl"),
+        "# " * String([0xff]) * "\nx = joinpath(@__DIR__" * ", \"..\", \"..\")\n",
+    )
+    commit_fixtures(repo)
+    @test hits(scan_self_containment(repo; home = "/home/nobody")) ==
+          [("src/a.jl", 2, :outside)]
 end

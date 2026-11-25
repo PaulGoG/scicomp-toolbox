@@ -165,8 +165,9 @@ name is not `YYYY-MM-DD-topic.md`.
 which set the exit status:
 
 - a relative path with more parent-directory steps than the file lies deep, also when
-  written with `@__DIR__` and `".."` components in Julia source, as a string appended to
-  `@__DIR__`, or as a lone `".."` in a TOML file at the root;
+  written in Julia source as literal arguments of `joinpath(@__DIR__, ...)` or as a string
+  appended to `@__DIR__`, or as a lone `".."` in a TOML file at the root (a path anchored
+  to `@__DIR__` is judged from its file only);
 - a relative path that stays inside the repository when read from its file, names no
   tracked path, lies in no tracked directory other than the root, and leads to one of the
   directories of the tree above: read from the repository root, as a configuration or a
@@ -176,10 +177,10 @@ which set the exit status:
 
 Listed for review without changing the exit status, since an example path in
 documentation is one: other absolute paths outside the system directories, paths written
-with `~` or `$HOME`, relative paths that name nothing in the repository, and a path into
-a tracked directory named like an entry of the tree above (a figure that a script saves one
-level up into a tracked `paper/`), which leads into the workspace when read from the
-repository root.
+with `~` or `$HOME`, relative paths that name nothing in the repository, and a path to or
+into a tracked directory named like an entry of the tree above (a figure that a script
+saves one level up into a tracked `paper/`), which leads into the workspace when read from
+the repository root.
 Existence is judged on the tracked files, so an untracked or ignored directory hides
 nothing.
 
