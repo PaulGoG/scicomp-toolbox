@@ -4,7 +4,8 @@
 # from the upstream branch, stashes, untracked weight and regenerable backup artifacts, so
 # that unsynced work and deletable leftovers are visible in one command. On request it
 # checks the root against the workspace layout below, creates what the layout lacks, and
-# scans the tracked files of a repository for paths that lead outside it.
+# scans the tracked files of a repository for paths that lead outside it, listing other
+# absolute, home-relative and unresolved relative paths for review.
 #
 # Workspace layout:
 #   <workspace>/
@@ -18,6 +19,7 @@
 #   └── tmp/                       # scratch, empty between tasks
 #
 # Options: --depth N, --dirty-only, --fetch, --layout, --scaffold, --self-contained.
+# --scaffold needs the workspace root as PATH, so that it writes only where pointed.
 # Return values: 0, or 1 when a requested check has a finding, when git is missing or
 # when the root is not a directory; 2 on invalid arguments and on a root that --layout,
 # --scaffold or --self-contained cannot take.
@@ -53,15 +55,25 @@ const SYSTEM_ROOTS =
 # Markdown note filenames referenced as standalone names in notes/00-index.md.
 const NOTE_LINK_PATTERN = r"(?<![\w./-])[\w.-]+\.md\b"
 # Leading ISO-date prefix identifying dated note references.
-const DATED_PREFIX_PATTERN = r"^\d{4}-\d{2}-\d{2}-"
+const DATED_PREFIX_PATTERN = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}-"
 # Dated note filename pattern YYYY-MM-DD-topic.md with captured date fields.
-const DATED_NOTE_PATTERN = r"^(\d{4})-(\d{2})-(\d{2})-.+\.md$"
+const DATED_NOTE_PATTERN = r"^([0-9]{4})-([0-9]{2})-([0-9]{2})-.+\.md$"
 # Relative path containing one or more parent-directory climbs.
 const RELATIVE_CLIMB_PATTERN = r"(?<![\w/.~-])(?:\./)*((?:\.\./)+)([\w.@+-][\w./@+-]*)?"
-# Julia @__DIR__ joinpath climb using one or more ".." segments.
-const DIR_CLIMB_PATTERN = r"@__DIR__\s*,\s*((?:\"\.\.\"\s*,?\s*)+)"
+# Julia joinpath from @__DIR__ through quoted parent-directory arguments, across line
+# breaks.
+const DIR_CLIMB_PATTERN = r"@__DIR__\s*,\s*((?:\"(?:\.\./)*\.\.\"\s*,?\s*)+)"
+# Julia @__DIR__ interpolated or concatenated into a string followed by "/.." segments.
+const DIR_STRING_CLIMB_PATTERN = r"@__DIR__(?:\)|\s*\*\s*\")((?:/\.\.)+)"
+# Quoted lone parent reference in a TOML file, as in path = "..".
+const TOML_PARENT_PATTERN = r"[\"']\.\.[\"']"
 # Absolute filesystem path starting a line or following a delimiter character.
 const ABSOLUTE_PATH_PATTERN = r"(?<![^\s\"'`=(\[{,<>|])/([A-Za-z][\w.-]*)(/[\w.@+-]+)+"
+# Path written from the home directory of the user through ~, $HOME or ${HOME}.
+const HOME_PATH_PATTERN = r"(?<![\w/.-])(~|\$HOME|\$\{HOME\})/[\w.@+-]+(?:/[\w.@+-]+)*"
+# Rank of each ContainmentFinding kind among findings at one position of a line.
+const KIND_ORDER =
+    (outside = 1, machine_path = 2, absolute_path = 3, home_path = 4, unresolved = 5)
 
 """
     Leftover
@@ -118,9 +130,11 @@ end
 """
     ContainmentFinding
 
-One reference to a path outside a repository or to an absolute path in a tracked text file.
-`kind` is `:outside` or `:machine_path` for violations, and `:absolute_path` for a
-candidate outside `SYSTEM_ROOTS` that requires review.
+One reference to a path outside a repository, or to a path to review, in a tracked file.
+`kind` is `:outside` or `:machine_path` for violations; `:absolute_path` (outside
+`SYSTEM_ROOTS`), `:home_path` and `:unresolved` mark candidates listed for review, which
+do not affect the exit status. `line` is 0 for a finding about a symbolic link, whose
+`match` is the link target.
 """
 struct ContainmentFinding
     file::String
@@ -643,19 +657,28 @@ end
 
 Create missing `LAYOUT_DIRECTORIES` and `LAYOUT_FILES` under `root` without modifying
 existing entries, returning the relative paths created in order. Throws `ArgumentError` if
-`root` is not a directory, is a git repository root, or a plain file blocks a directory.
+`root` is not a directory, is a git repository root, or holds an entry of
+`LAYOUT_DIRECTORIES` that is not a directory (a plain file, or a symbolic link that does
+not lead to one); every entry is examined first, so that nothing is created in that case.
 """
 function scaffold_layout(root::AbstractString)
     isdir(root) || throw(ArgumentError("not a directory: $root"))
     is_repository_root(root) &&
         throw(ArgumentError("workspace root is a git repository: $root"))
 
+    for entry in LAYOUT_DIRECTORIES
+        target = layout_path(root, entry)
+        (ispath(target) || islink(target)) &&
+            !isdir(target) &&
+            throw(
+                ArgumentError("cannot create directory $entry: $target is not a directory"),
+            )
+    end
+
     created = String[]
     for entry in LAYOUT_DIRECTORIES
         target = layout_path(root, entry)
         isdir(target) && continue
-        (isfile(target) || islink(target)) &&
-            throw(ArgumentError("cannot create directory $entry: file exists at $target"))
         mkpath(target)
         push!(created, entry)
     end
@@ -673,10 +696,11 @@ end
 """
     is_machine_path_word_char(c) -> Bool
 
-Whether `c` matches the ASCII token-continuation class `[\\w.-]`.
+Whether `c` continues a token as `[\\w.-]` does under Unicode classes: a letter, a
+numeric character, `_`, `.` or `-`.
 """
 function is_machine_path_word_char(c::Char)
-    return (isascii(c) && (isletter(c) || isdigit(c))) || c in ('_', '.', '-')
+    return isletter(c) || isnumeric(c) || c in ('_', '.', '-')
 end
 
 """
@@ -689,64 +713,132 @@ function is_machine_path_stop(c::Char)
 end
 
 """
+    link_leaves_repository(rel, target) -> Bool
+
+Whether a symbolic link tracked at `rel` (relative to the repository root, `/`
+separators) with link text `target` leads outside the repository: an absolute target, or
+a relative one that resolves above the root.
+"""
+function link_leaves_repository(rel::AbstractString, target::AbstractString)
+    isabspath(target) && return true
+    resolved = normpath(joinpath(dirname(rel), target))
+    return resolved == ".." || startswith(resolved, "../")
+end
+
+"""
+    climb_target_kind(repo, rel, climbs, tail, reserved) -> Union{Symbol, Nothing}
+
+Judge a relative path in the file `rel` that climbs `climbs` levels, at most the depth of
+`rel`, then names `tail`; trailing `.` of `tail`, such as a full stop, are dropped.
+Returns `nothing` when the target exists in `repo`; `:outside` when the first component
+of `tail` is a top-level workspace name in `reserved`, since read from the repository root
+the path leads into the workspace around it; `:unresolved` otherwise.
+"""
+function climb_target_kind(
+    repo::AbstractString,
+    rel::AbstractString,
+    climbs::Integer,
+    tail::AbstractString,
+    reserved::Set{String},
+)
+    rest = rstrip(tail, '.')
+    target = normpath(dirname(rel) * "/" * repeat("../", climbs) * rest)
+    ispath(joinpath(repo, target)) && return nothing
+    return first(split(rest, '/')) in reserved ? :outside : :unresolved
+end
+
+"""
+    within_any(ranges, first_unit, last_unit) -> Bool
+
+Whether the code-unit range `first_unit:last_unit` lies inside one of `ranges`.
+"""
+function within_any(ranges::Vector{UnitRange{Int}}, first_unit::Integer, last_unit::Integer)
+    return any(r -> first(r) <= first_unit && last_unit <= last(r), ranges)
+end
+
+"""
+    dir_climb_hits(rel, text, depth) -> Vector{Tuple{Int, Int, Int, ContainmentFinding}}
+
+Climbs `joinpath(@__DIR__, "..", ...)` with more `..` than `depth` in the whole `text` of
+the file `rel`, so that a call wrapped over several lines is seen. Each hit is
+`(line, position, rank, finding)`, line and position being those of `@__DIR__`; the
+`match` of the finding has every run of whitespace collapsed to one space.
+"""
+function dir_climb_hits(rel::AbstractString, text::String, depth::Integer)
+    hits = Tuple{Int, Int, Int, ContainmentFinding}[]
+    units = codeunits(text)
+    newline = UInt8('\n')
+    for m in eachmatch(DIR_CLIMB_PATTERN, text)
+        count("..", m.captures[1]) > depth || continue
+        lineno = 1 + count(==(newline), @view units[1:(m.offset - 1)])
+        line_start = something(findprev(==(newline), units, m.offset - 1), 0)
+        matched = String(strip(replace(m.match, r"\s+" => " ")))
+        finding = ContainmentFinding(rel, lineno, :outside, matched)
+        push!(hits, (lineno, m.offset - line_start, KIND_ORDER.outside, finding))
+    end
+    return hits
+end
+
+"""
     scan_self_containment(repo; home = homedir()) -> Vector{ContainmentFinding}
 
-Scan tracked text files in `repo` (plain files up to `MAX_SCANNED_BYTES` with no NUL in
-the first 8000 bytes) for climbs outside the repository, `home`-rooted machine paths, and
-absolute paths outside `SYSTEM_ROOTS`. Throws `ArgumentError` unless `repo` is a git
-repository root.
+Scan the files tracked in `repo`; findings are sorted by file, line, position in the line
+and the rank of `KIND_ORDER`. A text file (a plain file up to `MAX_SCANNED_BYTES` with no
+NUL in the first 8000 bytes) is searched line by line, lines that are not valid UTF-8
+skipped, for
+
+  - a relative path climbing with `../`: `:outside` when it climbs more levels than the
+    file has directory components; otherwise, when a path follows, nothing if that path
+    exists, `:outside` if it starts with a top-level workspace name, else `:unresolved`;
+  - a quoted lone `..` in a `.toml` file at the repository root: `:outside`;
+  - `joinpath(@__DIR__, "..", ...)`, matched on the whole text, and `@__DIR__` joined as
+    a string with `/..`: `:outside` when they climb above the root;
+  - a path under `home`, when it has at least two components: `:machine_path`;
+  - an absolute path outside `SYSTEM_ROOTS`: `:absolute_path`; a path written from `~`,
+    `\$HOME` or `\${HOME}`: `:home_path`.
+
+A candidate inside a `:machine_path` match of the same line is not reported. A tracked
+symbolic link is not read: its target is `:outside`, with `line` 0, when absolute or when
+it resolves above the root. Throws `ArgumentError` unless `repo` is a git repository root,
+and when `git ls-files` fails.
 """
 function scan_self_containment(repo::AbstractString; home::AbstractString = homedir())
     is_repository_root(repo) || throw(ArgumentError("not a git repository root: $repo"))
 
     ok, payload = git(repo, "ls-files", "-z"; strip_output = false)
-    ok || return ContainmentFinding[]
+    ok || throw(ArgumentError("git ls-files failed in $repo"))
 
     clean_home = isempty(rstrip(home, '/')) ? "" : String(rstrip(home, '/'))
     check_home = count(!isempty, split(clean_home, '/')) >= 2
+    reserved = top_layout_names()
 
     findings = ContainmentFinding[]
     files = sort!(String.(split(payload, '\0'; keepempty = false)))
     for rel in files
         full = layout_path(repo, rel)
-        !islink(full) && isfile(full) || continue
+        if islink(full)
+            target = readlink(full)
+            link_leaves_repository(rel, target) &&
+                push!(findings, ContainmentFinding(rel, 0, :outside, target))
+            continue
+        end
+        isfile(full) || continue
         filesize(full) <= MAX_SCANNED_BYTES || continue
         bytes = read(full)
         length(bytes) <= MAX_SCANNED_BYTES || continue
         limit = min(length(bytes), 8000)
         any(==(0x00), @view bytes[1:limit]) && continue
+        # String takes over the buffer of `bytes`, which is not used afterwards
+        text = String(bytes)
 
         depth = count(==('/'), rel)
-        for (lineno, line) in enumerate(eachline(IOBuffer(bytes)))
+        # a quoted lone ".." climbs one level, so only out of a file at the root
+        toml_climb = endswith(rel, ".toml") && depth < 1
+        hits = Tuple{Int, Int, Int, ContainmentFinding}[]
+        isvalid(text) && append!(hits, dir_climb_hits(rel, text, depth))
+        for (lineno, line) in enumerate(eachline(IOBuffer(text)))
             isvalid(line) || continue
-            hits = Tuple{Int, Int, ContainmentFinding}[]
             machine_ranges = UnitRange{Int}[]
-
-            for m in eachmatch(RELATIVE_CLIMB_PATTERN, line)
-                climbs = div(ncodeunits(m.captures[1]), 3) + (m.captures[2] == ".." ? 1 : 0)
-                climbs > depth || continue
-                push!(
-                    hits,
-                    (
-                        m.offset,
-                        1,
-                        ContainmentFinding(rel, lineno, :outside, String(m.match)),
-                    ),
-                )
-            end
-
-            for m in eachmatch(DIR_CLIMB_PATTERN, line)
-                climbs = count("\"..\"", m.captures[1])
-                climbs > depth || continue
-                push!(
-                    hits,
-                    (
-                        m.offset,
-                        1,
-                        ContainmentFinding(rel, lineno, :outside, String(strip(m.match))),
-                    ),
-                )
-            end
 
             if check_home
                 idx = firstindex(line)
@@ -766,20 +858,15 @@ function scan_self_containment(repo::AbstractString; home::AbstractString = home
                             stop = nextind(line, stop)
                         end
                         end_idx = prevind(line, stop)
-                        push!(machine_ranges, first(r):end_idx)
-                        push!(
-                            hits,
-                            (
-                                first(r),
-                                2,
-                                ContainmentFinding(
-                                    rel,
-                                    lineno,
-                                    :machine_path,
-                                    String(line[first(r):end_idx]),
-                                ),
-                            ),
+                        # ends at the last code unit of the last character
+                        push!(machine_ranges, first(r):(stop - 1))
+                        finding = ContainmentFinding(
+                            rel,
+                            lineno,
+                            :machine_path,
+                            String(line[first(r):end_idx]),
                         )
+                        push!(hits, (lineno, first(r), KIND_ORDER.machine_path, finding))
                         idx = stop
                     else
                         idx = nextind(line, first(r))
@@ -787,26 +874,57 @@ function scan_self_containment(repo::AbstractString; home::AbstractString = home
                 end
             end
 
-            for m in eachmatch(ABSOLUTE_PATH_PATTERN, line)
-                m.captures[1] in SYSTEM_ROOTS && continue
-                m_start = m.offset
-                m_end = m.offset + ncodeunits(m.match) - 1
-                any(r -> first(r) <= m_start && m_end <= last(r), machine_ranges) &&
+            for m in eachmatch(RELATIVE_CLIMB_PATTERN, line)
+                tail = m.captures[2]
+                climbs = div(ncodeunits(m.captures[1]), 3) + (tail == ".." ? 1 : 0)
+                kind = if climbs > depth
+                    :outside
+                elseif tail === nothing || isempty(tail) || tail == ".."
+                    nothing
+                else
+                    climb_target_kind(repo, rel, climbs, tail, reserved)
+                end
+                kind === nothing && continue
+                last_unit = m.offset + ncodeunits(m.match) - 1
+                kind === :unresolved &&
+                    within_any(machine_ranges, m.offset, last_unit) &&
                     continue
-                push!(
-                    hits,
-                    (
-                        m.offset,
-                        3,
-                        ContainmentFinding(rel, lineno, :absolute_path, String(m.match)),
-                    ),
-                )
+                finding = ContainmentFinding(rel, lineno, kind, String(m.match))
+                push!(hits, (lineno, m.offset, KIND_ORDER[kind], finding))
             end
 
-            sort!(hits; by = h -> (h[1], h[2]))
-            for hit in hits
-                push!(findings, hit[3])
+            for m in eachmatch(DIR_STRING_CLIMB_PATTERN, line)
+                count("/..", m.captures[1]) > depth || continue
+                finding = ContainmentFinding(rel, lineno, :outside, String(m.match))
+                push!(hits, (lineno, m.offset, KIND_ORDER.outside, finding))
             end
+
+            if toml_climb
+                for m in eachmatch(TOML_PARENT_PATTERN, line)
+                    finding = ContainmentFinding(rel, lineno, :outside, "..")
+                    push!(hits, (lineno, m.offset + 1, KIND_ORDER.outside, finding))
+                end
+            end
+
+            for m in eachmatch(ABSOLUTE_PATH_PATTERN, line)
+                m.captures[1] in SYSTEM_ROOTS && continue
+                last_unit = m.offset + ncodeunits(m.match) - 1
+                within_any(machine_ranges, m.offset, last_unit) && continue
+                finding = ContainmentFinding(rel, lineno, :absolute_path, String(m.match))
+                push!(hits, (lineno, m.offset, KIND_ORDER.absolute_path, finding))
+            end
+
+            for m in eachmatch(HOME_PATH_PATTERN, line)
+                last_unit = m.offset + ncodeunits(m.match) - 1
+                within_any(machine_ranges, m.offset, last_unit) && continue
+                finding = ContainmentFinding(rel, lineno, :home_path, String(m.match))
+                push!(hits, (lineno, m.offset, KIND_ORDER.home_path, finding))
+            end
+        end
+
+        sort!(hits; by = h -> (h[1], h[2], h[3]))
+        for hit in hits
+            push!(findings, hit[4])
         end
     end
 
@@ -962,8 +1080,10 @@ end
 """
     print_self_containment(results) -> Nothing
 
-Print the `Self-containment` section grouped per repository into outside-repository
-violations and absolute-path candidates to review.
+Print the `Self-containment` section, per repository grouped into violations outside the
+repository (`:outside`, `:machine_path`), absolute paths to review (`:absolute_path`,
+`:home_path`) and relative paths to review (`:unresolved`); an empty group is omitted. A
+finding about a symbolic link (`line == 0`) prints as `<file>  -> <target>`.
 """
 function print_self_containment(results::Vector{Pair{String, Vector{ContainmentFinding}}})
     println("Self-containment")
@@ -975,21 +1095,26 @@ function print_self_containment(results::Vector{Pair{String, Vector{ContainmentF
     for (name, findings) in results
         println("\n", name)
         outside = filter(f -> f.kind === :outside || f.kind === :machine_path, findings)
-        candidates = filter(f -> f.kind === :absolute_path, findings)
-        if isempty(outside) && isempty(candidates)
+        absolute = filter(f -> f.kind === :absolute_path || f.kind === :home_path, findings)
+        unresolved = filter(f -> f.kind === :unresolved, findings)
+        if isempty(outside) && isempty(absolute) && isempty(unresolved)
             println("  no reference outside the repository")
             continue
         end
-        if !isempty(outside)
-            println("  Outside the repository")
-            for f in outside
-                println("    ", f.file, ":", f.line, "  ", f.match)
-            end
-        end
-        if !isempty(candidates)
-            println("  Absolute paths to review")
-            for f in candidates
-                println("    ", f.file, ":", f.line, "  ", f.match)
+        groups = (
+            "Outside the repository" => outside,
+            "Absolute paths to review" => absolute,
+            "Relative paths to review" => unresolved,
+        )
+        for (title, group) in groups
+            isempty(group) && continue
+            println("  ", title)
+            for f in group
+                if f.line == 0
+                    println("    ", f.file, "  -> ", f.match)
+                else
+                    println("    ", f.file, ":", f.line, "  ", f.match)
+                end
             end
         end
     end
@@ -1010,7 +1135,8 @@ Usage:
   --dirty-only      report only directories with uncommitted, unpushed or removable state
   --fetch           refresh remote-tracking refs first; needs the network and is slower
   --layout          check the root against the workspace layout below
-  --scaffold        create the directories and notes files the layout lacks, then check it
+  --scaffold        create the directories and notes files the layout lacks, then check
+                    it; needs PATH
   --self-contained  scan the tracked text files of the root repository, or of the
                     repositories directly under the root, for paths that lead outside
   -h, --help
@@ -1039,10 +1165,17 @@ Workspace layout (checked by --layout, completed by --scaffold):
 Without --fetch the distance from the upstream branch is measured against the
 remote-tracking refs already stored, which may be out of date.
 
---self-contained reports two groups. A relative path that climbs out of the repository
-and a path under the home directory of the user count as findings. Other absolute paths
-outside the system directories are listed for review and do not change the return value:
-an example path in documentation is one.
+--self-contained reports up to three groups per repository. Outside the repository holds
+the findings: a relative path, a joinpath(@__DIR__, ...) or @__DIR__ string climb, a
+quoted ".." in a root TOML file or a tracked symbolic link that leads out of the
+repository, a relative path that reaches a workspace directory such as notes/ when read
+from the root, and any path under the home directory of the user. Absolute paths to
+review lists the other absolute paths outside the system directories and the paths
+written from ~ or \$HOME, such as an example path in documentation. Relative paths to
+review lists a relative path that stays within the repository but names nothing in it.
+Only the first group changes the return value. The scan does not see a path assembled at
+run time, a dirname chain, a path in a line that is not valid UTF-8, or a file larger
+than 5 MiB.
 
 Without --scaffold the tool writes, commits and deletes nothing, and it fetches only with
 --fetch. --scaffold creates the missing directories and the two notes files of the
@@ -1052,7 +1185,9 @@ Return values:
   0  no finding of a requested check
   1  --layout, --scaffold or --self-contained has a finding; git is missing; PATH is not
      a directory
-  2  usage error; a root that the requested check cannot take (--layout on a repository)
+  2  usage error, --scaffold without PATH included; a root that the requested check
+     cannot take (--layout on a repository, --self-contained with no repository at or
+     directly under it)
 """,
     )
     return nothing
@@ -1062,7 +1197,8 @@ end
     parse_args(args) -> NamedTuple
 
 Positional workspace root and command-line flags. Throws `ArgumentError` on an unknown
-option or a second positional argument.
+option, a second positional argument, or `--scaffold` without a root: the scaffold writes
+only where the caller points.
 """
 function parse_args(args::Vector{String})
     root = nothing
@@ -1110,6 +1246,9 @@ function parse_args(args::Vector{String})
         end
     end
     expecting_depth && throw(ArgumentError("--depth takes a positive integer"))
+    scaffold &&
+        root === nothing &&
+        throw(ArgumentError("--scaffold needs the workspace root as PATH"))
     return (; root, dirty_only, fetch, depth, layout, scaffold, self_contained, help)
 end
 
@@ -1183,6 +1322,8 @@ function main(args::Vector{String} = ARGS)
             else
                 filter(is_repository_root, subdirectories(root))
             end
+            isempty(repos) &&
+                throw(ArgumentError("no repository at or directly under $root"))
             results = Pair{String, Vector{ContainmentFinding}}[]
             for repo in repos
                 label = basename(rstrip(repo, '/'))
