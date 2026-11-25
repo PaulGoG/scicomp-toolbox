@@ -747,14 +747,20 @@ end
     climb_target_kind(rel, path, tracked, reserved) -> Union{Symbol, Nothing}
 
 Judge the relative `path`, which begins with `../`, found in the file `rel`. Trailing `.`
-of its last component, such as a full stop, are dropped. Resolved from the directory of
-`rel` it is `:outside` when it leads above the repository root. Inside the repository it
-is no finding when it names a tracked path or a path in a tracked directory, the case of a
-file that a script writes beside tracked ones. Otherwise it is read from the repository
-root, as a run configuration or a working directory reads it: `:outside` when its first
-component below the climbs is a top-level workspace name in `reserved`, `:unresolved`
-when not. Existence is judged against `tracked`, never the checkout, so the result does
-not depend on untracked or ignored files.
+of its last component, such as a full stop, are dropped; a last component of three or
+more dots is `..` followed by one. Resolved from the directory of `rel` it is `:outside`
+when it leads above the repository root, and no finding when it names a tracked path.
+
+Otherwise the path is also read from the repository root, as a run configuration, a shell
+command or a relative path in Julia file I/O reads it from a working directory at the
+root, and the first component below its climbs is taken. When that component is a
+top-level workspace name in `reserved` the result is `:outside`, or `:unresolved` when the
+path lies in a tracked directory other than the root, where it may name a file that a
+script writes beside tracked ones (`save("../paper/fig.pdf")` beside a tracked `paper/`):
+both readings are plausible there, and only a reader can tell. Other paths in a tracked
+directory are no finding; the rest are `:unresolved`. Existence is judged against
+`tracked`, never the checkout, so the result does not depend on untracked or ignored
+files.
 """
 function climb_target_kind(
     rel::AbstractString,
@@ -763,7 +769,12 @@ function climb_target_kind(
     reserved::Set{String},
 )
     parts = split(rstrip(path, '/'), '/')
-    last(parts) in (".", "..") || (parts[end] = rstrip(parts[end], '.'))
+    final = parts[end]
+    if all(==('.'), final) && length(final) > 2
+        parts[end] = ".."
+    elseif !(final in (".", ".."))
+        parts[end] = rstrip(final, '.')
+    end
     clean = join(filter(!isempty, parts), '/')
     directory = dirname(rel)
     from_file = normpath(isempty(directory) ? clean : directory * "/" * clean)
@@ -772,10 +783,11 @@ function climb_target_kind(
     (from_file == ".." || startswith(from_file, "../")) && return :outside
     from_file in tracked && return nothing
     parent = dirname(from_file)
-    !isempty(parent) && parent in tracked && return nothing
+    in_tracked_directory = !isempty(parent) && parent in tracked
     below = filter(part -> part != "..", split(normpath(clean), '/'))
-    isempty(below) && return :unresolved
-    return first(below) in reserved ? :outside : :unresolved
+    workspace = !isempty(below) && first(below) in reserved
+    workspace && return in_tracked_directory ? :unresolved : :outside
+    return in_tracked_directory ? nothing : :unresolved
 end
 
 """
