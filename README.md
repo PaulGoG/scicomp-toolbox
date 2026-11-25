@@ -168,15 +168,19 @@ which set the exit status:
   written with `@__DIR__` and `".."` components in Julia source, as a string appended to
   `@__DIR__`, or as a lone `".."` in a TOML file at the root;
 - a relative path that stays inside the repository when read from its file, names no
-  tracked path and no file in a tracked directory, and leads to one of the directories of
-  the tree above: read from the repository root, it points into the workspace;
+  tracked path, lies in no tracked directory other than the root, and leads to one of the
+  directories of the tree above: read from the repository root, as a configuration or a
+  relative path in Julia file I/O is read, it points into the workspace;
 - a tracked symbolic link whose target lies outside;
 - a path under the home directory of the user.
 
 Listed for review without changing the exit status, since an example path in
 documentation is one: other absolute paths outside the system directories, paths written
-with `~` or `$HOME`, and relative paths that name nothing in the repository. Existence is
-judged on the tracked files, so an untracked or ignored directory hides nothing.
+with `~` or `$HOME`, relative paths that name nothing in the repository, and a path into
+a tracked directory named like an entry of the tree above (`../paper/fig.pdf` beside a
+tracked `paper/`), which leads into the workspace when read from the repository root.
+Existence is judged on the tracked files, so an untracked or ignored directory hides
+nothing.
 
 The scan is lexical and reads the working tree. It does not see a path assembled at run
 time, a chain of `dirname` calls, a line that is not valid UTF-8 or a file larger than
@@ -219,8 +223,10 @@ did not install unless `--force`, which keeps the old one as `commit-msg.backup`
 into the shared directory as `commit-msg` by hand. The hook starts Julia through `env -S`
 (GNU coreutils 8.30 or later, or a BSD `env`) with `--compile=min` and takes about 0.3 s
 per commit. It assumes the default comment character `#` in message files, and it cannot
-see whether git will clean the message up: a `#` line or a scissors line typed into
-`git commit -m` is judged as git's own, while git records it as written.
+see how git will clean the message up: git cuts at its scissors line only when it runs
+verbose or with `cleanup=scissors`, and keeps `#` lines from `-m` or `-F`. A scissors line
+followed by a diff header that the author types therefore hides what follows from the
+hook, and `commit-guard log` judges what git recorded.
 `git commit --no-verify` bypasses it, and git does not run it for cherry-picks and
 rebases, where `commit-guard log` is the check.
 

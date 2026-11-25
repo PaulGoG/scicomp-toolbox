@@ -80,8 +80,9 @@ const HOOK_MARKER = "# commit-guard hook"
 # Robot face, a common signature of generated messages.
 const ROBOT_FACE = '\U1F916'
 
-# Scissors line below which git discards the message in a commit-msg file.
-const SCISSORS_PATTERN = r"^# -+ >8 -+$"
+# Scissors line below which git discards the message in a commit-msg file: git cuts at
+# this exact line only, 24 dashes on each side.
+const SCISSORS_PATTERN = r"^# -{24} >8 -{24}$"
 # Conventional Commits header: type of TYPES, optional scope, optional breaking mark. A
 # scope may list several parts of the code base, as in `fix(solver, io): ...`.
 const HEADER_PATTERN =
@@ -103,23 +104,31 @@ const AI_NAMES = (
     "grok",
     "deepseek",
     "devin",
-    "jules",
     "ampcode",
     "llm",
 )
-# Regex text naming an AI tool: AI_NAMES or a GPT model in any case, AI in capitals only,
-# so that Ai(x) and a .ai host name are no match.
-const NAMES = raw"(?i:\b(?:" * join(AI_NAMES, "|") * raw")\b|\bgpt-?[0-9])|\bAI\b"
+# Regex text naming an AI tool: AI_NAMES, a GPT model or Google Labs Jules in any case
+# (Jules alone is a given name), AI in capitals only, so that Ai(x) and a .ai host name
+# are no match.
+const NAMES =
+    raw"(?i:\b(?:" *
+    join(AI_NAMES, "|") *
+    raw")\b|\bgpt-?[0-9]|" *
+    raw"\bgoogle[\s-]+labs[\s-]+jules\b)|\bAI\b"
 
 # Co-author, co-developer and sign-off trailers.
 const TRAILER_PATTERN = r"^\s*(co-authored-by|co-developed-by|signed-off-by)\s*:"i
 # Line that begins with a phrase crediting an AI tool or model with the change, the name
-# within the same clause; an optional subject such as "This commit was" or "Patch" leads.
+# within the same clause. An optional subject ("This commit was", "Changes", "Commit
+# message") and an adverb ("auto-", "fully") may lead; a colon may follow the preposition.
 const ATTRIBUTION_PATTERN = Regex(
     raw"^\W*(?i:(?:(?:this|the)\s+)?" *
-    raw"(?:(?:commit|change|patch|code|message|diff)\s+(?:(?:was|is|has\s+been)\s+)?)?" *
-    raw"(?:generated|written|created|authored|produced|assisted|co-?authored|made)" *
-    raw"\s+(?:with|by|using|via)\b)[^.;:!?]*?(?:" *
+    raw"(?:(?:commit|change|patch|code|message|diff)s?\s+){0,2}" *
+    raw"(?:(?:was|is|were|are|has\s+been|have\s+been)\s+)?" *
+    raw"(?:(?:auto|fully|partly|partially|largely|entirely)[\s-]*)?" *
+    raw"(?:generated|written|created|authored|produced|assisted|co-?authored|made|" *
+    raw"developed|implemented|drafted)" *
+    raw"\s+(?:with|by|using|via)\b:?)[^.,;:!?]*?(?:" *
     NAMES *
     ")",
 )
@@ -136,10 +145,10 @@ const AI_COAUTHOR_PATTERN = Regex(
 )
 # Address that Anthropic tools put in co-author trailers.
 const ANTHROPIC_ADDRESS_PATTERN = r"noreply@anthropic\.com"i
-# Link to a session of a hosted AI assistant: a host or one of its subdomains with a path,
-# scheme optional.
+# Link to a session of a hosted AI assistant: one of the hosts with a path, scheme
+# optional. Other subdomains (docs.claude.com, code.claude.com) serve documentation.
 const SESSION_URL_PATTERN = Regex(
-    raw"(?<![\w.@-])(?:https?://)?(?:[\w-]+\.)*(?:claude\.ai|claude\.com|chatgpt\.com|" *
+    raw"(?<![\w.@-])(?:https?://)?(?:www\.)?(?:claude\.ai|claude\.com|chatgpt\.com|" *
     raw"chat\.openai\.com|gemini\.google\.com|g\.co/gemini|aistudio\.google\.com|" *
     raw"copilot\.microsoft\.com|cursor\.com|jules\.google\.com|antigravity\.google|" *
     raw"ampcode\.com)/\S",
@@ -299,11 +308,12 @@ Every line of `message`, split at `\\n`: its 1-based number, its text without a 
 `:discarded` for a line from the cut on. Without `comments` every line is a message line.
 With `comments`, a line matching `SCISSORS_PATTERN` is git's cut only when the first line
 after it that does not start with `#` begins with `diff --git ` or, under
-`diff.submodule=log`, with `Submodule `, or when there is none; an author may type such a
-line in the message, and git cuts at its own line only. The hook cannot see whether git
-will clean the message up (an editor session) or keep it as written (`-m`, `-F`): a
-scissors line and a diff typed into `-m` hide what follows from the hook, and a `#` line
-typed there is recorded as text. `check_history` judges the recorded message.
+`diff.submodule=log`, with `Submodule `, or when there is none. The hook cannot see how
+git will clean the message up: git cuts at the first scissors line when it runs verbose
+(`-v`, `commit.verbose`) or with `cleanup=scissors`, removes `#` lines after an editor
+session, and keeps a message from `-m` or `-F` as written. A scissors line followed by a
+diff header that an author types hides what follows from the hook, and a `#` line typed
+into `-m` is recorded as text. `check_history` judges the recorded message.
 """
 function message_lines(message::AbstractString; comments::Bool = false)
     lines = [String(chopsuffix(line, "\r")) for line in split(message, '\n')]
@@ -500,13 +510,12 @@ function hooks_directory(repo::AbstractString)
                 "directory of a repository only",
             ),
         )
-    # absolute: a relative answer is relative to the physical working directory of git,
-    # which differs from `repo` when `repo` is reached through a symbolic link
-    ok, common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    ok, common = git(repo, "rev-parse", "--git-common-dir")
     ok || throw(ArgumentError("not inside a git work tree: $repo ($common)"))
-    isabspath(common) ||
-        throw(ArgumentError("git gave no absolute git directory for $repo: $common"))
-    common = realpath(common)
+    # a relative answer is relative to the working directory of git, the physical
+    # directory `realpath(repo)`; a lexical join with `repo` goes astray when `repo` is
+    # reached through a symbolic link
+    common = realpath(isabspath(common) ? common : joinpath(realpath(repo), common))
     hooks = joinpath(common, "hooks")
     if islink(hooks) || (ispath(hooks) && realpath(hooks) != hooks)
         throw(ArgumentError("$hooks leads outside the git directory of the repository"))
