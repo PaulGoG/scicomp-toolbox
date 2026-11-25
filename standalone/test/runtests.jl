@@ -424,4 +424,5 @@ end
     end
 
     include("workspace_layout_tests.jl")
+    include("commit_guard_tests.jl")
 end
