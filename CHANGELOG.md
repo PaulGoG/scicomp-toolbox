@@ -31,6 +31,12 @@ a change belongs to it.
   and is resolved by the Julia release that runs it; the formatter is pinned by
   `JuliaFormatter = "=2.14.12"` in `formatter/Project.toml`.
 
+### Fixed
+
+- `slurm-launch`: the compat entry `SHA = "1"` excluded Julia 1.12, whose standard
+  library carries SHA 0.7; the environment could not be resolved there without the
+  manifest. The entry is `"0.7, 1"`.
+
 ## 2026-11-23
 
 Outcome of an independent review of every tool; the entries below are its confirmed
