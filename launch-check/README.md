@@ -49,7 +49,7 @@ note    dependabot-cooldown
 waived  docs
         documentation follows with the first release
 ...
-19 checks: 15 ok, 1 failed, 1 waived, 2 notes
+19 checks: 16 ok, 1 failed, 1 waived, 1 note
 ```
 
 `--only` runs the named checks; `--waive` skips them and reports them as waived with the
@@ -64,17 +64,17 @@ Files count only when git tracks them. Workflows are the files
 
 | Check | What must hold |
 | :--- | :--- |
-| `license` | `LICENSE`, `LICENSE.md` or `LICENSE.txt` at the root has a `Copyright` holder line, and no holder line holds an e-mail address |
+| `license` | `LICENSE`, `LICENSE.md` or `LICENSE.txt` at the root has a `Copyright` holder line; no holder line holds an e-mail address or the placeholders of a licence template (`[yyyy]`, `<year>`) |
 | `citation` | `CITATION.cff` at the root is a YAML mapping with `cff-version`, a non-empty `message` and `title`, and `authors` as a non-empty list of mappings |
 | `cite-section` | a README heading on citing, outside code blocks, with a fenced BibTeX entry before the next heading of the same or a higher level |
 | `manifest` | no `Manifest.toml`, `JuliaManifest.toml` or versioned manifest is tracked |
-| `compat` | every `Project.toml` and `JuliaProject.toml` has a `[compat]` entry for `julia` and for every name of `[deps]`, `[weakdeps]` and `[extras]` (a name with a `[sources]` path is exempt); no entry is empty, `*` or opens with `>` |
+| `compat` | every `Project.toml` and `JuliaProject.toml` has a `[compat]` entry for `julia` and for every name of `[deps]`, `[weakdeps]` and `[extras]` (exempt: a name with a `[sources]` path, and a package of this repository, recognised by its UUID); every entry is one the parser of Pkg accepts and has an upper bound, so `>= 1.2` and `≥ 1.2` fail as unbounded, `*` and an empty string as invalid |
 | `dependabot` | `.github/dependabot.yml` has an update entry for every ecosystem of `[dependabot].ecosystems`, each with a schedule interval, none with `open-pull-requests-limit: 0` |
 | `dependabot-cooldown` | every update entry has a `cooldown`; reported as a note, never a failure |
-| `workflow-pins` | a workflow exists; every `uses` value is local, a Docker image pinned by `@sha256:` digest, or pinned by a 40-digit commit SHA with a release comment (`# v4.2.2`) on its line |
+| `workflow-pins` | a workflow exists; in the workflows and in the composite actions of the repository (`action.yml`), every `uses` value is local, a Docker image pinned by `@sha256:` digest, or pinned by a 40-digit commit SHA with a release comment (`# v4.2.2`) on its line |
 | `workflow-permissions` | every workflow declares `permissions` at the top level or in every job; none grants `write-all` |
 | `workflow-concurrency` | every workflow has a `concurrency` group with `cancel-in-progress` true or an expression, at the top level or in every job |
-| `ci-matrix` | a job matrix lists Julia versions under a key of `version_keys`; every version is a quoted name of `required_versions` or `optional_versions`, and one matrix holds all of `required_versions` |
+| `ci-matrix` | a job matrix lists Julia versions under a key of `version_keys`; every version of a matrix, of its `include` entries and of a literal `with: version:` of `julia-actions/setup-julia` is a name of `required_versions` or `optional_versions`, and one matrix holds all of `required_versions` |
 | `format` | `.JuliaFormatter.toml` at the root and a workflow file whose name starts with `format`, in any case |
 | `changelog` | `CHANGELOG.md` at the root |
 | `readme-tree` | the first code block of `README.md` is a file tree of at most `tree_max_lines` lines, opening by line `tree_within_lines` |
@@ -86,6 +86,18 @@ Files count only when git tracks them. Workflows are the files
 
 A version written as a number in the matrix, such as `1.10` unquoted, is loaded by YAML as
 the number 1.1 and reported as such; a quoted release number is reported as pinned.
+
+The README is read as Markdown: a fenced code block closes as in CommonMark (same
+character, at least the length of the opening fence), and the lines of an HTML comment
+that starts a line count neither as headings nor as badges. The limit of twenty lines on
+the file tree is `tree_max_lines` of `config.toml`.
+
+The verdict describes the checkout, not a commit. Tracked files are read as they are in
+the work tree, so an uncommitted edit counts. Where `origin/HEAD` is not set, the badge
+row is generated for the current branch: name the default branch in `.launch-check.toml`.
+The stable documentation badge needs the release tags, which a shallow clone without tags
+does not have. A failed `self-contained` or `history` check prints the command that
+lists its findings.
 
 ## Badges
 
@@ -102,11 +114,13 @@ The row follows the order below; a badge appears only when its condition holds.
 | Code style | `style = "blue"` or `style = "sciml"` in `.JuliaFormatter.toml` |
 | JuliaFormatter | a workflow `Format*.yml` |
 | Julia | a project file: `project_file` of `.launch-check.toml` or `--project-file`, else the root `Project.toml`; the badge reads its `compat.julia` from the default branch |
-| DOI | one per DOI of `CITATION.cff`: the top-level `doi`, the `identifiers` of type `doi`, `preferred-citation.doi` |
+| DOI | one per DOI of `CITATION.cff`: the top-level `doi`, the `identifiers` of type `doi`, `preferred-citation.doi`; a DOI of the Journal of Open Source Software (`10.21105/joss.…`) gets the status badge of the journal instead |
 | arXiv | one per `identifiers` entry of type `other` whose value is `arXiv:NNNN.NNNNN` |
 | Platform | `platform` given, with `platform_logo` as the Simple Icons slug when set |
 
 Only the Blue and SciML styles have a badge; the default style and the others get none.
+A DOI and an arXiv number each get a badge, also when they belong to the same paper.
+Parentheses in a DOI are percent-encoded, since they would end the Markdown link.
 Every badge needs the GitHub slug, so `badges` and the `badges` check fail while the
 repository is unknown.
 
@@ -132,7 +146,8 @@ docs = "documentation follows with the first release"
 
 The exit status is 0 when no check fails, 1 when one does, and 2 for an invalid argument,
 configuration or `.launch-check.toml`, or for a path that is not the top level of a git
-work tree. Notes and waived checks never fail.
+work tree. Notes and waived checks never fail. Status 3 means that the tool itself failed
+and says nothing about the repository.
 
 ## Tests
 

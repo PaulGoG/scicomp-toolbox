@@ -239,6 +239,7 @@ check(id, repo; options = PLATFORM, settings = SETTINGS) =
 fails(id, repo; kw...) = check(id, repo; kw...).status == :fail
 passes(id, repo; kw...) = check(id, repo; kw...).status == :ok
 detail(id, repo; kw...) = join(check(id, repo; kw...).details, "\n")
+quoted_text(repo) = read(joinpath(repo.root, ".github", "workflows", "CI.yml"), String)
 workflow(changes::Pair...; kw...) =
     ".github/workflows/CI.yml" => replace(CI_WORKFLOW, changes...; kw...)
 
@@ -369,7 +370,7 @@ end
         nested = with_readme("```bibtex" => "### BibTeX\n\n```bibtex")
         @test passes("cite-section", nested)
         # a heading inside a code block is not a heading
-        fenced = "# Pkg.jl\n\n```\n## How to cite\n@software{pkg,}\n```\n"
+        fenced = "# Pkg.jl\n\n```\n## How to cite\n```\n\n```bibtex\n@software{pkg,}\n```\n"
         @test fails("cite-section", fixture("README.md" => fenced))
         @test fails("cite-section", fixture("README.md" => nothing))
     end
@@ -416,18 +417,18 @@ end
             ),
         )
         @test occursin(
-            "no upper bound",
+            "is not a compat entry Pkg accepts",
             detail(
                 "compat",
                 project(base * "[compat]\nA = \"1, > 2\"\njulia = \"1.10\"\n"),
             ),
         )
         @test occursin(
-            "no upper bound",
+            "is not a compat entry Pkg accepts",
             detail("compat", project(base * "[compat]\nA = \"*\"\njulia = \"1.10\"\n")),
         )
         @test occursin(
-            "no upper bound",
+            "is not a compat entry Pkg accepts",
             detail("compat", project(base * "[compat]\nA = \"\"\njulia = \"1.10\"\n")),
         )
         weak = "[weakdeps]\nW = \"00000000-0000-0000-0000-00000000000b\"\n[compat]\njulia = \"1.10\"\n"
@@ -517,7 +518,9 @@ end
             "has no release comment",
             detail("workflow-pins", pins("actions/checkout@$SHA # checkout")),
         )
-        @test passes("workflow-pins", pins("\"actions/checkout@$SHA\" # 7.0.1"))
+        quoted = fixture(workflow(pin => "\"actions/checkout@$SHA\" # 7.0.1"))
+        @test passes("workflow-pins", quoted)
+        @test count("\"actions/checkout@", quoted_text(quoted)) == 2
         @test passes("workflow-pins", pins("./.github/actions/setup"))
         digest = "docker://ghcr.io/org/tool@sha256:" * "ab"^32
         @test passes("workflow-pins", pins(digest))
@@ -1093,5 +1096,205 @@ end
         @test status([root, "--only", "license"]) == 0
         @test status([root, "--only", "badges"]) == 1
         @test status([root, "--colour"]) == 2
+    end
+
+    @testset "review of the first round" begin
+        # compat entries are judged by the parser of Pkg
+        project(entry) = fixture(
+            "Project.toml" =>
+                "[deps]\nA = \"00000000-0000-0000-0000-00000000000a\"\n" *
+                "[compat]\nA = \"$entry\"\njulia = \"1.10\"\n",
+        )
+        for entry in ("≥ 1.2", "≥1.2, 2", ">= 0.3")
+            @test occursin("no upper bound", detail("compat", project(entry)))
+        end
+        for entry in ("<= 2", "1.x", "latest")
+            @test occursin(
+                "is not a compat entry Pkg accepts",
+                detail("compat", project(entry)),
+            )
+        end
+        for entry in ("0", "^0.2", "< 5", "1 - 2", "~1.2.3", "=1.2.3", "0.4, 0.5")
+            @test passes("compat", project(entry))
+        end
+        # a project that lists a package of this repository, developed by path
+        docs(uuid) =
+            "[deps]\nDocumenter = \"e30172f5-a6a5-5a46-863b-614d45cd2de4\"\n" *
+            "Pkg = \"$uuid\"\n[compat]\nDocumenter = \"1\"\njulia = \"1.10\"\n"
+        own = "00000000-0000-0000-0000-000000000001"
+        @test passes("compat", fixture("docs/Project.toml" => docs(own)))
+        foreign = "00000000-0000-0000-0000-00000000000f"
+        @test occursin(
+            "docs/Project.toml: Pkg has no [compat] entry",
+            detail("compat", fixture("docs/Project.toml" => docs(foreign))),
+        )
+
+        # composite actions of the repository are read like workflows
+        action(uses) =
+            ".github/actions/setup/action.yml" => "name: Setup\nruns:\n  using: composite\n  steps:\n    - uses: $uses\n"
+        local_step = workflow(
+            "actions/checkout@$SHA # v7.0.1" => "./.github/actions/setup";
+            count = 1,
+        )
+        @test occursin(
+            ".github/actions/setup/action.yml:5: actions/cache@v4 is not pinned by a commit SHA",
+            detail("workflow-pins", fixture(local_step, action("actions/cache@v4"))),
+        )
+        @test passes(
+            "workflow-pins",
+            fixture(local_step, action("actions/cache@$SHA # v4.2.0")),
+        )
+        @test occursin(
+            "has no release comment",
+            detail("workflow-pins", fixture(local_step, action("actions/cache@$SHA"))),
+        )
+        @test occursin(
+            "action.yml: not valid YAML",
+            detail(
+                "workflow-pins",
+                fixture(".github/actions/setup/action.yml" => "runs: [\n"),
+            ),
+        )
+
+        # a pinned and commented value in other YAML forms
+        line = "      - uses: actions/checkout@$SHA # v7.0.1"
+        forms(text) = fixture(workflow(line => text))
+        @test count(line, CI_WORKFLOW) == 2
+        # an anchor on the first step, its alias on the second
+        anchored =
+            replace(CI_WORKFLOW, line => replace(line, "uses: " => "uses: &co "); count = 1)
+        anchored = replace(anchored, line => "      - uses: *co")
+        @test count("actions/checkout@", anchored) == 1
+        @test passes("workflow-pins", fixture(".github/workflows/CI.yml" => anchored))
+        @test passes(
+            "workflow-pins",
+            forms("      - {uses: actions/checkout@$SHA} # v7.0.1"),
+        )
+        @test passes(
+            "workflow-pins",
+            forms("      - \"uses\": actions/checkout@$SHA # v7.0.1"),
+        )
+        bare = detail("workflow-pins", forms("      - {uses: actions/checkout@$SHA}"))
+        @test occursin("has no release comment", bare) && !occursin("CI.yml:0:", bare)
+        # an owner path of several components
+        longer = forms("      - {uses: org/actions/checkout@$SHA} # v1.0.0")
+        @test passes("workflow-pins", longer)
+
+        # versions outside the matrix list
+        versions(text) = fixture(workflow("version: ['min', '1']" => text))
+        included = "version: ['min', '1']\n        include:\n          - version: '1.10'\n            os: windows-latest"
+        @test occursin(
+            "job 'test': version '1.10' is pinned",
+            detail("ci-matrix", versions(included)),
+        )
+        @test passes("ci-matrix", versions(replace(included, "'1.10'" => "'pre'")))
+        @test occursin(
+            "is a number",
+            detail("ci-matrix", versions(replace(included, "'1.10'" => "1.10"))),
+        )
+        literal(text) =
+            fixture(workflow("version: \${{ matrix.version }}" => "version: $text"))
+        @test passes("ci-matrix", fixture())
+        @test passes("ci-matrix", literal("'1'"))
+        @test occursin(
+            "job 'test': version '1.12' is pinned",
+            detail("ci-matrix", literal("'1.12'")),
+        )
+        @test occursin("is a number", detail("ci-matrix", literal("1.12")))
+
+        # Markdown: fences close as in CommonMark, comments hide their lines
+        citing(text) = check("cite-section", fixture("README.md" => text)).status
+        entry = "```bibtex\n@software{x,}\n```\n"
+        @test citing("# T\n\n## How to cite\n\n$entry") == :ok
+        @test citing("# T\n\n````markdown\n```\n## How to cite\n$entry````\n") == :fail
+        @test citing("# T\n\n~~~\n```\n## How to cite\n$entry~~~\n") == :fail
+        @test citing(
+            "# T\n\n```julia\nx = 1\n```\n\n## How to cite\n\n````bibtex\n@software{x,}\n````\n",
+        ) == :ok
+        @test citing("# T\n\n<!--\n## How to cite\n\n$entry-->\n") == :fail
+        @test citing("# T\n\n<!-- note -->\n\n## How to cite\n\n$entry") == :ok
+        @test citing("# T\n\n## Citations\n\n$entry") == :ok
+        @test citing("# T\n\n## Citing and cited works\n\n$entry") == :ok
+        @test citing("# T\n\n## Excitation spectra\n\n$entry") == :fail
+        tree = "```\nPkg/\n├── src/\n└── test/\n```\n"
+        @test passes(
+            "readme-tree",
+            fixture("README.md" => "# T\n\n<!--\n```\nnot a tree\n```\n-->\n\n$tree"),
+        )
+        row = BADGE_ROW[1:2]
+        @test markdown.(
+            readme_badges(
+                "Pkg.jl\n======\n\n$(join(row, "\n"))\n\n```bash\n# install\n```\n",
+            ),
+        ) == row
+        @test markdown.(
+            readme_badges("# Pkg.jl\n\n<!-- badges -->\n$(join(row, "\n"))\n"),
+        ) == row
+        @test markdown.(
+            readme_badges("```bash\n# not the title\n```\n\n# Pkg.jl\n\n$(row[1])\n"),
+        ) == row[1:1]
+        @test isempty(readme_badges("```\n# only in code\n$(row[1])\n```\n"))
+
+        # a DOI with parentheses gives a badge that the README reader takes back
+        cff(doi) = fixture(
+            "CITATION.cff" => replace(CITATION, "10.5281/zenodo.1234567" => doi),
+            "README.md" => readme(),
+        )
+        papers(repo) = filter(
+            b -> b.kind in ("doi", "joss"),
+            expected_badges(repo, SETTINGS, PLATFORM),
+        )
+        sici = only(
+            papers(
+                cff("\"10.1002/(SICI)1097-0142(19960101)77:1<1::AID-CNCR1>3.0.CO;2-Z\""),
+            ),
+        )
+        @test !occursin('(', sici.image * sici.link) &&
+              !occursin(')', sici.image * sici.link)
+        @test startswith(sici.link, "https://doi.org/10.1002/%28SICI%291097")
+        @test only(readme_badges("# T\n\n$(markdown(sici))\n")).link == sici.link
+        joss = only(papers(cff("10.21105/joss.01234")))
+        @test markdown(joss) ==
+              "[![JOSS](https://joss.theoj.org/papers/10.21105/joss.01234/status.svg)](https://doi.org/10.21105/joss.01234)"
+
+        # the placeholders of a licence template are no holder
+        apache = "Copyright [yyyy] [name of copyright owner]\n"
+        @test occursin(
+            "LICENSE:1: the holder line is the unedited template",
+            detail("license", fixture("LICENSE" => apache)),
+        )
+        @test fails(
+            "license",
+            fixture("LICENSE" => "Copyright (c) <year> <copyright holders>\n"),
+        )
+        @test passes(
+            "license",
+            fixture("LICENSE" => "Copyright (c) 2026 Jane Doe [CERN]\n"),
+        )
+
+        # where a failed child check sends the reader
+        files = conforming_files()
+        files["docs/setup.md"] = "The run log is in `$(join(["..", "..", "notes", "x.md"], "/"))`.\n"
+        dirty = read_repository(git_repository(files))
+        @test occursin(
+            "workspace-audit $(dirty.root) --self-contained",
+            detail("self-contained", dirty),
+        )
+
+        # a configuration that cannot be read is an invalid argument
+        if !Sys.iswindows()
+            config = joinpath(mktempdir(), "config.toml")
+            write(config, "[readme]\n")
+            chmod(config, 0o000)
+            # the superuser reads the file whatever its mode
+            isreadable = try
+                read(config, String)
+                true
+            catch err
+                err isa SystemError || rethrow()
+                false
+            end
+            isreadable || @test_throws ArgumentError load_settings(config)
+        end
     end
 end

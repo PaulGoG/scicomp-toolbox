@@ -12,7 +12,8 @@
 #   OPTIONS: --repository USER/REPO  --branch NAME  --project-file FILE  --platform TEXT
 #            --platform-logo SLUG  --config PATH
 #
-# Return values: 0 when no check fails, 1 when one does, 2 for invalid arguments.
+# Return values: 0 when no check fails, 1 when one does, 2 for invalid arguments or an
+# invalid configuration, 3 when the tool itself fails.
 
 using Pkg
 Pkg.activate(@__DIR__; io = devnull)
@@ -32,10 +33,16 @@ const WORKFLOW_PATH = r"^\.github/workflows/[^/]+\.ya?ml$"
 const MANIFEST_NAME = r"^(?:Julia)?Manifest(?:-v\d+\.\d+)?\.toml$"
 const HOLDER_LINE = r"^\s*copyright\b"i
 const EMAIL = r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"
-const CITE_HEADING = r"^#{1,6}\s+.*\bcit(?:e|ation|ing)\b"i
+const CITE_HEADING = r"^#{1,6}\s+.*\bcit(?:e|es|ed|ations?|ing)\b"i
 const HEADING = r"^(#{1,6})\s"
 const BIBTEX_ENTRY = r"^\s*@\w+\s*\{"
-const FENCE = r"^ {0,3}(?:`{3,}|~{3,})"
+# a fence: its run of backticks or tildes, then the info string
+const FENCE = r"^ {0,3}(`{3,}|~{3,})(.*)$"
+const COMMENT_OPEN = r"^\s*<!--"
+const SETEXT_UNDERLINE = r"^=+\s*$"
+# placeholders of the Apache, GPL and MIT licence templates
+const TEMPLATE_HOLDER =
+    r"\[(?:yyyy|year|fullname|name[^\]]*)\]|<(?:year|name[^>]*|copyright holders?)>"i
 const COMMIT_SHA = r"^[0-9a-f]{40}$"
 const IMAGE_DIGEST = r"@sha256:[0-9a-f]{64}$"
 const RELEASE_COMMENT = r"^v?\d"
@@ -43,6 +50,11 @@ const SLUG = r"^[\w.-]+/[\w.-]+$"
 const REMOTE_URL = r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?/?$"
 const RELEASE_TAG = r"^v\d+\.\d+\.\d+$"
 const ARXIV_ID = r"^arXiv:(\d{4}\.\d{4,5})(?:v\d+)?$"i
+const JOSS_DOI = r"^10\.21105/joss\."i
+const ACTION_NAMES = ("action.yml", "action.yaml")
+const SETUP_JULIA = "julia-actions/setup-julia@"
+# no release reaches this version: a compat entry that admits it has no upper bound
+const UNBOUNDED_PROBE = v"1000000000"
 const BADGE = r"\[!\[([^\]]*)\]\(([^)\s]+)\)\]\(([^)\s]+)\)"
 const BADGE_LINE = Regex("^$(BADGE.pattern)(?:\\s+$(BADGE.pattern))*\$")
 # ASCII punctuation, escaped when a literal string enters a regex
@@ -206,7 +218,13 @@ missing or is not valid TOML.
 """
 function load_settings(path::AbstractString)
     isfile(path) || throw(ArgumentError("configuration file not found: $path"))
-    raw = TOML.tryparse(read(path, String))
+    text = try
+        read(path, String)
+    catch err
+        err isa Union{SystemError, Base.IOError} || rethrow()
+        throw(ArgumentError("configuration file not readable: $path"))
+    end
+    raw = TOML.tryparse(text)
     raw isa TOML.ParserError &&
         throw(ArgumentError("$path: not valid TOML: $(sprint(showerror, raw))"))
     return validate_settings(raw)
@@ -420,33 +438,62 @@ no further line.
 text_lines(text::AbstractString) = split(chomp(text), r"\r?\n")
 
 """
-    code_blocks(lines) -> Vector{NamedTuple{(:open, :close, :content)}}
+    scan_markdown(lines) -> Tuple{Vector{NamedTuple}, BitVector}
 
-Fenced code blocks of Markdown `lines`: the line numbers of the opening and the closing
-fence (`close` is 0 for a block left open at the end of the file) and those of the
-content lines. A fence is a line starting, after up to three spaces, with three or more
-backticks or tildes; each fence line opens or closes a block in turn.
+Fenced code blocks and HTML comments of Markdown `lines`. A block is `(open, close,
+content)`: the line numbers of its fences (`close` is 0 for a block left open at the end
+of the file) and of its content lines. A fence is a line starting, after up to three
+spaces, with three or more backticks or tildes; as in CommonMark, the closing fence uses
+the same character, is at least as long as the opening one and carries no text. A
+comment runs from a line that starts with `<!--` to the first line holding `-->`; the
+second value marks its lines. Fences inside a comment and comment marks inside a code
+block are text.
 """
-function code_blocks(lines::AbstractVector{<:AbstractString})
+function scan_markdown(lines::AbstractVector{<:AbstractString})
     blocks = @NamedTuple{open::Int, close::Int, content::Vector{Int}}[]
+    comment = falses(length(lines))
     open = 0
+    fence = ""
     content = Int[]
+    commenting = false
     for (i, line) in enumerate(lines)
-        if occursin(FENCE, line)
-            if open == 0
-                open = i
-                content = Int[]
-            else
+        if commenting
+            comment[i] = true
+            commenting = !occursin("-->", line)
+            continue
+        end
+        m = match(FENCE, line)
+        if open != 0
+            closing =
+                m !== nothing &&
+                first(m.captures[1]) == first(fence) &&
+                length(m.captures[1]) >= length(fence) &&
+                isempty(strip(m.captures[2]))
+            if closing
                 push!(blocks, (; open, close = i, content))
                 open = 0
+            else
+                push!(content, i)
             end
-        elseif open != 0
-            push!(content, i)
+        elseif m !== nothing
+            open = i
+            fence = String(m.captures[1])
+            content = Int[]
+        elseif occursin(COMMENT_OPEN, line)
+            comment[i] = true
+            commenting = !occursin("-->", line)
         end
     end
     open == 0 || push!(blocks, (; open, close = 0, content))
-    return blocks
+    return blocks, comment
 end
+
+"""
+    code_blocks(lines) -> Vector{NamedTuple{(:open, :close, :content)}}
+
+The fenced code blocks of Markdown `lines`; see [`scan_markdown`](@ref).
+"""
+code_blocks(lines::AbstractVector{<:AbstractString}) = first(scan_markdown(lines))
 
 """
     in_code(lines, blocks) -> BitVector
@@ -592,6 +639,70 @@ uses_line(value::AbstractString) = Regex(
 )
 
 """
+    value_line(value::AbstractString) -> Regex
+
+Pattern of a line that ends with `value` in another YAML form than `uses: <value>`: after
+an anchor, in a flow mapping or under a quoted key. The comment is the only capture.
+"""
+value_line(value::AbstractString) = Regex(
+    "(?<![\\w./@-])" * regex_escape(value) * "['\"]?\\s*\\}?\\s*(?:#\\s*(.*?))?\\s*\$",
+)
+
+"""
+    uses_occurrences(lines, value) -> Vector{Tuple{Int, Union{String, Nothing}}}
+
+Line number and comment of every line that gives the `uses` value `value`: the lines of
+the form `uses: <value>`, or, when there is none, those that end with the value in
+another YAML form. A value found on no line is returned once with line 0.
+"""
+function uses_occurrences(lines::AbstractVector{<:AbstractString}, value::AbstractString)
+    for pattern in (uses_line(value), value_line(value))
+        occurrences = Tuple{Int, Union{String, Nothing}}[]
+        for (i, line) in enumerate(lines)
+            m = match(pattern, line)
+            m === nothing && continue
+            comment = last(m.captures)
+            push!(occurrences, (i, comment === nothing ? nothing : String(comment)))
+        end
+        isempty(occurrences) || return occurrences
+    end
+    return Tuple{Int, Union{String, Nothing}}[(0, nothing)]
+end
+
+"""
+    pin_details(path, text, values) -> Vector{String}
+
+One detail line per occurrence of a `uses` value of `values` in `text` that
+[`pin_finding`](@ref) objects to, prefixed by `path` and the line number.
+"""
+function pin_details(path::AbstractString, text::AbstractString, values)
+    details = String[]
+    lines = text_lines(text)
+    for value in values, (line, comment) in uses_occurrences(lines, value)
+        finding = pin_finding(value, comment)
+        finding === nothing || push!(details, "$path:$line: $value $finding")
+    end
+    return details
+end
+
+"""
+    action_uses(document::AbstractDict) -> Vector{String}
+
+The distinct string `uses` values of the steps of a composite action (`runs.steps`).
+"""
+function action_uses(document::AbstractDict)
+    values = String[]
+    runs = get(document, "runs", nothing)
+    steps = runs isa AbstractDict ? get(runs, "steps", nothing) : nothing
+    steps isa AbstractVector || return values
+    for step in steps
+        value = step isa AbstractDict ? get(step, "uses", nothing) : nothing
+        (value isa AbstractString && !(value in values)) && push!(values, value)
+    end
+    return values
+end
+
+"""
     pin_finding(value, comment) -> Union{String, Nothing}
 
 Judgement of one occurrence of the `uses` value `value` with its line comment (`nothing`
@@ -615,7 +726,8 @@ end
 """
     declares_permissions(value) -> Bool
 
-Whether a workflow or job mapping holds a `permissions` key whose value is not empty.
+Whether a workflow or job mapping holds a `permissions` key with a value; the empty
+mapping `{}`, which grants nothing, is one.
 """
 declares_permissions(value) =
     value isa AbstractDict && get(value, "permissions", nothing) !== nothing
@@ -674,6 +786,8 @@ function check_license(repo::Repository, ::Settings, ::RepositoryOptions)
         holders += 1
         occursin(EMAIL, line) &&
             push!(details, "$name:$i: e-mail address in the holder line")
+        occursin(TEMPLATE_HOLDER, line) &&
+            push!(details, "$name:$i: the holder line is the unedited template")
     end
     holders == 0 && push!(details, "$name: no copyright holder line")
     return outcome("license", details)
@@ -722,8 +836,8 @@ function check_cite_section(repo::Repository, ::Settings, ::RepositoryOptions)
     text = read_tracked(repo, "README.md")
     text === nothing && return outcome("cite-section", ["no README.md"])
     lines = text_lines(text)
-    blocks = code_blocks(lines)
-    inside = in_code(lines, blocks)
+    blocks, comment = scan_markdown(lines)
+    inside = in_code(lines, blocks) .| comment
     headings = Tuple{Int, Int}[]
     for (i, line) in enumerate(lines)
         inside[i] && continue
@@ -769,18 +883,21 @@ project_files(repo::Repository) =
     filter(path -> basename(path) in PROJECT_NAMES, repo.tracked)
 
 """
-    bounded(entry) -> Bool
+    compat_verdict(entry) -> Symbol
 
-Whether a `[compat]` entry is a non-empty string none of whose comma-separated
-specifiers starts with `>` or is `*`.
+How Pkg reads a `[compat]` entry: `:invalid` when it is not a string its parser accepts
+(`*`, an empty string and `<=` among them), `:unbounded` when the versions it admits
+have no upper limit (`>= 1.2`, `≥ 1.2`), `:bounded` otherwise.
 """
-function bounded(entry)
-    nonempty_string(entry) || return false
-    for specifier in split(entry, ',')
-        text = strip(specifier)
-        (startswith(text, '>') || text == "*") && return false
+function compat_verdict(entry)
+    entry isa AbstractString || return :invalid
+    spec = try
+        Pkg.Types.semver_spec(entry)
+    catch err
+        err isa Union{ErrorException, ArgumentError, OverflowError} || rethrow()
+        return :invalid
     end
-    return true
+    return UNBOUNDED_PROBE in spec ? :unbounded : :bounded
 end
 
 """
@@ -788,6 +905,19 @@ end
 
 Whether the `[sources]` entry of `name` is a table with a `path`, a dependency taken
 from the local tree.
+"""
+function compat_finding!(details::Vector{String}, path, name, entry)
+    verdict = compat_verdict(entry)
+    verdict == :unbounded && push!(details, "$path: $name = \"$entry\" has no upper bound")
+    verdict == :invalid &&
+        push!(details, "$path: $name = $(repr(entry)) is not a compat entry Pkg accepts")
+    return details
+end
+
+"""
+    path_source(sources::AbstractDict, name::AbstractString) -> Bool
+
+Whether the `[sources]` table gives `name` by a local path.
 """
 function path_source(sources::AbstractDict, name::AbstractString)
     source = get(sources, name, nothing)
@@ -804,33 +934,41 @@ exempt), and every `[compat]` entry carries an upper bound.
 function check_compat(repo::Repository, ::Settings, ::RepositoryOptions)
     paths = project_files(repo)
     isempty(paths) && return outcome("compat", ["no Project.toml tracked"])
-    details = String[]
+    projects = Dict{String, Any}()
     for path in paths
         text = read_tracked(repo, path)
-        project = text === nothing ? nothing : TOML.tryparse(text)
+        projects[path] = text === nothing ? nothing : TOML.tryparse(text)
+    end
+    packages = Set{Any}(
+        project["uuid"] for project in values(projects) if
+        project isa AbstractDict && haskey(project, "uuid")
+    )
+    details = String[]
+    for path in paths
+        project = projects[path]
         if !(project isa AbstractDict)
             push!(details, "$path: not valid TOML")
             continue
         end
         compat = table_of(project, "compat")
         sources = table_of(project, "sources")
-        names = Set{String}()
+        uuids = Dict{String, Any}()
         for section in ("deps", "weakdeps", "extras")
-            union!(names, string.(keys(table_of(project, section))))
+            merge!(uuids, Dict(string(k) => v for (k, v) in table_of(project, section)))
         end
-        delete!(names, "julia")
-        checked = ["julia"; sort!(collect(names))]
+        delete!(uuids, "julia")
+        checked = ["julia"; sort!(collect(keys(uuids)))]
         for name in checked
-            if !haskey(compat, name)
-                (name != "julia" && path_source(sources, name)) ||
-                    push!(details, "$path: $name has no [compat] entry")
-            elseif !bounded(compat[name])
-                push!(details, "$path: $name = \"$(compat[name])\" has no upper bound")
+            if haskey(compat, name)
+                compat_finding!(details, path, name, compat[name])
+            elseif name == "julia" ||
+                   !(path_source(sources, name) || get(uuids, name, nothing) in packages)
+                # a package of this repository is taken by path and has no version
+                push!(details, "$path: $name has no [compat] entry")
             end
         end
         for name in sort!([string(key) for key in keys(compat) if !(key in checked)])
-            bounded(compat[name]) ||
-                push!(details, "$path: $name = \"$(compat[name])\" has no upper bound")
+            compat_finding!(details, path, name, compat[name])
         end
     end
     return outcome("compat", details)
@@ -930,23 +1068,18 @@ function check_workflow_pins(repo::Repository, ::Settings, ::RepositoryOptions)
             push!(details, "$(workflow.path): not valid YAML")
             continue
         end
-        lines = text_lines(workflow.text)
-        for value in uses_values(workflow.document)
-            pattern = uses_line(value)
-            occurrences = Tuple{Int, Union{String, Nothing}}[]
-            for (i, line) in enumerate(lines)
-                m = match(pattern, line)
-                m === nothing && continue
-                comment = m.captures[2]
-                push!(occurrences, (i, comment === nothing ? nothing : String(comment)))
-            end
-            isempty(occurrences) && push!(occurrences, (0, nothing))
-            for (line, comment) in occurrences
-                finding = pin_finding(value, comment)
-                finding === nothing ||
-                    push!(details, "$(workflow.path):$line: $value $finding")
-            end
+        values = uses_values(workflow.document)
+        append!(details, pin_details(workflow.path, workflow.text, values))
+    end
+    # composite actions of the repository, which a workflow reaches through `./`
+    for path in filter(path -> basename(path) in ACTION_NAMES, repo.tracked)
+        text = read_tracked(repo, path)
+        valid, document = text === nothing ? (false, nothing) : load_yaml(text)
+        if !(valid && document isa AbstractDict)
+            push!(details, "$path: not valid YAML")
+            continue
         end
+        append!(details, pin_details(path, text, action_uses(document)))
     end
     return outcome("workflow-pins", details)
 end
@@ -1024,6 +1157,25 @@ Some workflow job has a Julia version matrix (`strategy.matrix.<key>` for a key 
 `version_keys`); every version in such a matrix is a quoted name of `required_versions`
 or `optional_versions`, and one matrix holds all of `required_versions`.
 """
+function version_finding!(details::Vector{String}, context, entry, allowed)
+    if !(entry isa AbstractString)
+        push!(
+            details,
+            "$context: version $(repr(entry)) is a number (pinned, or unquoted in YAML)",
+        )
+    elseif !(entry in allowed)
+        push!(details, "$context: version '$entry' is pinned")
+    end
+    return details
+end
+
+"""
+    check_ci_matrix(repo, settings, options) -> CheckResult
+
+Some job matrix lists Julia versions under a key of `version_keys` and holds every
+required one; every version of a matrix, of its `include` entries and of a literal
+`with: version:` of `julia-actions/setup-julia` is an allowed name, not a number.
+"""
 function check_ci_matrix(repo::Repository, settings::Settings, ::RepositoryOptions)
     allowed = union(settings.required_versions, settings.optional_versions)
     details = String[]
@@ -1036,6 +1188,20 @@ function check_ci_matrix(repo::Repository, settings::Settings, ::RepositoryOptio
         end
         for (id, job) in job_entries(document)
             job isa AbstractDict || continue
+            context = "$(workflow.path): job '$id'"
+            # a version written out for setup-julia, outside any matrix
+            steps = get(job, "steps", nothing)
+            for step in (steps isa AbstractVector ? steps : Any[])
+                step isa AbstractDict || continue
+                uses = get(step, "uses", nothing)
+                (uses isa AbstractString && startswith(uses, SETUP_JULIA)) || continue
+                version = get(table_of(step, "with"), "version", nothing)
+                (
+                    version === nothing ||
+                    (version isa AbstractString && occursin("\${{", version))
+                ) && continue
+                version_finding!(details, context, version, allowed)
+            end
             strategy = get(job, "strategy", nothing)
             strategy isa AbstractDict || continue
             matrix = get(strategy, "matrix", nothing)
@@ -1044,17 +1210,16 @@ function check_ci_matrix(repo::Repository, settings::Settings, ::RepositoryOptio
                 versions = get(matrix, key, nothing)
                 versions isa AbstractVector || continue
                 push!(matrices, collect(Any, versions))
-                context = "$(workflow.path): job '$id'"
                 for entry in versions
-                    if !(entry isa AbstractString)
-                        push!(
-                            details,
-                            "$context: version $(repr(entry)) is a number " *
-                            "(pinned, or unquoted in YAML)",
-                        )
-                    elseif !(entry in allowed)
-                        push!(details, "$context: version '$entry' is pinned")
-                    end
+                    version_finding!(details, context, entry, allowed)
+                end
+            end
+            additions = get(matrix, "include", nothing)
+            for item in (additions isa AbstractVector ? additions : Any[])
+                item isa AbstractDict || continue
+                for key in settings.version_keys
+                    haskey(item, key) &&
+                        version_finding!(details, context, item[key], allowed)
                 end
             end
         end
@@ -1234,7 +1399,10 @@ function check_self_contained(repo::Repository, ::Settings, ::RepositoryOptions)
     status == 0 && return outcome("self-contained", String[])
     return outcome(
         "self-contained",
-        ["workspace-audit --self-contained exited with status $status"],
+        [
+            "workspace-audit --self-contained exited with status $status",
+            "the findings: julia run.jl workspace-audit $(repo.root) --self-contained",
+        ],
     )
 end
 
@@ -1251,7 +1419,14 @@ function check_history(repo::Repository, ::Settings, ::RepositoryOptions)
     command = `$julia --startup-file=no $script log --repo $(repo.root) --rules $rules`
     status = exit_status(command)
     status == 0 && return outcome("history", String[])
-    return outcome("history", ["commit-guard log exited with status $status"])
+    return outcome(
+        "history",
+        [
+            "commit-guard log exited with status $status",
+            "the findings: julia run.jl commit-guard log --repo $(repo.root) --rules " *
+            "trailer,attribution,session_url",
+        ],
+    )
 end
 
 "Checks in reporting order, as id => check function."
@@ -1407,10 +1582,25 @@ badges carry the kind `""`; the vector is empty when there is no title or no suc
 """
 function readme_badges(text::AbstractString)
     lines = text_lines(text)
-    title = findfirst(line -> startswith(line, "# "), lines)
-    title === nothing && return Badge[]
-    at = title + 1
-    while at <= length(lines) && isempty(strip(lines[at]))
+    blocks, comment = scan_markdown(lines)
+    hidden = in_code(lines, blocks) .| comment
+    # the title: a line `# ...`, or a line underlined with `=`
+    at = 0
+    for (i, line) in enumerate(lines)
+        hidden[i] && continue
+        if startswith(line, "# ")
+            at = i + 1
+            break
+        elseif i < length(lines) &&
+               !isempty(strip(line)) &&
+               !hidden[i + 1] &&
+               occursin(SETEXT_UNDERLINE, lines[i + 1])
+            at = i + 2
+            break
+        end
+    end
+    at == 0 && return Badge[]
+    while at <= length(lines) && (isempty(strip(lines[at])) || comment[at])
         at += 1
     end
     badges = Badge[]
@@ -1644,15 +1834,16 @@ function expected_badges(repo::Repository, settings::Settings, options::Reposito
     end
     dois, arxiv = citation_identifiers(repo)
     for doi in dois
-        push!(
-            badges,
-            Badge(
-                "doi",
-                "DOI",
-                "https://img.shields.io/badge/DOI-$(shields_escape(doi))-blue?logo=doi",
-                "https://doi.org/$doi",
-            ),
-        )
+        # a parenthesis would end the Markdown link the badge is written as
+        link = replace("https://doi.org/$doi", "(" => "%28", ")" => "%29")
+        if occursin(JOSS_DOI, doi)
+            image = "https://joss.theoj.org/papers/$doi/status.svg"
+            push!(badges, Badge("joss", "JOSS", image, link))
+        else
+            label = replace(shields_escape(doi), "(" => "%28", ")" => "%29")
+            image = "https://img.shields.io/badge/DOI-$label-blue?logo=doi"
+            push!(badges, Badge("doi", "DOI", image, link))
+        end
     end
     for id in arxiv
         push!(
@@ -1895,9 +2086,14 @@ if abspath(PROGRAM_FILE) == @__FILE__
     result = try
         main(ARGS)
     catch err
-        err isa ArgumentError || rethrow()
-        println(stderr, "launch-check: ", err.msg)
-        exit(2)
+        if err isa ArgumentError
+            println(stderr, "launch-check: ", err.msg)
+            exit(2)
+        end
+        # not a verdict on the repository: kept apart from the status of a failed check
+        showerror(stderr, err, catch_backtrace())
+        println(stderr)
+        exit(3)
     end
     exit(result !== nothing && result.failed ? 1 : 0)
 end
