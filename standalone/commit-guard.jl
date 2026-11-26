@@ -120,15 +120,19 @@ const NAMES =
 const TRAILER_PATTERN = r"^\s*(co-authored-by|co-developed-by|signed-off-by)\s*:"i
 # Line that begins with a phrase crediting an AI tool or model with the change, the name
 # within the same clause. An optional subject ("This commit was", "Changes", "Commit
-# message") and an adverb ("auto-", "fully") may lead; a colon may follow the preposition.
+# message") and an adverb ("auto-", "fully") may lead; a hyphen may join verb and
+# preposition, as in the trailer `Made-with: Cursor`, and a colon may follow. The name is
+# capitalised, as tools write theirs, or follows `://` as the host of a link: in lowercase
+# it is a word of the sentence (`cursor callbacks`, `anthropic weighting`).
 const ATTRIBUTION_PATTERN = Regex(
-    raw"^\W*(?i:(?:(?:this|the)\s+)?" *
-    raw"(?:(?:commit|change|patch|code|message|diff)s?\s+){0,2}" *
+    raw"^\W*(?i:(?:(?:this|the|these|those)\s+)?" *
+    raw"(?:(?:(?:commit|change|code|message|diff)s?|patch(?:es)?)\s+){0,2}" *
     raw"(?:(?:was|is|were|are|has\s+been|have\s+been)\s+)?" *
     raw"(?:(?:auto|fully|partly|partially|largely|entirely)[\s-]*)?" *
     raw"(?:generated|written|created|authored|produced|assisted|co-?authored|made|" *
     raw"developed|implemented|drafted)" *
-    raw"\s+(?:with|by|using|via)\b:?)[^.,;:!?]*?(?:" *
+    raw"[\s-]+(?:with|by|using|via)\b:?)(?:[^.,;:!?]|://(?:www\.)?)*?" *
+    raw"(?:(?=\p{Lu})|(?<=://)|(?<=://www\.))(?:" *
     NAMES *
     ")",
 )
@@ -137,11 +141,13 @@ const ATTRIBUTION_TRAILER_PATTERN = Regex(
     raw"^\s*(assisted-by|generated-by|ai-assisted(-by)?|claude-session|amp-thread-id)\s*:",
     "i",
 )
-# Co-author or co-developer trailer naming an AI tool, an assistant or agent.
+# Co-author or co-developer trailer whose name, the text before `<`, names an AI tool, an
+# assistant or agent, or whose address is Anthropic's no-reply address. A person's address
+# may hold any of these words (`agent@lab.org`, `jane@gemini.edu`).
 const AI_COAUTHOR_PATTERN = Regex(
-    raw"^\s*(?i:co-(?:authored|developed)-by)\s*:.*(?:" *
+    raw"^\s*(?i:co-(?:authored|developed)-by)\s*:(?:[^<]*(?:" *
     NAMES *
-    raw"|(?i:\b(?:assistant|agent|amp)\b|noreply@anthropic))",
+    raw"|(?i:\b(?:assistant|agent|amp)\b))|.*(?i:noreply@anthropic))",
 )
 # Address that Anthropic tools put in co-author trailers.
 const ANTHROPIC_ADDRESS_PATTERN = r"noreply@anthropic\.com"i
@@ -261,6 +267,17 @@ Whether `line` holds no character other than whitespace.
 is_blank(line::AbstractString) = all(isspace, line)
 
 """
+    continues_line(previous, line) -> Bool
+
+Whether `line` continues the sentence of the line before it, `previous`: `previous` holds
+text and `line` starts, after whitespace, with a lowercase letter, as a wrapped line does.
+A phrase that opens such a line stands mid-sentence (`Sky spectra` / `produced by
+Gemini/GMOS`) and is no attribution.
+"""
+continues_line(previous::AbstractString, line::AbstractString) =
+    !is_blank(previous) && occursin(r"^\s*\p{Ll}", line)
+
+"""
     is_conventional(header) -> Bool
 
 Whether the stripped `header` is a Conventional Commits header or one that git writes
@@ -273,29 +290,29 @@ function is_conventional(header::AbstractString)
 end
 
 """
-    is_attribution(line) -> Bool
+    is_attribution(line; continued = false) -> Bool
 
 Whether `line` credits an AI tool or model: the robot face, a line that begins with a
 phrase such as "Generated with Claude", an attribution trailer, or Anthropic's no-reply
-address.
+address. The phrase is not tested on a line that is `continued` (`continues_line`).
 """
-function is_attribution(line::AbstractString)
+function is_attribution(line::AbstractString; continued::Bool = false)
     occursin(ROBOT_FACE, line) && return true
-    occursin(ATTRIBUTION_PATTERN, line) && return true
+    !continued && occursin(ATTRIBUTION_PATTERN, line) && return true
     occursin(ATTRIBUTION_TRAILER_PATTERN, line) && return true
     return occursin(ANTHROPIC_ADDRESS_PATTERN, line)
 end
 
 """
-    line_rule(line; header = false) -> Union{Symbol, Nothing}
+    line_rule(line; header = false, continued = false) -> Union{Symbol, Nothing}
 
 The first of `:trailer`, `:attribution` and `:session_url` that `line` violates, or
 `nothing`. The header is not tested for trailers, since a header that looks like one is
-already a header finding.
+already a header finding. `continued` is passed on to `is_attribution`.
 """
-function line_rule(line::AbstractString; header::Bool = false)
+function line_rule(line::AbstractString; header::Bool = false, continued::Bool = false)
     !header && occursin(TRAILER_PATTERN, line) && return :trailer
-    is_attribution(line) && return :attribution
+    is_attribution(line; continued) && return :attribution
     occursin(SESSION_URL_PATTERN, line) && return :session_url
     return nothing
 end
@@ -307,8 +324,9 @@ Every line of `message`, split at `\\n`: its 1-based number, its text without a 
 `\\r`, and its kind, `:message`, `:comment` for a line starting with `#` above the cut, or
 `:discarded` for a line from the cut on. Without `comments` every line is a message line.
 With `comments`, a line matching `SCISSORS_PATTERN` is git's cut only when the first line
-after it that does not start with `#` begins with `diff --git ` or, under
-`diff.submodule=log`, with `Submodule `, or when there is none. The hook cannot see how
+after it that is neither blank nor starts with `#` begins with `diff --git ` or, under
+`diff.submodule=log`, with `Submodule `, or when there is none, as for `git commit -v`
+with an empty diff, whose file ends in a newline. The hook cannot see how
 git will clean the message up: git cuts at the first scissors line when it runs verbose
 (`-v`, `commit.verbose`) or with `cleanup=scissors`, removes `#` lines after an editor
 session, and keeps a message from `-m` or `-F` as written. A scissors line followed by a
@@ -321,7 +339,8 @@ function message_lines(message::AbstractString; comments::Bool = false)
     cut = length(lines) + 1
     for (index, line) in enumerate(lines)
         occursin(SCISSORS_PATTERN, line) || continue
-        following = findnext(other -> !startswith(other, '#'), lines, index + 1)
+        following =
+            findnext(other -> !startswith(other, '#') && !is_blank(other), lines, index + 1)
         if following === nothing ||
            startswith(lines[following], "diff --git ") ||
            startswith(lines[following], "Submodule ")
@@ -351,7 +370,9 @@ Findings of `message` sorted by line, restricted to `rules`. With `comments`, th
 is read as git hands it to the hook (see `message_lines`): every line from git's cut on is
 discarded, and lines starting with `#` above it are no part of the message for `:empty`,
 `:header` and `:separator`. Those lines are still tested with the line rules, on
-`comment_text`, because git keeps them when the message comes from `-m` or `-F`. Line
+`comment_text`, because git keeps them when the message comes from `-m` or `-F`. A line
+that continues the one before it (`continues_line`) is not tested for the opening phrase
+of an attribution. Line
 numbers count the lines of the original text, so that they point into the file the author
 edits. Throws `ArgumentError` for a rule not in `RULES`.
 
@@ -385,16 +406,21 @@ function check_message(message::AbstractString; comments::Bool = false, rules = 
         is_blank(line) ||
             push!(findings, MessageFinding(:separator, number, String(strip(line))))
     end
+    previous = header_line
     for (number, line) in kept[(header_index + 1):end]
-        rule = line_rule(line)
+        rule = line_rule(line; continued = continues_line(previous, line))
         rule === nothing ||
             push!(findings, MessageFinding(rule, number, String(strip(line))))
+        previous = line
     end
+    previous = ""
     for (number, line, kind) in entries
         kind === :comment || continue
-        rule = line_rule(comment_text(line))
+        text = comment_text(line)
+        rule = line_rule(text; continued = continues_line(previous, text))
         rule === nothing ||
             push!(findings, MessageFinding(rule, number, String(strip(line))))
+        previous = text
     end
 
     sort!(findings; by = finding -> finding.line)
@@ -402,17 +428,18 @@ function check_message(message::AbstractString; comments::Bool = false, rules = 
 end
 
 """
-    is_removable(line) -> Bool
+    is_removable(line; continued = false) -> Bool
 
 Whether strip removes `line`: a co-author trailer that names an AI tool
-(`AI_COAUTHOR_PATTERN`), or a line that is an attribution or holds a session link, a
-co-author trailer included (`Co-authored-by: x (https://jules.google.com/task/1)`). A
-co-author that names no AI tool and every `Signed-off-by` line stay.
+(`AI_COAUTHOR_PATTERN`), or a line that is an attribution (`is_attribution`, which
+`continued` is passed on to) or holds a session link, a co-author trailer included
+(`Co-authored-by: x (https://jules.google.com/task/1)`). A co-author that names no AI
+tool and every `Signed-off-by` line stay.
 """
-function is_removable(line::AbstractString)
+function is_removable(line::AbstractString; continued::Bool = false)
     occursin(r"^\s*signed-off-by\s*:"i, line) && return false
     occursin(AI_COAUTHOR_PATTERN, line) && return true
-    return is_attribution(line) || occursin(SESSION_URL_PATTERN, line)
+    return is_attribution(line; continued) || occursin(SESSION_URL_PATTERN, line)
 end
 
 """
@@ -441,11 +468,15 @@ function strip_message(message::AbstractString; comments::Bool = false)
 
     findings = MessageFinding[]
     keep = trues(length(lines))
+    # the line before, of the message or of the comments, whether it is removed or not
+    previous = Dict(:message => "", :comment => "")
     for (number, line, kind) in entries
-        (number == header || kind === :discarded) && continue
+        kind === :discarded && continue
         text = kind === :comment ? comment_text(line) : line
-        is_removable(text) || continue
-        rule = occursin(AI_COAUTHOR_PATTERN, text) ? :trailer : line_rule(text)
+        continued = continues_line(previous[kind], text)
+        previous[kind] = text
+        (number == header || !is_removable(text; continued)) && continue
+        rule = occursin(AI_COAUTHOR_PATTERN, text) ? :trailer : line_rule(text; continued)
         push!(findings, MessageFinding(rule, number, String(strip(line))))
         keep[number] = false
     end
@@ -491,8 +522,9 @@ end
 Hooks directory of the repository holding `repo`: `hooks` under the `realpath` of its
 common git directory, which linked work trees share. Throws `ArgumentError` when `repo` is
 not inside a git work tree (a bare repository included), and when `core.hooksPath` is
-set. Git then runs the hooks of that directory, which may serve every repository of the
-user, and this script writes into one repository only. Throws `ArgumentError` as well
+set, to the empty string as well. Git then runs the hooks of that directory, which may
+serve every repository of the user, or none, and this script writes into one repository
+only. Throws `ArgumentError` as well
 when `hooks` is a symbolic link or resolves elsewhere, since writing through it would
 leave the git directory of the repository.
 """
@@ -501,15 +533,13 @@ function hooks_directory(repo::AbstractString)
     ok || throw(ArgumentError("not inside a git work tree: $repo ($inside)"))
     inside == "true" || throw(ArgumentError("not inside a git work tree: $repo"))
     shared, configured = git(repo, "config", "--get", "core.hooksPath")
-    shared &&
-        !isempty(configured) &&
-        throw(
-            ArgumentError(
-                "core.hooksPath is set to $configured: git runs the hooks of that " *
-                "directory for this repository, and install writes into the hooks " *
-                "directory of a repository only",
-            ),
-        )
+    # set to the empty string, it still keeps git from the hooks of the repository
+    shared && throw(
+        ArgumentError(
+            "core.hooksPath is set to \"$configured\": git does not run the hooks of " *
+            "the repository's own hooks directory, the only one install writes into",
+        ),
+    )
     ok, common = git(repo, "rev-parse", "--git-common-dir")
     ok || throw(ArgumentError("not inside a git work tree: $repo ($common)"))
     # a relative answer is relative to the working directory of git, the physical
