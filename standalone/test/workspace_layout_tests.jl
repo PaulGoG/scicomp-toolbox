@@ -672,3 +672,66 @@ end
     @test hits(scan_self_containment(repo; home = "/home/nobody")) ==
           [("src/a.jl", 2, :outside)]
 end
+
+@testset "workspace-audit: review of the fifth round" begin
+    scan(files::Pair...) = begin
+        repo = make_repository(mktempdir())
+        for (rel, lines) in files
+            write_fixture(repo, rel, lines)
+        end
+        commit_fixtures(repo)
+        [
+            (f.file, f.line, f.kind) for
+            f in scan_self_containment(repo; home = "/home/nobody")
+        ]
+    end
+    climb = up(1) * "notes/x.md"
+    triple = "\"\"\""
+
+    # at the root, an empty argument or a triple-quoted one does not make the path absolute
+    @test scan("run.jl" => ["p = joinpath(@__DIR__, \"\", \"$climb\")"]) ==
+          [("run.jl", 1, :outside)]
+    @test scan("run.jl" => ["p = joinpath(@__DIR__, $triple$climb$triple)"]) ==
+          [("run.jl", 1, :outside)]
+    @test isempty(scan("run.jl" => ["p = joinpath(@__DIR__, \"\", \"src\", \"\")"]))
+
+    # only a call that joins its arguments anchors them to @__DIR__
+    @test scan("scripts/run.jl" => ["p = relpath(@__DIR__, \"$climb\")"]) ==
+          [("scripts/run.jl", 1, :outside)]
+    @test scan("scripts/run.jl" => ["println(@__DIR__, \" \", \"$climb\")"]) ==
+          [("scripts/run.jl", 1, :outside)]
+    @test scan("scripts/run.jl" => ["p = abspath(" * dirclimb(2) * "\"x\")"]) ==
+          [("scripts/run.jl", 1, :outside)]
+    @test isempty(scan("scripts/run.jl" => ["p = normpath(" * dirclimb(1) * "\"src\")"]))
+    @test scan("scripts/run.jl" => ["p = normpath(", "    " * dirclimb(2) * "\"x\")"]) ==
+          [("scripts/run.jl", 2, :outside)]
+
+    # a comment between the arguments ends neither the call nor its anchoring
+    split_call = ["p = joinpath(@__DIR__, \"..\", # one step", "    \"..\")"]
+    @test scan("scripts/run.jl" => split_call) == [("scripts/run.jl", 1, :outside)]
+    quoted_comment = ["p = joinpath(@__DIR__, \"..\", # the \"src\" step", "    \"..\")"]
+    @test scan("scripts/run.jl" => quoted_comment) == [("scripts/run.jl", 1, :outside)]
+    inside = ["p = joinpath(@__DIR__, # figure", "    \"" * up(1) * "src/a.jl\")"]
+    @test isempty(scan("scripts/run.jl" => inside, "src/a.jl" => ["a = 1"]))
+
+    # an argument that is not a literal: the path cannot be read from the text
+    open_call = "p = joinpath(@__DIR__, \"..\", name, \"..\", \"..\")"
+    repo = make_repository(mktempdir())
+    write_fixture(repo, "scripts/run.jl", [open_call])
+    commit_fixtures(repo)
+    finding = only(scan_self_containment(repo; home = "/home/nobody"))
+    @test (finding.kind, finding.line) == (:unresolved, 1)
+    @test finding.match == "@__DIR__, \"..\", name, \"..\", \"..\")"
+    @test isempty(scan("scripts/run.jl" => ["p = joinpath(@__DIR__, \"..\", name)"]))
+    @test isempty(
+        scan("scripts/run.jl" => ["p = joinpath(@__DIR__, \"..\", f(\"a\"), \"b\")"]),
+    )
+    # the literal arguments alone already leave the repository
+    @test scan("scripts/run.jl" => ["p = joinpath(" * dirclimb(2) * "name)"]) ==
+          [("scripts/run.jl", 1, :outside)]
+    # one candidate for the call, none besides it for the path inside
+    @test scan("scripts/run.jl" => ["p = joinpath(@__DIR__, name, \"$climb\")"]) ==
+          [("scripts/run.jl", 1, :unresolved)]
+    # a closing parenthesis that never comes claims nothing
+    @test isempty(scan("scripts/run.jl" => ["p = joinpath(@__DIR__, \"..\", name"]))
+end

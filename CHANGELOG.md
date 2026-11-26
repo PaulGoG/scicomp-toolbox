@@ -28,6 +28,15 @@ a change belongs to it.
   `snapshot_manifest` copies the manifest beside a run; neither overwrites. The keys are
   those `run-index` reads. The entry script prints the record of a project.
 
+### Fixed
+
+- `workspace-audit --self-contained`: only `joinpath`, `abspath` and `normpath` anchor
+  their arguments to `@__DIR__`; in any other call a relative path beside `@__DIR__` is
+  judged like a bare string. An empty or triple-quoted argument at the repository root
+  no longer turns the joined path into an absolute one, a comment between the arguments
+  no longer ends the call, and a call in which a parent step follows a non-literal
+  argument is listed for review.
+
 ### Changed
 
 - The badge row of the README is the one `launch-check badges` prints: the JET badge

@@ -61,11 +61,14 @@ const DATED_NOTE_PATTERN = r"^([0-9]{4})-([0-9]{2})-([0-9]{2})-.+\.md$"
 # Relative path containing one or more parent-directory climbs, or the step-only ./..
 const RELATIVE_CLIMB_PATTERN =
     r"(?<![\w/.~-])(?:\./)*(?:((?:\.\./)+)([\w.@+-][\w./@+-]*)?|(?<=\./)\.\.(?![\w/.-]))"
-# Julia joinpath from @__DIR__ through its literal string arguments, without escapes or
-# interpolation, across line breaks.
-const DIR_CLIMB_PATTERN = r"@__DIR__\s*,\s*((?:\"[^\"\\$\n]*\"\s*,?\s*)+)"
-# One literal string argument inside a DIR_CLIMB_PATTERN capture.
-const QUOTED_ARGUMENT_PATTERN = r"\"([^\"]*)\""
+# Julia joinpath, abspath or normpath from @__DIR__ through the literal string arguments
+# that follow it directly, without escapes or interpolation, across line breaks and
+# comments. The match starts at @__DIR__; the capture holds those arguments, possibly
+# none, with what stands between them.
+const DIR_CLIMB_PATTERN =
+    r"\b(?:joinpath|abspath|normpath)\(\s*\K@__DIR__\s*,(?:\s|#[^\n]*\n)*((?:\"[^\"\\$\n]*\"(?:\s|#[^\n]*\n)*,?(?:\s|#[^\n]*\n)*)*)"
+# Code units searched for the closing parenthesis of such a call.
+const CALL_TAIL_LIMIT = 2000
 # Julia @__DIR__ interpolated or concatenated into a string followed by "/.." segments.
 const DIR_STRING_CLIMB_PATTERN = r"@__DIR__(?:\)|\s*\*\s*\")((?:/\.\.)+)"
 # Quoted lone parent reference in a TOML file, as in path = "..".
@@ -805,17 +808,86 @@ function within_any(ranges::Vector{UnitRange{Int}}, first_unit::Integer, last_un
 end
 
 """
+    literal_arguments(capture::AbstractString) -> Vector{String}
+
+The string literals of a `DIR_CLIMB_PATTERN` capture in order. Comments between them are
+skipped, so that a quoted word inside a comment is no argument.
+"""
+function literal_arguments(capture::AbstractString)
+    arguments = String[]
+    units = codeunits(capture)
+    i = 1
+    while i <= length(units)
+        if units[i] == UInt8('#')
+            stop = findnext(==(UInt8('\n')), units, i)
+            i = stop === nothing ? length(units) + 1 : stop + 1
+        elseif units[i] == UInt8('"')
+            stop = findnext(==(UInt8('"')), units, i + 1)
+            stop === nothing && break
+            push!(arguments, String(units[(i + 1):(stop - 1)]))
+            i = stop + 1
+        else
+            i += 1
+        end
+    end
+    return arguments
+end
+
+"""
+    call_tail(units, from::Int) -> Tuple{Bool, Int, Bool}
+
+What follows the literal arguments of a call, from code unit `from`: whether the call
+closes there; the code unit of its closing parenthesis, or `from - 1` when none is found
+within `CALL_TAIL_LIMIT` code units; and whether a string literal among the further
+arguments is a parent step (`..`, or a path that opens with one).
+"""
+function call_tail(units::AbstractVector{UInt8}, from::Int)
+    newline = UInt8('\n')
+    limit = min(length(units), from + CALL_TAIL_LIMIT)
+    depth = 1
+    climbs = false
+    seen = false
+    i = from
+    while i <= limit
+        unit = units[i]
+        if unit == UInt8('#')
+            i = something(findnext(==(newline), units, i), limit)
+        elseif unit == UInt8('"')
+            stop = findnext(==(UInt8('"')), units, i + 1)
+            stop === nothing && break
+            content = String(units[(i + 1):(stop - 1)])
+            climbs |= content == ".." || startswith(content, "../")
+            seen = true
+            i = stop
+        elseif unit == UInt8('(')
+            depth += 1
+            seen = true
+        elseif unit == UInt8(')')
+            depth -= 1
+            depth == 0 && return !seen, i, climbs
+        elseif !isspace(Char(unit))
+            seen = true
+        end
+        i += 1
+    end
+    return false, from - 1, false
+end
+
+"""
     dir_climb_hits(rel, text) -> (hits, ranges)
 
-Calls `joinpath(@__DIR__, ...)` in the whole `text` of the file `rel` whose literal string
-arguments, joined and resolved from the directory of `rel`, lead above the repository
-root; a call wrapped over several lines is seen, and text that is not valid UTF-8
-elsewhere in the file does not hide it. A call with an absolute argument is left to the
-absolute-path form. Each hit is `(line, position, rank, finding)`, line and position
-being those of `@__DIR__`; the `match` of the finding has every run of whitespace
-collapsed to one space. `ranges` are the code units of every match, hit or not: relative
-paths inside them are anchored to `@__DIR__`, so the per-line forms do not judge them
-again.
+Calls `joinpath(@__DIR__, ...)`, and `abspath` and `normpath` likewise, in the whole
+`text` of the file `rel`. When the literal string arguments that follow `@__DIR__`,
+joined and resolved from the directory of `rel`, lead above the repository root, the
+call is an `:outside` finding. When they do not, but further arguments follow that are
+not literals and a parent step stands among them, where the path leads cannot be read
+from the text, and the call is an `:unresolved` candidate. A call wrapped over several
+lines or interrupted by comments is seen, and text that is not valid UTF-8 elsewhere in
+the file does not hide it. A call with an absolute argument is left to the absolute-path
+form. Each hit is `(line, position, rank, finding)`, line and position being those of
+`@__DIR__`; the `match` of the finding has every run of whitespace collapsed to one
+space. `ranges` are the code units of every call, hit or not: relative paths inside them
+are anchored to `@__DIR__`, so the per-line forms do not judge them again.
 """
 function dir_climb_hits(rel::AbstractString, text::String)
     hits = Tuple{Int, Int, Int, ContainmentFinding}[]
@@ -824,18 +896,27 @@ function dir_climb_hits(rel::AbstractString, text::String)
     newline = UInt8('\n')
     directory = dirname(rel)
     for m in eachmatch(DIR_CLIMB_PATTERN, text)
-        push!(ranges, m.offset:(m.offset + ncodeunits(m.match) - 1))
-        arguments =
-            [a.captures[1] for a in eachmatch(QUOTED_ARGUMENT_PATTERN, m.captures[1])]
+        last_unit = m.offset + ncodeunits(m.match) - 1
+        closed, tail_end, tail_climbs = call_tail(units, last_unit + 1)
+        open_climb = !closed && tail_climbs
+        stop = open_climb ? tail_end : last_unit
+        push!(ranges, m.offset:stop)
+        # an empty argument adds nothing to a path
+        arguments = filter!(!isempty, literal_arguments(m.captures[1]))
         any(a -> startswith(a, '/'), arguments) && continue
         joined = join(arguments, '/')
-        target = normpath(isempty(directory) ? joined : directory * "/" * joined)
-        (target == ".." || startswith(target, "../")) || continue
+        base = isempty(directory) ? "." : directory
+        target = normpath(isempty(joined) ? base : base * "/" * joined)
+        kind =
+            (target == ".." || startswith(target, "../")) ? :outside :
+            open_climb ? :unresolved : nothing
+        kind === nothing && continue
         lineno = 1 + count(==(newline), @view units[1:(m.offset - 1)])
         line_start = something(findprev(==(newline), units, m.offset - 1), 0)
-        matched = String(strip(replace(m.match, r"\s+" => " ")))
-        finding = ContainmentFinding(rel, lineno, :outside, matched)
-        push!(hits, (lineno, m.offset - line_start, KIND_ORDER.outside, finding))
+        shown = kind == :outside ? m.match : String(units[(m.offset):stop])
+        matched = String(strip(replace(shown, r"\s+" => " ")))
+        finding = ContainmentFinding(rel, lineno, kind, matched)
+        push!(hits, (lineno, m.offset - line_start, KIND_ORDER[kind], finding))
     end
     return hits, ranges
 end
