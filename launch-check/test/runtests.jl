@@ -1084,15 +1084,12 @@ end
         @test occursin("19 checks: 18 ok, 0 failed, 1 waived, 0 notes", text)
 
         script = joinpath(TOOL_DIR, "launch-check.jl")
-        status(args) = run(
-            ignorestatus(
-                pipeline(
-                    `$(Base.julia_cmd()) --startup-file=no $script $args`;
-                    stdout = devnull,
-                    stderr = devnull,
-                ),
-            ),
-        ).exitcode
+        # ignorestatus wraps the command, not the pipeline: Julia 1.12 has no method for
+        # the latter
+        function status(args)
+            command = ignorestatus(`$(Base.julia_cmd()) --startup-file=no $script $args`)
+            return run(pipeline(command; stdout = devnull, stderr = devnull)).exitcode
+        end
         @test status([root, "--only", "license"]) == 0
         @test status([root, "--only", "badges"]) == 1
         @test status([root, "--colour"]) == 2
