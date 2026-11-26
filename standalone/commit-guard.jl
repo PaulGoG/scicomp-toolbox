@@ -120,10 +120,10 @@ const NAMES =
 const TRAILER_PATTERN = r"^\s*(co-authored-by|co-developed-by|signed-off-by)\s*:"i
 # Line that begins with a phrase crediting an AI tool or model with the change, the name
 # within the same clause. An optional subject ("This commit was", "Changes", "Commit
-# message") and an adverb ("auto-", "fully") may lead; a hyphen may join verb and
-# preposition, as in the trailer `Made-with: Cursor`, and a colon may follow. The name is
-# capitalised, as tools write theirs, or follows `://` as the host of a link: in lowercase
-# it is a word of the sentence (`cursor callbacks`, `anthropic weighting`).
+# message") and an adverb ("auto-", "fully") may lead; a colon may follow the preposition.
+# The name is capitalised, as tools write theirs, a model identifier (`gpt-5`,
+# `claude-opus-4-5`), or a host in a link (`https://chat.openai.com`): any other name in
+# lowercase is a word of the sentence (`cursor callbacks`, `anthropic weighting`).
 const ATTRIBUTION_PATTERN = Regex(
     raw"^\W*(?i:(?:(?:this|the|these|those)\s+)?" *
     raw"(?:(?:(?:commit|change|code|message|diff)s?|patch(?:es)?)\s+){0,2}" *
@@ -131,8 +131,8 @@ const ATTRIBUTION_PATTERN = Regex(
     raw"(?:(?:auto|fully|partly|partially|largely|entirely)[\s-]*)?" *
     raw"(?:generated|written|created|authored|produced|assisted|co-?authored|made|" *
     raw"developed|implemented|drafted)" *
-    raw"[\s-]+(?:with|by|using|via)\b:?)(?:[^.,;:!?]|://(?:www\.)?)*?" *
-    raw"(?:(?=\p{Lu})|(?<=://)|(?<=://www\.))(?:" *
+    raw"\s+(?:with|by|using|via)\b:?)(?:[^.,;:!?]|://(?:[\w-]+\.)*)*?" *
+    raw"(?:(?=\p{Lu}|[a-z]+-?[\w.-]*\d)|(?<=://)|(?<=\.))(?:" *
     NAMES *
     ")",
 )
@@ -140,6 +140,14 @@ const ATTRIBUTION_PATTERN = Regex(
 const ATTRIBUTION_TRAILER_PATTERN = Regex(
     raw"^\s*(assisted-by|generated-by|ai-assisted(-by)?|claude-session|amp-thread-id)\s*:",
     "i",
+)
+# Trailer whose key joins a verb and a preposition, as `git commit --trailer` writes it
+# (`Made-with: Cursor`, Cursor's default), with a tool named in its value in any case.
+const ATTRIBUTION_KEY_PATTERN = Regex(
+    raw"^\s*(?i:(?:generated|written|created|authored|produced|assisted|made|developed|" *
+    raw"implemented|drafted)-(?:with|by|using|via))\s*:.*?(?:" *
+    NAMES *
+    ")",
 )
 # Co-author or co-developer trailer whose name, the text before `<`, names an AI tool, an
 # assistant or agent, or whose address is Anthropic's no-reply address. A person's address
@@ -270,12 +278,13 @@ is_blank(line::AbstractString) = all(isspace, line)
     continues_line(previous, line) -> Bool
 
 Whether `line` continues the sentence of the line before it, `previous`: `previous` holds
-text and `line` starts, after whitespace, with a lowercase letter, as a wrapped line does.
-A phrase that opens such a line stands mid-sentence (`Sky spectra` / `produced by
+text and `line` starts with a lowercase letter, after whitespace, quote marks of a
+blockquote (`>`), and opening quotation marks or brackets, as a wrapped line does. A
+phrase that opens such a line stands mid-sentence (`Sky spectra` / `produced by
 Gemini/GMOS`) and is no attribution.
 """
 continues_line(previous::AbstractString, line::AbstractString) =
-    !is_blank(previous) && occursin(r"^\s*\p{Ll}", line)
+    !is_blank(previous) && occursin(r"^\s*(?:>\s*)*[\"'“‘«(\[]*\p{Ll}", line)
 
 """
     is_conventional(header) -> Bool
@@ -294,12 +303,14 @@ end
 
 Whether `line` credits an AI tool or model: the robot face, a line that begins with a
 phrase such as "Generated with Claude", an attribution trailer, or Anthropic's no-reply
-address. The phrase is not tested on a line that is `continued` (`continues_line`).
+address. The phrase is not tested on a line that is `continued` (`continues_line`); the
+trailers are, since no wrapped line takes their form.
 """
 function is_attribution(line::AbstractString; continued::Bool = false)
     occursin(ROBOT_FACE, line) && return true
     !continued && occursin(ATTRIBUTION_PATTERN, line) && return true
     occursin(ATTRIBUTION_TRAILER_PATTERN, line) && return true
+    occursin(ATTRIBUTION_KEY_PATTERN, line) && return true
     return occursin(ANTHROPIC_ADDRESS_PATTERN, line)
 end
 
@@ -406,7 +417,8 @@ function check_message(message::AbstractString; comments::Bool = false, rules = 
         is_blank(line) ||
             push!(findings, MessageFinding(:separator, number, String(strip(line))))
     end
-    previous = header_line
+    # the body starts below the header, which no line continues
+    previous = ""
     for (number, line) in kept[(header_index + 1):end]
         rule = line_rule(line; continued = continues_line(previous, line))
         rule === nothing ||
@@ -468,17 +480,21 @@ function strip_message(message::AbstractString; comments::Bool = false)
 
     findings = MessageFinding[]
     keep = trues(length(lines))
-    # the line before, of the message or of the comments, whether it is removed or not
+    # the last kept line of the body or of the comments, so that each line is judged as it
+    # will read in the result, and `check_message` of the result finds what strip removes
     previous = Dict(:message => "", :comment => "")
     for (number, line, kind) in entries
-        kind === :discarded && continue
+        (kind === :discarded || number == header) && continue
         text = kind === :comment ? comment_text(line) : line
         continued = continues_line(previous[kind], text)
-        previous[kind] = text
-        (number == header || !is_removable(text; continued)) && continue
-        rule = occursin(AI_COAUTHOR_PATTERN, text) ? :trailer : line_rule(text; continued)
-        push!(findings, MessageFinding(rule, number, String(strip(line))))
-        keep[number] = false
+        if is_removable(text; continued)
+            rule =
+                occursin(AI_COAUTHOR_PATTERN, text) ? :trailer : line_rule(text; continued)
+            push!(findings, MessageFinding(rule, number, String(strip(line))))
+            keep[number] = false
+        else
+            previous[kind] = text
+        end
     end
     return join(lines[keep], '\n'), findings
 end
