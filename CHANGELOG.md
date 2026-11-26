@@ -31,6 +31,9 @@ a change belongs to it.
 
 ### Fixed
 
+- `formatter/format.jl` exits with status 1 when JuliaFormatter warns about a file, as
+  it does about one that does not parse. The formatter goes on after such a file and
+  reports the tree as formatted, so the format gate passed a syntax error.
 - `workspace-audit --self-contained`: only `joinpath`, `abspath` and `normpath` anchor
   their arguments to `@__DIR__`; in any other call a relative path beside `@__DIR__` is
   judged like a bare string. An empty or triple-quoted argument at the repository root
