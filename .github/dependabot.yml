@@ -19,6 +19,7 @@ updates:
       - "/launch-check"
       - "/run-provenance"
       - "/run-provenance/test"
+      - "/project-scaffold"
       - "/standalone"
     schedule:
       interval: "weekly"

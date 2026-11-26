@@ -29,6 +29,16 @@ a change belongs to it.
   CPU, Julia version and commit keys are those `run-index` reads. The entry script
   prints the record of a project, without the keys of a Julia session.
 
+- `project-scaffold`: generates a package with PkgTemplates and completes it to the
+  conventions of this workbench. Every environment (root, test, docs, bench) has an
+  activation script and bounded `[compat]` entries, and the auxiliary ones take the
+  package by path. The pipeline layer adds DrWatson, an entry script and a smallest
+  configuration; `--no-pipeline` leaves it out. The workflows are written in their
+  launch form, with actions pinned by commit SHA as resolved at generation time, and
+  every job is skipped while the repository is private; `dependabot.yml` keeps version
+  updates off until the launch. The tree is formatted with the pinned formatter, put
+  under git with one conventional commit, and given the commit-guard hook.
+
 ### Fixed
 
 - `formatter/format.jl` exits with status 1 when JuliaFormatter warns about a file, as

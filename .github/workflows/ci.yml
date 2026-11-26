@@ -61,6 +61,8 @@ jobs:
         run: julia --color=yes run.jl launch-check .
       - name: run-provenance smoke test
         run: julia --color=yes run.jl run-provenance --project run-provenance
+      - name: project-scaffold smoke test
+        run: julia --color=yes run.jl project-scaffold --help
       - name: Dispatcher smoke test (CPU only, reduced sampling)
         run: >
           julia --color=yes run.jl hardware-diagnostics

@@ -27,6 +27,7 @@ scicomp-toolbox/
 ├── bib-hygiene/            # tier 1: BibTeX validation
 ├── launch-check/           # tier 1: launch conventions and badge row of a repository
 ├── run-provenance/         # tier 1: provenance record of a run, package RunProvenance
+├── project-scaffold/       # tier 1: new package with the conventions in place
 ├── reference-runs/         # datasets of the eight validation runs
 └── assets/                 # figures of this README
 ```
@@ -106,6 +107,7 @@ julia run.jl bib-hygiene paper/refs.bib --tex paper/     # BibTeX checks and the
 julia run.jl launch-check ~/projects/Spectra.jl         # launch conventions of a repository
 julia run.jl launch-check badges ~/projects/Spectra.jl  # its badge row, ready to paste
 julia run.jl run-provenance --input data/catalogue.csv  # host, environment, commit and input digests of the project here
+julia run.jl project-scaffold Spectra --dir ~/projects/spectra --user USER --authors "Name"  # new package
 julia run.jl --threads 8 hardware-diagnostics           # Julia threads of the child process
 julia test.jl                                           # every test suite
 julia test.jl hardware-diagnostics                      # one suite
@@ -139,6 +141,7 @@ julia -i hardware-diagnostics/activate.jl
 | [`bib-hygiene`](bib-hygiene/) | 1 | BibTeX validation before submission: duplicate keys and entries, required fields, DOI form, journal names written in several ways, encoding and escaping, unprotected capitals, page ranges, years, citations of the manuscript; optional cached DOI and arXiv lookups; corrected copy in a separate file | `bib-hygiene/bib-hygiene.jl` |
 | [`launch-check`](launch-check/) | 1 | A repository against the conventions of a public launch: licence holder line, citation metadata, untracked manifests, bounded `[compat]`, Dependabot, workflows pinned by commit SHA with permissions and a cancelling concurrency group, CI matrix on `min` and `1`, formatter, changelog, README tree and badge row, documentation build, coverage upload, self-containment, commit history; prints the badge row the repository supports; waivers with their reasons in a file of the repository | `launch-check/launch-check.jl` |
 | [`run-provenance`](run-provenance/) | 1 | Provenance of a run as one flat record: host and CPU, Julia, thread, worker and BLAS configuration, project file and SHA-256 of the resolved manifest, commit of the source, size and SHA-256 of every input, active GPU device; merges into a DrWatson result dictionary and prints as TOML; usable as the package `RunProvenance` | `run-provenance/run-provenance.jl` |
+| [`project-scaffold`](project-scaffold/) | 1 | A new Julia package from PkgTemplates, completed to the conventions: an activation script in every environment, test, documentation and benchmark environments that take the package by path with bounded `[compat]`, an optional DrWatson pipeline layer, README with both trees, `CITATION.cff`, workflows pinned by commit SHA whose jobs are skipped while the repository is private, Dependabot switched off until the launch, the commit-guard hook, a first conventional commit | `project-scaffold/project-scaffold.jl` |
 
 ## Workspace layout
 
@@ -233,20 +236,22 @@ tool, sign-offs and the header stay, and nothing else is judged in that mode. Ea
 judged as it will read once the lines before it are removed, so that no attribution is
 left behind in the result.
 
-`install` copies the script into the hooks directory of one repository. It refuses when
+`install` copies the script into the hooks directory of one repository. The copy is a
+Julia script under `.git`, and JuliaFormatter run over the root of a repository formats it
+like a source file: a repository whose formatter style differs from that of this workbench
+keeps it out with `ignore = [".git"]` in its `.JuliaFormatter.toml`. It refuses when
 `core.hooksPath` is set, to the empty string as well, when that hooks directory is a
 symbolic link, and over a hook it did not install unless `--force`, which keeps the old
-one as `commit-msg.backup`. With
-`core.hooksPath`, git ignores the hooks of the repository, and the script can be copied
-into the shared directory as `commit-msg` by hand. The hook starts Julia through `env -S`
-(GNU coreutils 8.30 or later, or a BSD `env`) with `--compile=min` and takes about 0.3 s
-per commit. It assumes the default comment character `#` in message files, and it cannot
-see how git will clean the message up: git cuts at its scissors line only when it runs
-verbose or with `cleanup=scissors`, and keeps `#` lines from `-m` or `-F`. A scissors line
-followed by a diff header that the author types therefore hides what follows from the
-hook, and `commit-guard log` judges what git recorded.
-`git commit --no-verify` bypasses it, and git does not run it for cherry-picks and
-rebases, where `commit-guard log` is the check.
+one as `commit-msg.backup`. With `core.hooksPath`, git ignores the hooks of the
+repository, and the script can be copied into the shared directory as `commit-msg` by
+hand. The hook starts Julia through `env -S` (GNU coreutils 8.30 or later, or a BSD `env`)
+with `--compile=min` and takes about 0.3 s per commit. It assumes the default comment
+character `#` in message files, and it cannot see how git will clean the message up: git
+cuts at its scissors line only when it runs verbose or with `cleanup=scissors`, and keeps
+`#` lines from `-m` or `-F`. A scissors line followed by a diff header that the author
+types therefore hides what follows from the hook, and `commit-guard log` judges what git
+recorded. `git commit --no-verify` bypasses it, and git does not run it for cherry-picks
+and rebases, where `commit-guard log` is the check.
 
 ## Status
 
@@ -269,6 +274,7 @@ rebases, where `commit-guard log` is the check.
 | `bib-hygiene` | new; every check tested on a fixture, the online checks and the cache against a stub fetcher, then exercised once live against doi.org and the arXiv API |
 | `launch-check` | new; every check tested on repositories written at test time, the badge row against the markup written out by hand; run on this repository only, not yet on a package before its launch |
 | `run-provenance` | new; digests tested against the FIPS 180-4 vectors, the commit against the git command line, static QA with Aqua, JET and ExplicitImports; the oneAPI extension run on an Intel Arc integrated GPU, the CUDA, AMDGPU and Metal extensions written from the calls of `hardware-diagnostics` and not yet loaded |
+| `project-scaffold` | new; a package generated at test time passes its own suite, runs its entry points and builds its documentation, and fails the launch check on the three launch steps only; the generated suite also run on Julia 1.10; the visibility guard of the workflows has not yet run on a private remote |
 
 The accelerator runs were made with `HardwareDiagnostics` 0.3. Since the restructuring of
 0.4.0 the package has run on the host and on the Intel Arc GPU; the CUDA and AMDGPU
@@ -375,14 +381,22 @@ scicomp-toolbox/
 │   ├── Project.toml
 │   ├── README.md
 │   └── test/                      # repositories written at test time
-└── run-provenance/                # tier 1: RunProvenance package, provenance record of a run
+├── run-provenance/                # tier 1: RunProvenance package, provenance record of a run
+│   ├── activate.jl
+│   ├── run-provenance.jl          # entry point
+│   ├── Project.toml
+│   ├── README.md
+│   ├── ext/                       # RunProvenance{CUDA,AMDGPU,Metal,oneAPI}Ext
+│   ├── src/
+│   └── test/                      # FIPS vectors, repositories and projects made at test time, static QA
+└── project-scaffold/              # tier 1: new package with the conventions in place
     ├── activate.jl
-    ├── run-provenance.jl          # entry point
+    ├── config.toml
+    ├── project-scaffold.jl        # entry point
     ├── Project.toml
     ├── README.md
-    ├── ext/                       # RunProvenance{CUDA,AMDGPU,Metal,oneAPI}Ext
-    ├── src/
-    └── test/                      # FIPS vectors, repositories and projects made at test time, static QA
+    ├── templates/                 # files rendered into a generated package
+    └── test/                      # packages generated at test time, action repositories made with git
 ```
 
 </details>

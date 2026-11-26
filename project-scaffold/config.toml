@@ -1,0 +1,23 @@
+# Configuration of the project-scaffold tool
+
+[package]
+julia = "1.10"  # compat floor of the generated package; MAJOR.MINOR
+license = "MIT"  # licence name as PkgTemplates knows it; non-empty string
+style = "blue"  # JuliaFormatter style; one of: "blue" | "sciml" | "yas" | "nostyle"
+branch = "main"  # default branch; non-empty string
+
+[actions]  # release series (major version) of each action the workflow templates were written for; integer >= 0 each; must list every action the templates pin
+"actions/checkout" = 7
+"julia-actions/setup-julia" = 3
+"julia-actions/cache" = 3
+"julia-actions/julia-buildpkg" = 1
+"julia-actions/julia-runtest" = 1
+"julia-actions/julia-processcoverage" = 1
+"julia-actions/julia-docdeploy" = 1
+"codecov/codecov-action" = 6
+
+[remote]
+host = "https://github.com"  # where the action repositories are read with git ls-remote; non-empty string
+
+[compat_extra]  # earlier release series added to the entry derived from the resolved version; list of non-empty strings each
+JET = ["0.9"]  # JET series follow the Julia release: 0.9 serves Julia 1.10 and 1.11
