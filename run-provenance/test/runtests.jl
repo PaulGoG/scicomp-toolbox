@@ -366,4 +366,110 @@ end
             @test_throws "no project found" cd(() -> main(String[]; io = devnull), empty)
         end
     end
+
+    @testset "review of the first round" begin
+        function repository(files::Pair...)
+            root = project_directory(".gitignore" => "scratch/\n", files...)
+            git_run(root, "init")
+            git_run(root, "add", "-A")
+            git_run(root, "commit", "-m", "feat: first version")
+            return root
+        end
+
+        # a project named by its bare file name is still found in its repository
+        root = repository()
+        cd(root) do
+            @test RunProvenance.default_root("Project.toml") == root
+            record = provenance(; project = "Project.toml")
+            @test record["gitcommit"] == head_of(root)
+            @test record["project_file"] == "Project.toml"
+        end
+
+        # without the session of the caller
+        plain = provenance(; project = root, session = false)
+        expected = union(
+            keys(host_record()),
+            ["project_file", "gitcommit", "timestamp_utc", "inputs"],
+        )
+        @test sort!(collect(keys(plain))) == sort!(collect(expected))
+        @test isempty(intersect(keys(plain), keys(julia_record())))
+        # the command line describes a project, not the session of the tool
+        io = IOBuffer()
+        printed = main(["--project", root]; io)
+        @test printed == TOML.parse(String(take!(io)))
+        @test sort!(collect(keys(printed))) == sort!(collect(expected))
+
+        # code that the recorded commit does not hold
+        mkpath(joinpath(root, "scripts"))
+        script = joinpath(root, "scripts", "new.jl")
+        write(script, "x = 1\n")
+        mkpath(joinpath(root, "scratch"))
+        ignored = joinpath(root, "scratch", "Project.toml")
+        write(ignored, "name = \"Scratch\"\n")
+        tracked = joinpath(root, "Project.toml")
+        @test git_record(root; sources = [tracked]) == Dict("gitcommit" => head_of(root))
+        sources = [
+            script,
+            ignored,
+            tracked,
+            joinpath(root, "absent.jl"),
+            file_with("abc"),
+            script,
+        ]
+        @test git_record(root; sources) == Dict(
+            "gitcommit" => head_of(root),
+            "untracked_sources" => ["scripts/new.jl", "scratch/Project.toml"],
+        )
+        scratch = provenance(; project = joinpath(root, "scratch"))
+        @test scratch["gitcommit"] == head_of(root)
+        @test scratch["untracked_sources"] == ["Project.toml"]
+        @test !haskey(provenance(; project = root), "untracked_sources")
+        # once staged, the script is a change to the tree instead
+        git_run(root, "add", "scripts/new.jl")
+        @test git_record(root; sources = [script]) ==
+              Dict("gitcommit" => head_of(root) * "-dirty")
+
+        # a record that TOML cannot print leaves no file to block the next attempt
+        path = joinpath(mktempdir(), "provenance.toml")
+        @test_throws Exception write_provenance(path, Dict("a" => 1, "b" => nothing))
+        @test !ispath(path)
+        @test write_provenance(path, Dict("a" => 1)) == path
+        @test read(path, String) == "a = 1\n"
+
+        # paths through a symbolic link are those of the directory it names
+        if !Sys.iswindows()
+            linked = repository("data/x.csv" => "1\n")
+            link = joinpath(mktempdir(), "link")
+            symlink(linked, link)
+            record = cd(() -> provenance(; project = link, inputs = ["data/x.csv"]), linked)
+            @test record["inputs"][1]["path"] == "data/x.csv"
+            @test record["project_file"] == "Project.toml"
+            @test record["gitcommit"] == head_of(linked)
+        end
+
+        # the manifest Julia resolves: of the workspace for a member, or the one named
+        workspace = project_directory(
+            "Manifest.toml" => "# of the workspace\n",
+            "env/Project.toml" => "name = \"Env\"\n",
+        )
+        write(
+            joinpath(workspace, "Project.toml"),
+            "name = \"Run\"\n\n[workspace]\nprojects = [\"env\"]\n",
+        )
+        member = environment_record(joinpath(workspace, "env"))
+        @test member["project_file"] == "Project.toml"
+        @test member["manifest_file"] == "../Manifest.toml"
+        @test member["manifest_sha256"] == digest("# of the workspace\n")
+        named = project_directory("Manifest.toml" => "# default\n", "M.toml" => "# named\n")
+        write(joinpath(named, "Project.toml"), "name = \"Run\"\nmanifest = \"M.toml\"\n")
+        @test environment_record(named)["manifest_file"] == "M.toml"
+        @test environment_record(named)["manifest_sha256"] == digest("# named\n")
+
+        # a root that is no directory
+        @test_throws "root" environment_record(named; root = joinpath(named, "absent"))
+        @test_throws "root" input_record(
+            joinpath(named, "M.toml");
+            root = joinpath(named, "M.toml"),
+        )
+    end
 end

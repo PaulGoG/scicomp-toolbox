@@ -25,8 +25,9 @@ a change belongs to it.
   SHA-256 of its resolved manifest, the commit of the source, size and SHA-256 of every
   input and the active GPU device as one dictionary with string keys, which merges into
   a DrWatson result and prints as TOML. `write_provenance` writes it as a sidecar and
-  `snapshot_manifest` copies the manifest beside a run; neither overwrites. The keys are
-  those `run-index` reads. The entry script prints the record of a project.
+  `snapshot_manifest` copies the manifest beside a run; neither overwrites. The host,
+  CPU, Julia version and commit keys are those `run-index` reads. The entry script
+  prints the record of a project, without the keys of a Julia session.
 
 ### Fixed
 

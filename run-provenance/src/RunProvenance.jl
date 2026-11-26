@@ -105,11 +105,25 @@ end
 """
     default_root(project::AbstractString) -> String
 
-The default root of the relative paths of a record: `project` itself when it is a
-directory, the directory of the project file otherwise.
+The default root of the relative paths of a record, as an absolute path: `project`
+itself when it is a directory, the directory of the project file otherwise.
 """
 function default_root(project::AbstractString)
-    return isdir(project) ? String(project) : String(dirname(project))
+    path = abspath(project)
+    return isdir(path) ? path : dirname(path)
+end
+
+"""
+    relative_path(path::AbstractString, root::AbstractString) -> String
+
+`path` relative to the directory `root`, both resolved through symbolic links, with `/`
+as separator on every platform. Throws `ArgumentError` when `root` is not an existing
+directory.
+"""
+function relative_path(path::AbstractString, root::AbstractString)
+    isdir(root) || throw(ArgumentError("root is not an existing directory: $root"))
+    relative = relpath(realpath(path), realpath(root))
+    return replace(relative, Base.Filesystem.path_separator => "/")
 end
 
 """
@@ -146,54 +160,88 @@ function manifest_path(project::AbstractString)
 end
 
 """
-    environment_record(project::AbstractString; root::AbstractString = dirname(project))
-        -> Dict{String, Any}
+    environment_record(project::AbstractString;
+                       root::AbstractString = default_root(project)) -> Dict{String, Any}
 
 The Julia environment of the run. `project` is a project file or a directory holding
-`JuliaProject.toml` or `Project.toml`; when it is a directory, `root` defaults to it.
-Keys: `"project_file"`, the project file relative to `root`, and, when the project has a
-manifest, `"manifest_file"` (relative to `root`) and `"manifest_sha256"`. Throws
-`ArgumentError` when the project file cannot be found.
+`JuliaProject.toml` or `Project.toml`; `root` defaults to that directory. Keys:
+`"project_file"`, the project file relative to `root`, and, when Julia resolves an
+existing manifest for the project, `"manifest_file"` (relative to `root`) and
+`"manifest_sha256"`. The manifest is the one the running Julia release takes: its own
+`Manifest-v<major>.<minor>.toml` before `Manifest.toml`, the manifest of the workspace
+for a member project. Throws `ArgumentError` when the project file cannot be found.
 """
 function environment_record(
     project::AbstractString;
     root::AbstractString = default_root(project),
 )
     file = project_file(project)
-    base = abspath(root)
-    record = Dict{String, Any}("project_file" => relpath(abspath(file), base))
+    record = Dict{String, Any}("project_file" => relative_path(file, root))
     manifest = manifest_path(file)
     if manifest !== nothing
-        record["manifest_file"] = relpath(abspath(manifest), base)
+        record["manifest_file"] = relative_path(manifest, root)
         record["manifest_sha256"] = sha256_hex(manifest)
     end
     return record
 end
 
 """
-    git_record(root::AbstractString) -> Dict{String, Any}
+    untracked_sources(repo, sources, root) -> Vector{String}
+
+Those of the files `sources` that lie in the work tree of `repo` and that git does not
+track, new or ignored, as paths relative to `root`.
+"""
+function untracked_sources(repo::LibGit2.GitRepo, sources, root::AbstractString)
+    found = String[]
+    workdir = LibGit2.workdir(repo)
+    isempty(workdir) && return found
+    top = realpath(workdir)
+    outside = LibGit2.Consts.STATUS_WT_NEW | LibGit2.Consts.STATUS_IGNORED
+    for source in sources
+        isfile(source) || continue
+        inside = relpath(realpath(source), top)
+        (isabspath(inside) || startswith(inside, "..")) && continue
+        flags = LibGit2.status(repo, replace(inside, Base.Filesystem.path_separator => "/"))
+        (flags === nothing || flags & outside == 0) && continue
+        path = relative_path(source, root)
+        path in found || push!(found, path)
+    end
+    return found
+end
+
+"""
+    git_record(root::AbstractString; sources = String[]) -> Dict{String, Any}
 
 The source revision of the repository that holds `root`, searched upwards from `root`
 as DrWatson does. Key `"gitcommit"`: the hash of HEAD, followed by `-dirty` when tracked
-files differ from it (untracked files do not count). Empty when `root` is in no
-repository or the repository has no commit.
+or staged files differ from that commit; untracked files do not count. Key
+`"untracked_sources"`, present when not empty: those of the files `sources` that lie in
+the repository and are not tracked, so that a commit is not taken for the code of a
+script or project it does not hold. Empty when `root` is in no repository or the
+repository has no commit; any other failure of git is thrown.
 """
-function git_record(root::AbstractString)
+function git_record(root::AbstractString; sources = String[])
+    record = Dict{String, Any}()
     repo = try
-        LibGit2.GitRepoExt(root)
+        LibGit2.GitRepoExt(String(root))
     catch err
-        err isa LibGit2.GitError || rethrow()
-        return Dict{String, Any}()
+        (err isa LibGit2.GitError && err.code == LibGit2.Error.ENOTFOUND) || rethrow()
+        return record
     end
     try
         commit = try
             string(LibGit2.head_oid(repo))
         catch err
-            err isa LibGit2.GitError || rethrow()
-            return Dict{String, Any}()
+            unborn = err isa LibGit2.GitError && err.code == LibGit2.Error.EUNBORNBRANCH
+            unborn || rethrow()
+            return record
         end
-        LibGit2.isdirty(repo) && (commit *= "-dirty")
-        return Dict{String, Any}("gitcommit" => commit)
+        # compared with the commit just read, not with whatever HEAD is by then
+        dirty = LibGit2.isdiff(repo, commit)
+        record["gitcommit"] = dirty ? commit * "-dirty" : commit
+        untracked = untracked_sources(repo, sources, root)
+        isempty(untracked) || (record["untracked_sources"] = untracked)
+        return record
     finally
         close(repo)
     end
@@ -208,9 +256,8 @@ separator on every platform), `"bytes"` and `"sha256"`. Throws `ArgumentError` n
 """
 function input_record(path::AbstractString; root::AbstractString)
     isfile(path) || throw(ArgumentError("input file not found: $path"))
-    relative = relpath(abspath(path), abspath(root))
     return Dict{String, Any}(
-        "path" => replace(relative, Base.Filesystem.path_separator => "/"),
+        "path" => relative_path(path, root),
         "bytes" => filesize(path),
         "sha256" => sha256_hex(path),
     )
@@ -244,18 +291,26 @@ end
 
 """
     provenance(; project::AbstractString = active_project(),
-               root::AbstractString = dirname(project), inputs = String[],
-               git::Bool = true) -> Dict{String, Any}
+               root::AbstractString = default_root(project), inputs = String[],
+               git::Bool = true, session::Bool = true) -> Dict{String, Any}
 
 The provenance of a run as one flat record: the keys of [`host_record`](@ref),
 [`julia_record`](@ref), [`environment_record`](@ref) and [`git_record`](@ref), together
-with `"timestamp_utc"` (ISO 8601, seconds, `Z` suffix), `"inputs"`, one
-[`input_record`](@ref) per path of the iterable `inputs`, and `"accelerators"`, the
-result of [`accelerator_records`](@ref). Both vectors are present also when empty.
-`project` is a project file or a directory; when it is a directory, `root` defaults to
-it. Relative paths of the record are relative to `root`. With `git = false` the record
-carries no `"gitcommit"`, for a dictionary that DrWatson's `tagsave` tags itself: it adds
-no git information to one that already holds the key.
+with `"timestamp_utc"` (when the record was taken; ISO 8601, seconds, `Z` suffix),
+`"inputs"`, one [`input_record`](@ref) per path of the iterable `inputs`, and
+`"accelerators"`, the result of [`accelerator_records`](@ref). Both vectors are present
+also when empty. `project` is a project file or a directory, and `root` defaults to the
+directory of the project. Relative paths of the record are relative to `root`.
+
+The commit, the manifest and the inputs are read when the function is called: call it
+when the run starts, before the computation, so that a commit or a package update made
+while it runs does not enter the record.
+
+With `git = false` the record carries no `"gitcommit"`, for a dictionary that DrWatson's
+`tagsave` tags itself: it adds no git information to one that already holds the key.
+With `session = false` it carries neither the keys of [`julia_record`](@ref) nor
+`"accelerators"`: these describe the Julia session that calls, which is the run only
+when the run itself calls.
 
 # Example
 ```julia
@@ -268,15 +323,49 @@ function provenance(;
     root::AbstractString = default_root(project),
     inputs = String[],
     git::Bool = true,
+    session::Bool = true,
 )
+    file = project_file(project)
     record = Dict{String, Any}()
-    merge!(record, host_record(), julia_record(), environment_record(project; root))
-    git && merge!(record, git_record(root))
+    merge!(record, host_record(), environment_record(file; root))
+    if session
+        merge!(record, julia_record())
+        record["accelerators"] = accelerator_records()
+    end
+    if git
+        # the project file and the script that runs, when git does not track them
+        sources = String[file]
+        isfile(PROGRAM_FILE) && push!(sources, PROGRAM_FILE)
+        merge!(record, git_record(root; sources))
+    end
     stamp = Dates.format(Dates.now(Dates.UTC), dateformat"yyyy-mm-ddTHH:MM:SS")
     record["timestamp_utc"] = stamp * "Z"
     record["inputs"] = Dict{String, Any}[input_record(path; root) for path in inputs]
-    record["accelerators"] = accelerator_records()
     return record
+end
+
+"""
+    write_new(path::AbstractString, content) -> Nothing
+
+Create the file `path` with `content`. The file is created exclusively, so that one
+made by another process since any earlier test is not truncated; an existing `path`
+throws `ArgumentError`.
+"""
+function write_new(path::AbstractString, content)
+    flags =
+        Base.Filesystem.JL_O_WRONLY | Base.Filesystem.JL_O_CREAT | Base.Filesystem.JL_O_EXCL
+    file = try
+        Base.Filesystem.open(path, flags, 0o644)
+    catch err
+        (err isa Base.IOError && err.code == Base.UV_EEXIST) || rethrow()
+        throw(ArgumentError("refusing to overwrite existing file: $path"))
+    end
+    try
+        write(file, content)
+    finally
+        close(file)
+    end
+    return nothing
 end
 
 """
@@ -284,15 +373,15 @@ end
 
 Write `record` as TOML with sorted keys to `path` and return `abspath(path)`. Throws
 `ArgumentError` when `path` exists, which is never overwritten, or when its directory
-does not exist.
+does not exist. The text is complete before the file is created: a record that TOML
+cannot print leaves no file behind.
 """
 function write_provenance(path::AbstractString, record::AbstractDict)
     ispath(path) && throw(ArgumentError("refusing to overwrite existing file: $path"))
     directory = dirname(abspath(path))
     isdir(directory) || throw(ArgumentError("directory does not exist: $directory"))
-    open(path, "w") do io
-        TOML.print(io, record; sorted = true)
-    end
+    text = sprint(io -> TOML.print(io, record; sorted = true))
+    write_new(path, text)
     return abspath(path)
 end
 
@@ -306,7 +395,8 @@ Copy the manifest of `project` (a project file or a directory, resolved as in
 path of the copy; `nothing` when the project has no manifest. A file of that name with
 the same bytes as the manifest is left in place and its path returned. Throws
 `ArgumentError` when `directory` is not an existing directory or the file there differs
-from the manifest.
+from the manifest. Give every run a directory of its own: a second run with another
+manifest is refused in a shared one.
 """
 function snapshot_manifest(
     directory::AbstractString;
@@ -315,12 +405,13 @@ function snapshot_manifest(
     isdir(directory) || throw(ArgumentError("not an existing directory: $directory"))
     source = manifest_path(project_file(project))
     source === nothing && return nothing
+    bytes = read(source)
     target = joinpath(directory, basename(source))
     if ispath(target)
-        isfile(target) && read(target) == read(source) && return target
+        isfile(target) && read(target) == bytes && return target
         throw(ArgumentError("$target exists and differs from the manifest $source"))
     end
-    cp(source, target; follow_symlinks = true)
+    write_new(target, bytes)
     return target
 end
 
@@ -333,7 +424,11 @@ function usage(io::IO = stdout)
     print(
         io,
         """
-        run-provenance — platform, environment, source and input provenance of a run
+        run-provenance — host, environment, source and input provenance of a project
+
+        What a run started here would record, without the keys of its Julia session
+        (version, threads, BLAS, GPU): a run records those itself, with provenance().
+        The manifest is the one this Julia release resolves for the project.
 
         Usage:
           julia run.jl run-provenance [options]
@@ -417,7 +512,8 @@ function main(args::Vector{String} = ARGS; io::IO = stdout)
     end
     project_path = project === nothing ? working_project() : project
     root_path = root === nothing ? default_root(project_path) : root
-    record = provenance(; project = project_path, root = root_path, inputs)
+    # the Julia session here is that of this tool, not of a run
+    record = provenance(; project = project_path, root = root_path, inputs, session = false)
     if out === nothing
         TOML.print(io, record; sorted = true)
     else

@@ -6,7 +6,7 @@ source, the size and SHA-256 of every input file, and the active GPU devices. Th
 is a `Dict{String, Any}` with string keys and values that TOML can hold, so it prints as
 TOML and merges into a DrWatson result dictionary. A key whose value cannot be
 determined is left out. The package `RunProvenance` implements the tool and is meant to
-be called from the pipeline that produces the run.
+be called from the pipeline that produces the run, when the run starts.
 
 ```
 run-provenance/
@@ -28,7 +28,7 @@ run-provenance/
 
 ## Use in a project
 
-The package is not registered. A project on Julia 1.11 or later takes it from the
+The package is not registered and needs Julia 1.12 or later. A project takes it from the
 repository through `[sources]` in its `Project.toml`:
 
 ```toml
@@ -51,12 +51,21 @@ With DrWatson, the record is merged into the result before it is saved:
 ```julia
 using DrWatson, RunProvenance
 
-result = Dict{String, Any}("energy" => energy, "Δt" => Δt)
 name = savename(parameters)
-record = provenance(; inputs = [datadir("exp_raw", "catalogue.csv")])
-safesave(datadir("runs", name * ".jld2"), merge(result, record))
-snapshot_manifest(datadir("runs"))
+rundir = mkpath(datadir("runs", name))
+record = provenance(; inputs = [datadir("exp_raw", "catalogue.csv")])  # before the computation
+snapshot_manifest(rundir)
+
+energy = simulate(parameters)
+
+result = Dict{String, Any}("energy" => energy, "Δt" => parameters.Δt)
+safesave(joinpath(rundir, "result.jld2"), merge(result, record))
 ```
+
+The record is taken when the run starts: the commit, the manifest and the inputs are
+read at the call, so a commit or a package update made while the run computes would
+otherwise be recorded as its own. Each run has a directory of its own, because
+`snapshot_manifest` refuses to put a second, different manifest beside the first.
 
 `result` needs string keys: merged with a dictionary keyed by symbols, the record would
 yield a dictionary of mixed key types. The record carries the commit itself, as the full
@@ -77,6 +86,16 @@ The record names the machine: the host name, and in `versioninfo` the `JULIA_*`
 environment variables of the session, which can hold paths under a home directory. Read
 it before a dataset that carries it is published.
 
+What the record does not hold:
+
+- Untracked files do not make the commit `-dirty`. When the project file or the script
+  that runs is itself untracked or ignored, `untracked_sources` names it; other
+  untracked code that the run includes leaves no trace.
+- Only the manifest of the project is recorded. A package loaded from another
+  environment of the load path, such as the default environment, is not in it, and a
+  package developed by path appears in the manifest without a tree hash.
+- `timestamp_utc` is the time of the call, not the start of the process.
+
 ## Keys
 
 Paths are relative to `root`, by default the directory of the project.
@@ -87,7 +106,7 @@ Paths are relative to `root`, by default the directory of the project.
 | `os`, `arch`, `machine` | kernel, architecture, target triple | `Sys.KERNEL`, `Sys.ARCH`, `Sys.MACHINE` |
 | `cpu_model` | CPU model, absent when it cannot be queried | `Sys.cpu_info()` |
 | `cpu_threads` | logical cores | `Sys.CPU_THREADS` |
-| `total_memory_bytes` | physical memory [B] | `Sys.total_memory()` |
+| `total_memory_bytes` | memory the process may use [B]: the physical memory, or a lower limit set by a control group | `Sys.total_memory()` |
 | `julia_version`, `julia_commit` | Julia version and short commit of the build | `VERSION`, `Base.GIT_VERSION_INFO` |
 | `julia_threads`, `julia_interactive_threads` | threads of the default and interactive pools | `Threads.nthreads` |
 | `distributed_workers` | worker processes besides the master | `Distributed.nprocs() - 1` |
@@ -96,12 +115,17 @@ Paths are relative to `root`, by default the directory of the project.
 | `versioninfo` | text of `versioninfo()` | `InteractiveUtils` |
 | `project_file` | project file | `--project`, `Base.active_project()` |
 | `manifest_file`, `manifest_sha256` | resolved manifest and its SHA-256, absent without a manifest | `Base.project_file_manifest_path` |
-| `gitcommit` | hash of HEAD, `-dirty` when tracked files differ; absent outside a repository or without a commit | `LibGit2` |
+| `gitcommit` | hash of HEAD, `-dirty` when tracked or staged files differ; absent outside a repository or without a commit | `LibGit2` |
+| `untracked_sources` | the project file and the running script when git does not track them; absent otherwise | `LibGit2.status` |
 | `timestamp_utc` | time of the record, `yyyy-mm-ddTHH:MM:SSZ` | `Dates.now(UTC)` |
 | `inputs` | one table per input file: `path`, `bytes`, `sha256` | `filesize`, `SHA.sha256` |
 | `accelerators` | one table per functional GPU backend: `backend`, `device`, `memory_bytes`, `runtime_version`, `versioninfo` | package extensions |
 
-`inputs` and `accelerators` are present also when empty. A CUDA record carries
+`inputs` and `accelerators` are present also when empty. With `session = false` the
+record has none of the keys from `julia_version` to `versioninfo` and no `accelerators`;
+with `git = false`, no `gitcommit`. A git failure other than "no repository" or "no
+commit", such as a repository owned by another user, is thrown and not passed over. A
+CUDA record carries
 `driver_version` in addition; a Metal record has no `runtime_version`, and its
 `memory_bytes` is the recommended working set of the unified memory.
 
@@ -111,9 +135,16 @@ Paths are relative to `root`, by default the directory of the project.
 julia run.jl run-provenance --help
 julia run.jl run-provenance                                       # project of the working directory
 julia run.jl run-provenance --project myproject --input data/catalogue.csv
-julia run.jl run-provenance --input a.csv --input b.csv --out provenance.toml
+julia run.jl run-provenance --input a.csv --input b.csv --out project.toml
 julia run-provenance/run-provenance.jl --root .                   # without the dispatcher
 ```
+
+The command line describes a project on this host: what a run started here would
+record, without the keys of a Julia session. The session it runs in is that of the tool,
+with its own thread count and without any GPU package, so those keys would say nothing
+about a run; a run records them by calling `provenance()` itself. The manifest named is
+the one the Julia release running the tool resolves, which for a project that keeps
+`Manifest-v1.12.toml` is another file under Julia 1.13.
 
 `--project` takes a project file or a directory; without it the project is the one Julia
 finds upwards from the working directory, and the tool stops when there is none.
