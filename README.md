@@ -26,6 +26,7 @@ scicomp-toolbox/
 ├── figure-audit/           # tier 1: exported figures against a column width
 ├── bib-hygiene/            # tier 1: BibTeX validation
 ├── launch-check/           # tier 1: launch conventions and badge row of a repository
+├── run-provenance/         # tier 1: provenance record of a run, package RunProvenance
 ├── reference-runs/         # datasets of the eight validation runs
 └── assets/                 # figures of this README
 ```
@@ -104,6 +105,7 @@ julia run.jl figure-audit paper/figures --column double  # exported figures agai
 julia run.jl bib-hygiene paper/refs.bib --tex paper/     # BibTeX checks and the citations of a manuscript
 julia run.jl launch-check ~/projects/Spectra.jl         # launch conventions of a repository
 julia run.jl launch-check badges ~/projects/Spectra.jl  # its badge row, ready to paste
+julia run.jl run-provenance --input data/catalogue.csv  # host, environment, commit and input digests of the project here
 julia run.jl --threads 8 hardware-diagnostics           # Julia threads of the child process
 julia test.jl                                           # every test suite
 julia test.jl hardware-diagnostics                      # one suite
@@ -136,6 +138,7 @@ julia -i hardware-diagnostics/activate.jl
 | [`figure-audit`](figure-audit/) | 1 | Exported PDF, PNG and SVG figures checked against a column width: printed size and the scaling LaTeX would apply, page count, font embedding and subsetting, smallest text size after scaling, raster resolution, colour space; non-zero exit on failure | `figure-audit/figure-audit.jl` |
 | [`bib-hygiene`](bib-hygiene/) | 1 | BibTeX validation before submission: duplicate keys and entries, required fields, DOI form, journal names written in several ways, encoding and escaping, unprotected capitals, page ranges, years, citations of the manuscript; optional cached DOI and arXiv lookups; corrected copy in a separate file | `bib-hygiene/bib-hygiene.jl` |
 | [`launch-check`](launch-check/) | 1 | A repository against the conventions of a public launch: licence holder line, citation metadata, untracked manifests, bounded `[compat]`, Dependabot, workflows pinned by commit SHA with permissions and a cancelling concurrency group, CI matrix on `min` and `1`, formatter, changelog, README tree and badge row, documentation build, coverage upload, self-containment, commit history; prints the badge row the repository supports; waivers with their reasons in a file of the repository | `launch-check/launch-check.jl` |
+| [`run-provenance`](run-provenance/) | 1 | Provenance of a run as one flat record: host and CPU, Julia, thread, worker and BLAS configuration, project file and SHA-256 of the resolved manifest, commit of the source, size and SHA-256 of every input, active GPU device; merges into a DrWatson result dictionary and prints as TOML; usable as the package `RunProvenance` | `run-provenance/run-provenance.jl` |
 
 ## Workspace layout
 
@@ -264,6 +267,7 @@ rebases, where `commit-guard log` is the check.
 | `figure-audit` | new; tested on PDF, PNG and SVG fixtures drawn with Cairo at test time, Poppler through `Poppler_jll`; not yet run on a manuscript's figure set |
 | `bib-hygiene` | new; every check tested on a fixture, the online checks and the cache against a stub fetcher, then exercised once live against doi.org and the arXiv API |
 | `launch-check` | new; every check tested on repositories written at test time, the badge row against the markup written out by hand; run on this repository only, not yet on a package before its launch |
+| `run-provenance` | new; digests tested against the FIPS 180-4 vectors, the commit against the git command line, static QA with Aqua, JET and ExplicitImports; the oneAPI extension run on an Intel Arc integrated GPU, the CUDA, AMDGPU and Metal extensions written from the calls of `hardware-diagnostics` and not yet loaded |
 
 The accelerator runs were made with `HardwareDiagnostics` 0.3. Since the restructuring of
 0.4.0 the package has run on the host and on the Intel Arc GPU; the CUDA and AMDGPU
@@ -363,13 +367,21 @@ scicomp-toolbox/
 │   ├── Project.toml
 │   ├── README.md
 │   └── test/                      # fixture bib and tex, stub fetcher
-└── launch-check/                  # tier 1: launch conventions and badge row
+├── launch-check/                  # tier 1: launch conventions and badge row
+│   ├── activate.jl
+│   ├── config.toml
+│   ├── launch-check.jl            # entry point
+│   ├── Project.toml
+│   ├── README.md
+│   └── test/                      # repositories written at test time
+└── run-provenance/                # tier 1: RunProvenance package, provenance record of a run
     ├── activate.jl
-    ├── config.toml
-    ├── launch-check.jl            # entry point
+    ├── run-provenance.jl          # entry point
     ├── Project.toml
     ├── README.md
-    └── test/                      # repositories written at test time
+    ├── ext/                       # RunProvenance{CUDA,AMDGPU,Metal,oneAPI}Ext
+    ├── src/
+    └── test/                      # FIPS vectors, repositories and projects made at test time, static QA
 ```
 
 </details>

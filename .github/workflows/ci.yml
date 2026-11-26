@@ -59,6 +59,8 @@ jobs:
           julia --color=yes run.jl bib-hygiene --help
       - name: launch-check on this repository
         run: julia --color=yes run.jl launch-check .
+      - name: run-provenance smoke test
+        run: julia --color=yes run.jl run-provenance --project run-provenance
       - name: Dispatcher smoke test (CPU only, reduced sampling)
         run: >
           julia --color=yes run.jl hardware-diagnostics

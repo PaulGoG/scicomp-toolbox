@@ -20,6 +20,14 @@ a change belongs to it.
   tracked `.launch-check.toml` holds the badge inputs and the waived checks with their
   reasons.
 
+- `RunProvenance` 0.1.0, a package in `run-provenance/`: `provenance()` returns the
+  host, the Julia, thread, worker and BLAS configuration, the project file with the
+  SHA-256 of its resolved manifest, the commit of the source, size and SHA-256 of every
+  input and the active GPU device as one dictionary with string keys, which merges into
+  a DrWatson result and prints as TOML. `write_provenance` writes it as a sidecar and
+  `snapshot_manifest` copies the manifest beside a run; neither overwrites. The keys are
+  those `run-index` reads. The entry script prints the record of a project.
+
 ### Changed
 
 - The badge row of the README is the one `launch-check badges` prints: the JET badge

@@ -17,6 +17,8 @@ updates:
       - "/figure-audit"
       - "/bib-hygiene"
       - "/launch-check"
+      - "/run-provenance"
+      - "/run-provenance/test"
       - "/standalone"
     schedule:
       interval: "weekly"

@@ -1,0 +1,39 @@
+name = "RunProvenance"
+uuid = "a0efa9c0-8026-4cb3-9947-af67d164c70a"
+version = "0.1.0"
+authors = ["Paul-Adrian Gogîță"]
+
+[deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
+InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
+LibGit2 = "76f85450-5226-5b5a-8eaa-529ad045b433"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+
+[weakdeps]
+AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+Metal = "dde4c033-4e86-420c-a63e-0dd931031962"
+oneAPI = "8f75cd03-7ff8-4ecb-9b8f-daf728133b1b"
+
+[extensions]
+RunProvenanceAMDGPUExt = "AMDGPU"
+RunProvenanceCUDAExt = "CUDA"
+RunProvenanceMetalExt = "Metal"
+RunProvenanceoneAPIExt = "oneAPI"
+
+[compat]
+AMDGPU = "1, 2"
+CUDA = "5, 6"
+Dates = "1"
+Distributed = "1"
+InteractiveUtils = "1"
+LibGit2 = "1"
+LinearAlgebra = "1"
+Metal = "1"
+SHA = "0.7, 1"
+TOML = "1"
+julia = "1.12"
+oneAPI = "1, 2"
