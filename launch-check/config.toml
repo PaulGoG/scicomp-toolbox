@@ -1,0 +1,14 @@
+# Configuration of the launch-check tool
+
+[workflows]
+required_versions = ["min", "1"]  # Julia versions, as named for julia-actions/setup-julia, that one CI matrix must hold together; non-empty list of non-empty strings
+optional_versions = ["lts", "pre", "nightly"]  # further version names a matrix may hold; list of non-empty strings
+version_keys = ["version", "julia-version"]  # matrix keys that hold Julia versions; non-empty list of non-empty strings
+housekeeping = ["tagbot", "compathelper", "register"]  # lower-case workflow stems that get no badge; list of non-empty strings
+
+[dependabot]
+ecosystems = ["julia", "github-actions"]  # package ecosystems that need an update entry; non-empty list of non-empty strings
+
+[readme]
+tree_max_lines = 20  # largest number of lines of the README file tree; integer in [5, 60]
+tree_within_lines = 40  # README line after which the file tree may not open; integer in [5, 200]

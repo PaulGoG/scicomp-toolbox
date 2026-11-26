@@ -4,6 +4,27 @@ Notable changes to the workbench. The repository itself carries no version; the
 `HardwareDiagnostics` package follows semantic versioning and its version is given where
 a change belongs to it.
 
+## 2026-11-26
+
+### Added
+
+- `launch-check`: a repository against the conventions of a public launch, one line per
+  check, with a non-zero exit status when one fails. It reads the licence holder line,
+  `CITATION.cff` and the README section on citing, tracked manifests, the `[compat]`
+  entries of every project file, the Dependabot configuration, the workflows (actions
+  pinned by commit SHA with a release comment, declared permissions, a concurrency group
+  that cancels superseded runs, a version matrix on `min` and `1`), the formatter, the
+  changelog, the README tree and badge row, the documentation build and the coverage
+  upload, and it runs `workspace-audit --self-contained` and `commit-guard log` on the
+  repository. `launch-check badges` prints the badge row the repository supports. A
+  tracked `.launch-check.toml` holds the badge inputs and the waived checks with their
+  reasons.
+
+### Changed
+
+- The badge row of the README is the one `launch-check badges` prints: the JET badge
+  carries its aeroplane, the Julia and platform badges their logos.
+
 ## 2026-11-25
 
 ### Added

@@ -57,6 +57,8 @@ jobs:
           julia --color=yes run.jl convergence --help
           julia --color=yes run.jl figure-audit --help
           julia --color=yes run.jl bib-hygiene --help
+      - name: launch-check on this repository
+        run: julia --color=yes run.jl launch-check .
       - name: Dispatcher smoke test (CPU only, reduced sampling)
         run: >
           julia --color=yes run.jl hardware-diagnostics

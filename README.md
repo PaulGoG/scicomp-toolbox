@@ -2,10 +2,10 @@
 
 [![CI](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/ci.yml?query=branch%3Amain)
 [![Aqua QA](https://juliatesting.github.io/Aqua.jl/dev/assets/badge.svg)](https://github.com/JuliaTesting/Aqua.jl)
-[![JET](https://img.shields.io/badge/tested%20with-JET.jl-233f9a)](https://github.com/aviatesk/JET.jl)
+[![JET](https://img.shields.io/badge/%F0%9F%9B%A9%EF%B8%8F_tested_with-JET.jl-233f9a)](https://github.com/aviatesk/JET.jl)
 [![Format](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/format.yml/badge.svg?branch=main)](https://github.com/PaulGoG/scicomp-toolbox/actions/workflows/format.yml?query=branch%3Amain)
-[![Julia](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FPaulGoG%2Fscicomp-toolbox%2Fmain%2Fhardware-diagnostics%2FProject.toml&query=%24.compat.julia&label=julia&color=9558b2)](https://julialang.org/downloads/)
-[![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)](#requirements)
+[![Julia](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FPaulGoG%2Fscicomp-toolbox%2Fmain%2Fhardware-diagnostics%2FProject.toml&query=%24.compat.julia&label=julia&logo=julia&color=9558b2)](https://julialang.org/downloads/)
+[![Platform](https://img.shields.io/badge/platform-Linux-lightgrey?logo=linux)](#requirements)
 
 Scientific scripting workbench in Julia. It hosts standalone utilities and self-contained
 tools that do not warrant a repository of their own, behind a common dispatcher, test
@@ -25,6 +25,7 @@ scicomp-toolbox/
 ├── convergence/            # tier 1: observed order of accuracy, package Convergence
 ├── figure-audit/           # tier 1: exported figures against a column width
 ├── bib-hygiene/            # tier 1: BibTeX validation
+├── launch-check/           # tier 1: launch conventions and badge row of a repository
 ├── reference-runs/         # datasets of the eight validation runs
 └── assets/                 # figures of this README
 ```
@@ -101,6 +102,8 @@ julia run.jl slurm-launch --help                        # job scripts; run from 
 julia run.jl convergence errors.csv --reference-orders 1,2  # order of accuracy from a table of errors
 julia run.jl figure-audit paper/figures --column double  # exported figures against the column width
 julia run.jl bib-hygiene paper/refs.bib --tex paper/     # BibTeX checks and the citations of a manuscript
+julia run.jl launch-check ~/projects/Spectra.jl         # launch conventions of a repository
+julia run.jl launch-check badges ~/projects/Spectra.jl  # its badge row, ready to paste
 julia run.jl --threads 8 hardware-diagnostics           # Julia threads of the child process
 julia test.jl                                           # every test suite
 julia test.jl hardware-diagnostics                      # one suite
@@ -132,6 +135,7 @@ julia -i hardware-diagnostics/activate.jl
 | [`convergence`](convergence/) | 1 | Observed order of accuracy from a table of errors against the step size: pairwise orders, least-squares order with a Student-t interval, the three-grid procedure with Richardson extrapolation and the grid convergence index, a CSV and a two-panel figure; usable as the package `Convergence` | `convergence/convergence.jl` |
 | [`figure-audit`](figure-audit/) | 1 | Exported PDF, PNG and SVG figures checked against a column width: printed size and the scaling LaTeX would apply, page count, font embedding and subsetting, smallest text size after scaling, raster resolution, colour space; non-zero exit on failure | `figure-audit/figure-audit.jl` |
 | [`bib-hygiene`](bib-hygiene/) | 1 | BibTeX validation before submission: duplicate keys and entries, required fields, DOI form, journal names written in several ways, encoding and escaping, unprotected capitals, page ranges, years, citations of the manuscript; optional cached DOI and arXiv lookups; corrected copy in a separate file | `bib-hygiene/bib-hygiene.jl` |
+| [`launch-check`](launch-check/) | 1 | A repository against the conventions of a public launch: licence holder line, citation metadata, untracked manifests, bounded `[compat]`, Dependabot, workflows pinned by commit SHA with permissions and a cancelling concurrency group, CI matrix on `min` and `1`, formatter, changelog, README tree and badge row, documentation build, coverage upload, self-containment, commit history; prints the badge row the repository supports; waivers with their reasons in a file of the repository | `launch-check/launch-check.jl` |
 
 ## Workspace layout
 
@@ -259,6 +263,7 @@ rebases, where `commit-guard log` is the check.
 | `convergence` | the fit validated on forward Euler, the classical Runge-Kutta scheme, central differences and the trapezoidal rule and against a least-squares solve in extended precision, the three-grid procedure on the worked example of Celik et al. and on exact power laws; static QA with Aqua, JET and ExplicitImports; figure inspected |
 | `figure-audit` | new; tested on PDF, PNG and SVG fixtures drawn with Cairo at test time, Poppler through `Poppler_jll`; not yet run on a manuscript's figure set |
 | `bib-hygiene` | new; every check tested on a fixture, the online checks and the cache against a stub fetcher, then exercised once live against doi.org and the arXiv API |
+| `launch-check` | new; every check tested on repositories written at test time, the badge row against the markup written out by hand; run on this repository only, not yet on a package before its launch |
 
 The accelerator runs were made with `HardwareDiagnostics` 0.3. Since the restructuring of
 0.4.0 the package has run on the host and on the Intel Arc GPU; the CUDA and AMDGPU
@@ -287,6 +292,7 @@ scicomp-toolbox/
 │       ├── ci.yml                 # test suites, standalone and dispatcher smoke runs
 │       └── format.yml             # JuliaFormatter gate using formatter/
 ├── .JuliaFormatter.toml           # formatting rules
+├── .launch-check.toml             # badge inputs and waived launch conventions, read by launch-check
 ├── CHANGELOG.md
 ├── LICENSE                        # MIT
 ├── README.md
@@ -350,13 +356,20 @@ scicomp-toolbox/
 │   ├── Project.toml
 │   ├── README.md
 │   └── test/                      # fixtures drawn with Cairo at test time
-└── bib-hygiene/                   # tier 1: BibTeX validation before submission
+├── bib-hygiene/                   # tier 1: BibTeX validation before submission
+│   ├── activate.jl
+│   ├── bib-hygiene.jl             # entry point
+│   ├── config.toml
+│   ├── Project.toml
+│   ├── README.md
+│   └── test/                      # fixture bib and tex, stub fetcher
+└── launch-check/                  # tier 1: launch conventions and badge row
     ├── activate.jl
-    ├── bib-hygiene.jl             # entry point
     ├── config.toml
+    ├── launch-check.jl            # entry point
     ├── Project.toml
     ├── README.md
-    └── test/                      # fixture bib and tex, stub fetcher
+    └── test/                      # repositories written at test time
 ```
 
 </details>

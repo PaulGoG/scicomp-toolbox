@@ -16,6 +16,7 @@ updates:
       - "/convergence/test"
       - "/figure-audit"
       - "/bib-hygiene"
+      - "/launch-check"
       - "/standalone"
     schedule:
       interval: "weekly"

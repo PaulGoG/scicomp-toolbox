@@ -1,0 +1,13 @@
+# Read by launch-check: what the badge row cannot derive from the tree, and the launch
+# conventions this repository does not follow, each with its reason.
+
+project_file = "hardware-diagnostics/Project.toml"  # every environment declares the same julia compat
+platform = "Linux"
+platform_logo = "linux"
+branch = "main"
+
+[waive]
+citation = "a workbench of separate tools, not one citable package; no CITATION.cff"
+cite-section = "no citation metadata, see citation"
+docs = "each tool is documented by its README; there is no Documenter site"
+coverage = "the tools are scripts started as child processes; no coverage is collected"
