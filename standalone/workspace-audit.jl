@@ -901,12 +901,12 @@ function dir_climb_hits(rel::AbstractString, text::String)
         open_climb = !closed && tail_climbs
         stop = open_climb ? tail_end : last_unit
         push!(ranges, m.offset:stop)
-        # an empty argument adds nothing to a path
-        arguments = filter!(!isempty, literal_arguments(m.captures[1]))
+        arguments = literal_arguments(m.captures[1])
         any(a -> startswith(a, '/'), arguments) && continue
-        joined = join(arguments, '/')
+        # joined below the directory of the file, "." at the root: an empty first argument
+        # then gives a doubled separator and not an absolute path
         base = isempty(directory) ? "." : directory
-        target = normpath(isempty(joined) ? base : base * "/" * joined)
+        target = normpath(base * "/" * join(arguments, '/'))
         kind =
             (target == ".." || startswith(target, "../")) ? :outside :
             open_climb ? :unresolved : nothing
