@@ -90,7 +90,8 @@ What the record does not hold:
 
 - Untracked files do not make the commit `-dirty`. When the project file or the script
   that runs is itself untracked or ignored, `untracked_sources` names it; other
-  untracked code that the run includes leaves no trace.
+  untracked code that the run includes leaves no trace. The script is the one Julia was
+  started with, resolved when the package is loaded: load the package before any `cd`.
 - Only the manifest of the project is recorded. A package loaded from another
   environment of the load path, such as the default environment, is not in it, and a
   package developed by path appears in the manifest without a tree hash.
@@ -113,17 +114,17 @@ Paths are relative to `root`, by default the directory of the project.
 | `blas_threads` | BLAS threads | `BLAS.get_num_threads()` |
 | `blas_libraries` | base names of the BLAS libraries loaded | `BLAS.get_config()` |
 | `versioninfo` | text of `versioninfo()` | `InteractiveUtils` |
-| `project_file` | project file | `--project`, `Base.active_project()` |
-| `manifest_file`, `manifest_sha256` | resolved manifest and its SHA-256, absent without a manifest | `Base.project_file_manifest_path` |
-| `gitcommit` | hash of HEAD, `-dirty` when tracked or staged files differ; absent outside a repository or without a commit | `LibGit2` |
-| `untracked_sources` | the project file and the running script when git does not track them; absent otherwise | `LibGit2.status` |
+| `project_file` | project file | the keyword `project`, by default `Base.active_project()`; on the command line `--project`, by default the project found upwards from the working directory |
+| `manifest_file`, `manifest_sha256` | the manifest Julia resolves for the project (of its own release first, of the workspace for a member, or the one a `manifest` key names) and its SHA-256; absent without a manifest | `Base.project_file_manifest_path` |
+| `gitcommit` | hash of HEAD, `-dirty` when the work tree or the index differs from it; absent outside a repository, in a bare one, or without a commit | `LibGit2` |
+| `untracked_sources` | the project file and the script Julia was started with, when the repository does not track them (new, ignored, or in a nested repository); absent otherwise | `LibGit2.status` |
 | `timestamp_utc` | time of the record, `yyyy-mm-ddTHH:MM:SSZ` | `Dates.now(UTC)` |
 | `inputs` | one table per input file: `path`, `bytes`, `sha256` | `filesize`, `SHA.sha256` |
 | `accelerators` | one table per functional GPU backend: `backend`, `device`, `memory_bytes`, `runtime_version`, `versioninfo` | package extensions |
 
 `inputs` and `accelerators` are present also when empty. With `session = false` the
 record has none of the keys from `julia_version` to `versioninfo` and no `accelerators`;
-with `git = false`, no `gitcommit`. A git failure other than "no repository" or "no
+with `git = false`, neither `gitcommit` nor `untracked_sources`. A git failure other than "no repository" or "no
 commit", such as a repository owned by another user, is thrown and not passed over. A
 CUDA record carries
 `driver_version` in addition; a Metal record has no `runtime_version`, and its

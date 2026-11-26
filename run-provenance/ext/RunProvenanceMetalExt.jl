@@ -16,7 +16,7 @@ function RunProvenance.accelerator(::Val{:metal})
     return Dict{String, Any}(
         "backend" => "Metal",
         "device" => String(device.name),
-        "memory_bytes" => Int(device.recommendedMaxWorkingSetSize),
+        "memory_bytes" => Int64(device.recommendedMaxWorkingSetSize),
         "versioninfo" => sprint(io -> Metal.versioninfo(io)),
     )
 end

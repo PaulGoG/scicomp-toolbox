@@ -16,7 +16,7 @@ function RunProvenance.accelerator(::Val{:amdgpu})
     return Dict{String, Any}(
         "backend" => "AMDGPU",
         "device" => String(AMDGPU.HIP.name(device)),
-        "memory_bytes" => Int(AMDGPU.HIP.properties(device).totalGlobalMem),
+        "memory_bytes" => Int64(AMDGPU.HIP.properties(device).totalGlobalMem),
         "runtime_version" => string(AMDGPU.HIP.runtime_version()),
         "versioninfo" => sprint(io -> AMDGPU.versioninfo(io)),
     )

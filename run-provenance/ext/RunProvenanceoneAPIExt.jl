@@ -19,7 +19,7 @@ function RunProvenance.accelerator(::Val{:oneapi})
     return Dict{String, Any}(
         "backend" => "oneAPI",
         "device" => String(strip(String(properties.name))),
-        "memory_bytes" => isempty(memory) ? 0 : Int(memory[1].totalSize),
+        "memory_bytes" => isempty(memory) ? Int64(0) : Int64(memory[1].totalSize),
         "runtime_version" => string(driver.driverVersion),
         "versioninfo" => sprint(io -> oneAPI.versioninfo(io)),
     )

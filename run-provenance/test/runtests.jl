@@ -59,6 +59,10 @@ function project_directory(files::Pair...)
     return dir
 end
 
+"Content whose writing fails after one byte, as on a full disk."
+struct FailingContent end
+Base.write(io::IO, ::FailingContent) = (write(io, "a"); error("no space left"))
+
 function file_with(content)
     path = joinpath(mktempdir(), "input.bin")
     write(path, content)
@@ -471,5 +475,91 @@ end
             joinpath(named, "M.toml");
             root = joinpath(named, "M.toml"),
         )
+    end
+
+    @testset "review of the second round" begin
+        function repository(files::Pair...)
+            root = project_directory(files...)
+            git_run(root, "init")
+            git_run(root, "add", "-A")
+            git_run(root, "commit", "-m", "feat: first version")
+            return root
+        end
+
+        # sources that the status query of the repository does not see or that begin
+        # with two dots
+        root = repository()
+        nested = joinpath(root, "sub")
+        mkpath(nested)
+        git_run(nested, "init")
+        write(joinpath(nested, "Project.toml"), "name = \"Sub\"\n")
+        mkpath(joinpath(root, "..dir"))
+        write(joinpath(root, "..dir", "run.jl"), "x = 1\n")
+        sources = [joinpath(nested, "Project.toml"), joinpath(root, "..dir", "run.jl")]
+        @test git_record(root; sources)["untracked_sources"] ==
+              ["sub/Project.toml", "..dir/run.jl"]
+
+        # the script that runs, also after the working directory has changed
+        root = repository()
+        mkpath(joinpath(root, "scripts"))
+        write(
+            joinpath(root, "scripts", "run.jl"),
+            """
+            using RunProvenance
+            cd(mktempdir())
+            record = provenance(; project = $(repr(root)))
+            print(join(get(record, "untracked_sources", String[]), ","))
+            """,
+        )
+        environment = dirname(Base.active_project())
+        command = `$(Base.julia_cmd()) --startup-file=no --project=$environment scripts/run.jl`
+        @test read(Cmd(command; dir = root), String) == "scripts/run.jl"
+        # a caller that is not the run names no script
+        script = joinpath(root, "scripts", "run.jl")
+        before = RunProvenance.PROGRAM[]
+        try
+            RunProvenance.PROGRAM[] = script
+            @test provenance(; project = root)["untracked_sources"] == ["scripts/run.jl"]
+            @test !haskey(
+                provenance(; project = root, session = false),
+                "untracked_sources",
+            )
+            off = provenance(; project = root, git = false)
+            @test !haskey(off, "gitcommit") && !haskey(off, "untracked_sources")
+        finally
+            RunProvenance.PROGRAM[] = before
+        end
+
+        # a link to the project file from outside the repository
+        if !Sys.iswindows()
+            link = joinpath(realpath(mktempdir()), "p.toml")
+            symlink(joinpath(root, "Project.toml"), link)
+            record = provenance(; project = link)
+            @test record["project_file"] == "Project.toml"
+            @test record["gitcommit"] == head_of(root)
+        end
+
+        # a bare repository holds no work tree to describe
+        bare = joinpath(realpath(mktempdir()), "bare.git")
+        git_run(root, "clone", "--bare", root, bare)
+        @test git_record(bare) == Dict{String, Any}()
+
+        # a change staged and then undone in the work tree is still a change
+        write(joinpath(root, "Project.toml"), "name = \"Run\"\nversion = \"2\"\n")
+        git_run(root, "add", "Project.toml")
+        write(joinpath(root, "Project.toml"), "name = \"Run\"\n")
+        @test git_record(root)["gitcommit"] == head_of(root) * "-dirty"
+
+        # a write that fails after the file was created leaves nothing behind
+        path = joinpath(mktempdir(), "provenance.toml")
+        @test_throws ErrorException RunProvenance.write_new(path, FailingContent())
+        @test !ispath(path)
+        @test write_provenance(path, Dict("a" => 1)) == path
+
+        # a relative project file gives an absolute manifest
+        resolved = project_directory("Manifest.toml" => "# resolved\n")
+        @test cd(() -> manifest_path("Project.toml"), resolved) ==
+              joinpath(resolved, "Manifest.toml")
+        @test host_record()["total_memory_bytes"] isa Int64
     end
 end

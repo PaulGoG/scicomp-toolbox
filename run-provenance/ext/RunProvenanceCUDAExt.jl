@@ -16,7 +16,7 @@ function RunProvenance.accelerator(::Val{:cuda})
     return Dict{String, Any}(
         "backend" => "CUDA",
         "device" => CUDA.name(device),
-        "memory_bytes" => Int(CUDA.totalmem(device)),
+        "memory_bytes" => Int64(CUDA.totalmem(device)),
         "runtime_version" => string(CUDA.runtime_version()),
         "driver_version" => string(CUDA.driver_version()),
         "versioninfo" => sprint(io -> CUDA.versioninfo(io)),
