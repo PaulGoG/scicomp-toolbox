@@ -257,7 +257,7 @@ and rebases, where `commit-guard log` is the check.
 
 | Component | State |
 | :--- | :--- |
-| Dispatcher, test runner, formatting gate | in use; exercised by CI on Julia 1.12 and the current stable release, Ubuntu |
+| Dispatcher, test runner, formatting gate | in use; exercised by CI on Julia 1.12 and the current stable release, Ubuntu; the formatting script tested on trees to format, clean, and with a file that does not parse |
 | `sysinfo` | in use; parsing covered by the `standalone` suite |
 | `workspace-audit` | in use; writes only with `--scaffold`, tested against repositories and workspaces built in `mktempdir()`; the layout check and the scan are new and have run on one workspace |
 | `commit-guard` | new; every rule tested on messages, the history check and the installer on repositories built in `mktempdir()`, both hook modes through real commits; the strip mode compared once with a `sed` hook on a corpus of lines |
