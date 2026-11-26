@@ -32,13 +32,18 @@ jobs:
           version: '1'
       - uses: <<PIN julia-actions/cache>>
       - name: Format with the pinned JuliaFormatter
-        # a formatter release can change the result, so the version is exact
+        # A formatter release can change the result, so the version is exact. The
+        # formatter only warns about a file it cannot parse and leaves it as it is, which
+        # the comparison below would not see: a warning fails the step.
         run: |
           julia --color=yes -e '
             using Pkg
             Pkg.activate(; temp = true)
             Pkg.add(; name = "JuliaFormatter", version = "<<FORMATTER>>")
-            using JuliaFormatter
-            format(".")'
+            using JuliaFormatter, Logging, Test
+            logger = Test.TestLogger(; min_level = Logging.Warn)
+            with_logger(() -> format("."), logger)
+            foreach(record -> println(record.message, "  ", record.kwargs), logger.logs)
+            isempty(logger.logs) || exit(1)'
       - name: Fail on differences
         run: git diff --exit-code

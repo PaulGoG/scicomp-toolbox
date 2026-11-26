@@ -36,7 +36,8 @@ letters and digits. The package directory `DIR/NAME` must not exist; `DIR` must,
 made absolute. `--user` is the GitHub user or organisation the URLs of the README, the
 documentation and the citation metadata point to. `--authors` takes names only, separated
 by commas; an e-mail address is refused, since the licence holder line carries the names.
-`--julia` sets the compat floor and defaults to `[package].julia` of the configuration.
+`--julia` sets the compat floor and defaults to `[package].julia` of the configuration;
+it lies between 1.10 and the Julia release that runs the tool.
 `--no-pipeline` leaves out the DrWatson layer, `--no-commit` the git repository and its
 first commit, `--no-hook` the commit-guard hook. The four required arguments are checked
 before anything is fetched or written.
@@ -60,8 +61,12 @@ the project files are written; the templates are rendered; every manifest is rem
 the tree is formatted with the pinned formatter of the workbench against the package's
 own `.JuliaFormatter.toml`; with the commit, `git init`, `git add -A` and
 `git commit -m "chore: scaffold of NAME.jl"` are run; with the hook, `commit-guard install`.
-A commit that fails because git has no identity configured leaves the repository without
-a commit and prints a note; a hook that is not installed prints a note as well.
+The commit is made only under an identity git is configured with: where `user.name` and
+`user.email` are not set, git is not left to make one up from the host, the repository
+stays without a commit, and a note says so. A hook that is not installed prints a note
+as well. When a step fails after PkgTemplates has made the directory, the directory is
+removed again, so that the next attempt is not refused; the error ends with what the
+formatter printed, when it was the formatter that failed.
 
 ## What is generated
 
@@ -72,7 +77,7 @@ Spectra/
 │   └── workflows/
 │       ├── CI.yml          # tests on the compat floor and the stable release, coverage, documentation
 │       └── Format.yml      # JuliaFormatter gate with the pinned version
-├── .gitignore              # manifests, documentation build, coverage; data/ and plots/ with the pipeline
+├── .gitignore              # manifests, documentation build, coverage; /data/ and /plots/ with the pipeline
 ├── .JuliaFormatter.toml
 ├── CITATION.cff
 ├── LICENSE
@@ -108,8 +113,8 @@ and `.gitignore` carry no pipeline lines.
 Every `[compat]` entry of a dependency names the release series of the version resolved
 at generation time (`"1"`, `"0.8"`), preceded by the series of `[compat_extra]`. JET,
 whose release series follow the Julia release, thus reads `"0.9, 0.13"` and still
-installs on a compat floor of 1.10. The
-auxiliary environments take the package through `[sources]`, which Julia reads from 1.11
+installs on a compat floor of 1.10. No entry is checked against a lower floor, which is
+why the floor cannot be set below 1.10. The auxiliary environments take the package through `[sources]`, which Julia reads from 1.11
 on; their `activate.jl` develops the package by path on older releases. No manifest is
 written, and none is tracked.
 

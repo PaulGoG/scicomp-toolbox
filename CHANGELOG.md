@@ -37,13 +37,16 @@ a change belongs to it.
   launch form, with actions pinned by commit SHA as resolved at generation time, and
   every job is skipped while the repository is private; `dependabot.yml` keeps version
   updates off until the launch. The tree is formatted with the pinned formatter, put
-  under git with one conventional commit, and given the commit-guard hook.
+  under git with one conventional commit, made only under an identity git is configured
+  with, and given the commit-guard hook. The compat floor lies between 1.10 and the
+  Julia release that runs the tool; a generation that fails leaves no directory behind.
 
 ### Fixed
 
 - `formatter/format.jl` exits with status 1 when JuliaFormatter warns about a file, as
   it does about one that does not parse. The formatter goes on after such a file and
-  reports the tree as formatted, so the format gate passed a syntax error.
+  reports the tree as formatted, so the format gate passed a syntax error. The script
+  has a test suite of its own now.
 - `workspace-audit --self-contained`: only `joinpath`, `abspath` and `normpath` anchor
   their arguments to `@__DIR__`; in any other call a relative path beside `@__DIR__` is
   judged like a bare string. An empty or triple-quoted argument at the repository root

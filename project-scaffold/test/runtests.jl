@@ -152,6 +152,18 @@ const PIPELINE_FILES = ["configs/minimal.toml", "scripts/run.jl"]
         @test_throws "figures" bad(Dict("figures" => Dict()))
         @test_throws "julia" bad(Dict("package" => Dict("julia" => "1.10.2")))
         @test_throws "julia" bad(Dict("package" => Dict("julia" => 1.10)))
+        # below the floor the generated test environment does not resolve; above the
+        # running Julia nothing can be resolved for it
+        @test_throws "at least 1.10" bad(Dict("package" => Dict("julia" => "1.9")))
+        @test_throws "above the Julia" bad(Dict("package" => Dict("julia" => "9.0")))
+        @test_throws "julia" bad(Dict("package" => Dict("julia" => "1.10\n")))
+        current = "$(VERSION.major).$(VERSION.minor)"
+        @test bad(Dict("package" => Dict("julia" => current))).julia == current
+        for branch in ("ma in", "ma\"in", "main\n", "-main", "a..b", "")
+            @test_throws "branch" bad(Dict("package" => Dict("branch" => branch)))
+        end
+        @test bad(Dict("package" => Dict("branch" => "release/1.x"))).branch ==
+              "release/1.x"
         @test_throws "style" bad(Dict("package" => Dict("style" => "default")))
         @test_throws "actions/checkout" bad(
             Dict("actions" => Dict("actions/checkout" => true)),
@@ -179,6 +191,17 @@ const PIPELINE_FILES = ["configs/minimal.toml", "scripts/run.jl"]
             ("", " , ", "Jane,,John", "Jane Doe <jane@example.org>", "jane@example.org")
             @test_throws ArgumentError parse_authors(text)
         end
+        # characters that would end a string literal or be interpolated where names go
+        for text in (
+            "Jane \"JJ\" Doe",
+            "Jane \\ Doe",
+            "Jane \$HOME",
+            "Jane\tDoe",
+            "Jane Doe, John\nRoe",
+        )
+            @test_throws ArgumentError parse_authors(text)
+        end
+        @test_throws ArgumentError package_name("Spectra\n")
         @test cff_authors(["Jane Doe"]) ==
               "  - family-names: \"Doe\"\n    given-names: \"Jane\""
         @test cff_authors(["Mary Ann Smith", "CERN"]) ==
@@ -282,12 +305,15 @@ const PIPELINE_FILES = ["configs/minimal.toml", "scripts/run.jl"]
         @test project_text(Dict("compat" => Dict("julia" => "1.10"), "deps" => Dict())) ==
               "[compat]\njulia = \"1.10\"\n"
 
-        resolved = resolve_packages(["Test", "TOML"])
         before = Base.active_project()
+        resolved = resolve_packages(["Test", "TOML"])
         @test resolved["Test"][1] == "8dfed614-e22c-5e08-85e1-65c5234f0b40"
         @test resolved["TOML"][1] == "fa267f1f-6049-4f14-aa54-33bafae1ed76"
         @test resolved["TOML"][2] isa VersionNumber
         @test Base.active_project() == before == joinpath(TOOL_DIR, "Project.toml")
+        # also when the registry does not know a name
+        @test_throws Exception resolve_packages(["NoSuchPackage0x"])
+        @test Base.active_project() == before
     end
 
     @testset "template values" begin
@@ -351,6 +377,8 @@ const PIPELINE_FILES = ["configs/minimal.toml", "scripts/run.jl"]
         @test_throws ArgumentError main([full; "Other"]; io = devnull)
         @test_throws ArgumentError main([full; "--julia"]; io = devnull)
         @test_throws ArgumentError main([full; "--julia"; "1"]; io = devnull)
+        @test_throws "at least 1.10" main([full; "--julia"; "1.9"]; io = devnull)
+        @test_throws ArgumentError main([full[1:4]; "user\n"; full[6:end]]; io = devnull)
         @test_throws ArgumentError main(["spectra"; full[2:end]]; io = devnull)
         @test_throws ArgumentError main([full[1:4]; "-user-"; full[6:end]]; io = devnull)
         @test_throws ArgumentError main([full[1:6]; "Jane <j@example.org>"]; io = devnull)
@@ -439,10 +467,26 @@ const PIPELINE_FILES = ["configs/minimal.toml", "scripts/run.jl"]
         @test count(GUARD, ci) == 2 && count(GUARD, format) == 1
         @test occursin("version: ['min', '1']", ci)
         @test occursin("version = \"$(formatter_version())\"", format)
+        step = match(r"julia --color=yes -e '\n(.*?)'\n"s, format)
+        @test step !== nothing
+        format_step = String(step.captures[1])
+        @test julia_status(dir, ["-e", format_step]) == 0
+        @test isempty(git_text(dir, "status", "--porcelain"))
+        write(joinpath(dir, "bench", "broken.jl"), "function f(\n")
+        @test julia_status(dir, ["-e", format_step]; expected = false) == 1
+        rm(joinpath(dir, "bench", "broken.jl"))
         bot = texts[".github/dependabot.yml"]
         @test count("open-pull-requests-limit: 0", bot) == 2
         @test occursin("      - \"/bench\"\n    schedule:", bot)
-        @test occursin("data/\nplots/\n", texts[".gitignore"])
+        @test occursin("\n/data/\n/plots/\n", texts[".gitignore"])
+        mkpath(joinpath(dir, "test", "data"))
+        write(joinpath(dir, "test", "data", "fixture.csv"), "1\n")
+        @test occursin("test/data/", git_text(dir, "status", "--porcelain"))
+        rm(joinpath(dir, "test", "data"); recursive = true)
+        mkpath(joinpath(dir, "data", "runs"))
+        write(joinpath(dir, "data", "runs", "result.csv"), "1\n")
+        @test isempty(git_text(dir, "status", "--porcelain"))
+        rm(joinpath(dir, "data"); recursive = true)
         @test startswith(
             texts["docs/make.jl"],
             "include(joinpath(@__DIR__, \"activate.jl\"))\n\nusing ",
@@ -472,7 +516,22 @@ const PIPELINE_FILES = ["configs/minimal.toml", "scripts/run.jl"]
         @test count(==("ok"), values(statuses)) == 15
 
         # what the README tells a user to run
+        # JET is loaded at top level, so a loop in the testset, which makes Julia
+        # compile the block as a whole, does not hide it
+        suite = texts["test/runtests.jl"]
+        @test occursin(
+            r"^@static if VERSION >= v\"\d+\.\d+\"\n    using JET: JET\nend$"m,
+            suite,
+        )
+        inner = "    @testset \"Static QA\" begin"
+        @test count(inner, suite) == 1
+        looped = replace(
+            suite,
+            inner => "    for x in 1:2\n        @test x > 0\n    end\n" * inner,
+        )
+        write(joinpath(dir, "test", "runtests.jl"), looped)
         @test julia_status(dir, ["-e", "include(\"activate.jl\"); Pkg.test()"]) == 0
+        write(joinpath(dir, "test", "runtests.jl"), suite)
         @test julia_status(dir, ["scripts/run.jl"]) == 0
         @test julia_status(dir, ["scripts/run.jl", "absent.toml"]; expected = false) != 0
         @test julia_status(dir, ["bench/benchmarks.jl"]) == 0
@@ -506,9 +565,13 @@ const PIPELINE_FILES = ["configs/minimal.toml", "scripts/run.jl"]
         request =
             Request("Spectra", parent, "user", ["Jane Doe"], "1.11", false, true, true)
         io = IOBuffer()
-        dir = scaffold(request, SETTINGS; pins, io)
+        # with EMAIL set git could make up an identity; the tool does not let it
+        dir = withenv("EMAIL" => "someone@example.invalid") do
+            scaffold(request, SETTINGS; pins, io)
+        end
         report = String(take!(io))
         @test dir == joinpath(parent, "Spectra")
+        @test !success(pipeline(`git -C $dir log -1`; stdout = devnull, stderr = devnull))
         # git has no identity here, so the commit is left to the user
         @test occursin("note: the first commit was not made", report)
         @test isdir(joinpath(dir, ".git"))
@@ -539,6 +602,24 @@ const PIPELINE_FILES = ["configs/minimal.toml", "scripts/run.jl"]
             false,
         )
         @test_throws ArgumentError scaffold(gone, SETTINGS; pins, io = devnull)
+        low = Request("Spectra", parent, "user", ["Jane Doe"], "1.9", false, false, false)
+        @test_throws "at least 1.10" scaffold(low, SETTINGS; pins, io = devnull)
+        # a generation that fails after the skeleton exists removes it again: here a
+        # branch name, unchecked in a Settings made by hand, breaks docs/make.jl
+        broken = Settings("1.10", "MIT", "blue", "ma\"in", ACTIONS, "unused", Dict())
+        empty = realpath(mktempdir())
+        failing =
+            Request("Spectra", empty, "user", ["Jane Doe"], "1.10", false, false, false)
+        message = try
+            scaffold(failing, broken; pins, io = devnull)
+            ""
+        catch err
+            err isa ErrorException || rethrow()
+            err.msg
+        end
+        @test occursin("formatting the generated package failed", message)
+        @test occursin("make.jl", message)
+        @test isempty(readdir(empty))
         # neither repository nor hook when both are declined
         other = realpath(mktempdir())
         quiet = Request("Spectra", other, "user", ["Jane Doe"], "1.10", false, false, false)

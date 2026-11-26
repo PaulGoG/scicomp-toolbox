@@ -37,9 +37,14 @@ using TOML: TOML
 const TOOLBOX_ROOT = normpath(joinpath(@__DIR__, ".."))
 const TEMPLATE_DIR = joinpath(@__DIR__, "templates")
 
-const JULIA_VERSION = r"^\d+\.\d+$"
-const PACKAGE_NAME = r"^[A-Z][A-Za-z0-9]*$"
-const GITHUB_USER = r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$"
+# `\z` and not `$`, which also matches before a final newline
+const JULIA_VERSION = r"^\d+\.\d+\z"
+const PACKAGE_NAME = r"^[A-Z][A-Za-z0-9]*\z"
+const GITHUB_USER = r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\z"
+const BRANCH_NAME = r"^[A-Za-z0-9][A-Za-z0-9._/-]*\z"
+# Lowest compat floor of a generated package: the oldest Julia on which the entries
+# written for its test environment resolve (JET 0.9 needs Julia 1.10).
+const MINIMUM_FLOOR = v"1.10"
 const PLACEHOLDER = r"<<([^<>]+)>>"
 const PIN_PLACEHOLDER = r"<<PIN ([^<>]+)>>"
 const LS_REMOTE_LINE = r"^([0-9a-f]{40})\trefs/tags/(.+?)(\^\{\})?$"
@@ -185,9 +190,9 @@ function validate_settings(raw::AbstractDict)
     end
     package = section_table(raw, "package")
     check_keys(package, "package", PACKAGE_KEYS)
-    julia = string_setting(package, "package", "julia", DEFAULT_PACKAGE.julia)
-    occursin(JULIA_VERSION, julia) || throw(
-        ArgumentError("[package].julia must have the form MAJOR.MINOR, got $(repr(julia))"),
+    julia = check_floor(
+        string_setting(package, "package", "julia", DEFAULT_PACKAGE.julia),
+        "[package].julia",
     )
     license = string_setting(package, "package", "license", DEFAULT_PACKAGE.license)
     style = string_setting(package, "package", "style", DEFAULT_PACKAGE.style)
@@ -197,6 +202,13 @@ function validate_settings(raw::AbstractDict)
         ),
     )
     branch = string_setting(package, "package", "branch", DEFAULT_PACKAGE.branch)
+    # it is written into YAML, into Julia string literals and onto a git command line
+    (occursin(BRANCH_NAME, branch) && !occursin("..", branch)) || throw(
+        ArgumentError(
+            "[package].branch must be a plain branch name (letters, digits, '.', '_', " *
+            "'/', '-'), got $(repr(branch))",
+        ),
+    )
 
     remote = section_table(raw, "remote")
     check_keys(remote, "remote", REMOTE_KEYS)
@@ -295,11 +307,41 @@ function package_name(text::AbstractString)
 end
 
 """
+    check_floor(text::AbstractString, source::AbstractString) -> String
+
+The compat floor `text` of a generated package when it has the form `MAJOR.MINOR` and
+lies between `MINIMUM_FLOOR` and the Julia release that runs the tool. Throws an
+`ArgumentError` naming `source` otherwise: below the minimum the test environment does
+not resolve, and above the running release the tool cannot resolve for it.
+"""
+function check_floor(text::AbstractString, source::AbstractString)
+    occursin(JULIA_VERSION, text) ||
+        throw(ArgumentError("$source must have the form MAJOR.MINOR, got $(repr(text))"))
+    floor = VersionNumber(text)
+    floor >= MINIMUM_FLOOR || throw(
+        ArgumentError(
+            "$source must be at least $(MINIMUM_FLOOR.major).$(MINIMUM_FLOOR.minor), got " *
+            "$text: the [compat] entries of the generated test environment do not " *
+            "resolve on an older Julia",
+        ),
+    )
+    running = VersionNumber(VERSION.major, VERSION.minor)
+    floor <= running || throw(
+        ArgumentError(
+            "$source is $text, above the Julia $(VERSION.major).$(VERSION.minor) that " *
+            "runs the tool: the dependencies are resolved on this release",
+        ),
+    )
+    return String(text)
+end
+
+"""
     parse_authors(text::AbstractString) -> Vector{String}
 
-The comma-separated author names of `text`, stripped. Throws an `ArgumentError` when
-there is none, when one is empty, or when one holds `@`, `<` or `>`: the licence holder
-line carries names only.
+The comma-separated author names of `text`, stripped. Throws `ArgumentError` when there
+is none, when one is empty, when one holds `@`, `<` or `>` (the licence holder line
+carries names only), or a character that cannot stand in the files the names are written
+into: a double quote, a backslash, a dollar sign or a control character.
 """
 function parse_authors(text::AbstractString)
     isempty(strip(text)) && throw(ArgumentError("no author given"))
@@ -308,6 +350,13 @@ function parse_authors(text::AbstractString)
         isempty(author) && throw(ArgumentError("empty author name in '$text'"))
         any(c -> c in ('@', '<', '>'), author) && throw(
             ArgumentError("author '$author' holds an e-mail address; give names only"),
+        )
+        # the names enter Julia string literals, YAML and BibTeX as they are
+        any(c -> c in ('"', '\\', '$') || iscntrl(c), author) && throw(
+            ArgumentError(
+                "author $(repr(author)) holds a quotation mark, a backslash, a dollar " *
+                "sign or a control character",
+            ),
         )
     end
     return authors
@@ -337,9 +386,9 @@ Exit status of `command`, run with standard input and error detached and standar
 sent to `output`; a process killed by a signal reports 128 plus the signal number, as a
 shell does.
 """
-function exit_status(command::Cmd; output = devnull)
+function exit_status(command::Cmd; output = devnull, errors = devnull)
     detached =
-        pipeline(ignorestatus(command); stdin = devnull, stdout = output, stderr = devnull)
+        pipeline(ignorestatus(command); stdin = devnull, stdout = output, stderr = errors)
     process = run(detached)
     process.termsignal > 0 && return 128 + process.termsignal
     return process.exitcode
@@ -393,7 +442,8 @@ function resolve_pins(settings::Settings)
         major = settings.actions[action]
         url = "$(settings.host)/$action"
         # a repository that does not exist must fail, not ask for credentials
-        command = addenv(`git ls-remote --tags $url`, "GIT_TERMINAL_PROMPT" => "0")
+        # `--` ends the options: a host that opens with a dash stays a repository
+        command = addenv(`git ls-remote --tags -- $url`, "GIT_TERMINAL_PROMPT" => "0")
         out = IOBuffer()
         status = exit_status(command; output = out)
         status == 0 || throw(
@@ -560,7 +610,8 @@ function template_values(
         "FULL_TREE_SCRIPTS" =>
             with_pipeline ?
             "├── scripts/\n│   └── run.jl              # pipeline entry point\n" : "",
-        "IGNORE_RUNS" => with_pipeline ? "\n# run outputs\ndata/\nplots/\n" : "",
+        # anchored at the root: fixtures under test/data are not run outputs
+        "IGNORE_RUNS" => with_pipeline ? "\n# run outputs\n/data/\n/plots/\n" : "",
     )
     for (action, pin) in pins
         values["PIN $action"] = string(pin)
@@ -797,18 +848,22 @@ package_path(package::AbstractString, relative::AbstractString) =
              pins::AbstractDict = resolve_pins(settings), io::IO = stdout) -> String
 
 Generate the package of `request` and return its directory
-`joinpath(request.directory, request.name)`. The destination is checked and every
-template rendered before anything is written, and the pins are resolved before that.
-PkgTemplates makes the skeleton; the project files of the root, `test/`, `docs/` and
-`bench/` are then written with `[compat]` entries from the resolved versions, the
-templates rendered over the skeleton, the manifests removed and the tree formatted with
-the pinned formatter of the workbench. With `request.commit` a git repository with a
-first commit is made, and with `request.hook` the commit-guard hook installed in it. A
-commit that fails for want of an identity and a hook that is not installed are reported
-as notes on `io`; the next steps are printed there at the end.
+`joinpath(request.directory, request.name)`. The compat floor and the destination are
+checked, every template rendered and the versions of the dependencies resolved before
+anything is written, and the pins are resolved before that. PkgTemplates makes the
+skeleton; the project files of the root, `test/`, `docs/` and `bench/` are then written
+with `[compat]` entries from the resolved versions, the templates rendered over the
+skeleton, the manifests removed and the tree formatted with the pinned formatter of the
+workbench ([`complete_package`](@ref)). When one of these steps fails, the directory is
+removed again, so that a second attempt is not refused. With `request.commit` a git
+repository with a first commit is made, and with `request.hook` the commit-guard hook
+installed in it ([`finish_package`](@ref)). A commit that is not made for want of a
+configured identity and a hook that is not installed are reported as notes on `io`; the
+next steps are printed there at the end.
 
-Throws an `ArgumentError` for a missing parent directory or an existing package
-directory, and an `ErrorException` when formatting, `git init` or `git add` fails.
+Throws an `ArgumentError` for a compat floor out of bounds, a missing parent directory
+or an existing package directory, and an `ErrorException` when formatting, `git init` or
+`git add` fails.
 """
 function scaffold(
     request::Request,
@@ -816,7 +871,8 @@ function scaffold(
     pins::AbstractDict = resolve_pins(settings),
     io::IO = stdout,
 )
-    # 1. destination and rendered templates, before anything is written
+    # 1. request, destination and rendered templates, before anything is written
+    check_floor(request.julia, "the compat floor")
     package = check_destination(request)
     values = template_values(request, settings, pins)
     rendered = Pair{String, String}[]
@@ -827,7 +883,12 @@ function scaffold(
         end
     end
 
-    # 2. skeleton
+    # 2. versions of the dependencies, still before anything is written
+    names = ["Aqua", "JET", "Test", "Documenter", "BenchmarkTools"]
+    request.pipeline && append!(names, ["DrWatson", "TOML"])
+    versions = resolve_packages(names)
+
+    # 3. skeleton
     skeleton = Template(;
         user = request.user,
         authors = request.authors,
@@ -846,13 +907,36 @@ function scaffold(
         ],
     )
     skeleton(request.name)
+    # from here on a failure removes the directory again: left in place, a partial
+    # package would be refused as existing by the next attempt
+    complete = false
+    try
+        complete_package(package, request, settings, versions, rendered)
+        complete = true
+    finally
+        complete || rm(package; recursive = true, force = true)
+    end
+    finish_package(package, request, settings, io)
+    return package
+end
+
+"""
+    complete_package(package, request, settings, versions, rendered) -> Nothing
+
+Steps 4 to 7 of [`scaffold`](@ref) on the skeleton in `package`: the project files, the
+rendered templates, the removal of manifests and the formatting. Throws an
+`ErrorException` when PkgTemplates left no project file or the formatter fails; the
+message of the latter ends with what the formatter printed.
+"""
+function complete_package(
+    package::AbstractString,
+    request::Request,
+    settings::Settings,
+    versions::AbstractDict,
+    rendered::Vector{Pair{String, String}},
+)
     root_file = joinpath(package, "Project.toml")
     isfile(root_file) || error("PkgTemplates wrote no Project.toml in $package")
-
-    # 3. versions of the dependencies
-    names = ["Aqua", "JET", "Test", "Documenter", "BenchmarkTools"]
-    request.pipeline && append!(names, ["DrWatson", "TOML"])
-    versions = resolve_packages(names)
 
     # 4. project files
     julia_floor = request.julia
@@ -912,9 +996,31 @@ function scaffold(
 
     # 7. formatting with the pinned formatter, against the package's own style file
     formatter = joinpath(TOOLBOX_ROOT, "formatter", "format.jl")
-    status = exit_status(`$(Base.julia_cmd()) --startup-file=no $formatter $package`)
-    status == 0 || error("formatting $package failed with status $status")
+    printed = IOBuffer()
+    command = `$(Base.julia_cmd()) --startup-file=no $formatter $package`
+    status = exit_status(command; output = printed, errors = printed)
+    status == 0 || error(
+        "formatting the generated package failed with status $status:\n" *
+        String(take!(printed)),
+    )
+    return nothing
+end
 
+"""
+    finish_package(package, request, settings, io) -> Nothing
+
+Steps 8 to 10 of [`scaffold`](@ref) on the complete package: the repository with its
+first commit, the commit-guard hook and the next steps printed to `io`. The commit is
+made only under an identity that git is configured with (`user.useConfigOnly`), never
+under one it would guess from the host. Throws an `ErrorException` when git is missing
+or `git init` or `git add` fails; the package stays in place then.
+"""
+function finish_package(
+    package::AbstractString,
+    request::Request,
+    settings::Settings,
+    io::IO,
+)
     # 8. repository and first commit
     if request.commit
         Sys.which("git") === nothing && error("git is not on PATH; no repository was made")
@@ -924,7 +1030,8 @@ function scaffold(
         status = exit_status(Cmd(`git add -A`; dir = package))
         status == 0 || error("git add failed with status $status in $package")
         message = "chore: scaffold of $(request.name).jl"
-        status = exit_status(Cmd(`git commit -m $message`; dir = package))
+        commit = `git -c user.useConfigOnly=true commit -m $message`
+        status = exit_status(Cmd(commit; dir = package))
         status == 0 || println(
             io,
             "note: the first commit was not made; set user.name and user.email, " *
@@ -965,7 +1072,7 @@ function scaffold(
         "      the launch check; it fails on changelog, badges and dependabot until " *
         "the launch work is done",
     )
-    return package
+    return nothing
 end
 
 # --- command line ----------------------------------------------------------------------
@@ -1073,9 +1180,7 @@ function main(args::Vector{String} = ARGS; io::IO = stdout)
     author_list = parse_authors(authors)
 
     settings = load_settings(config_path)
-    julia_floor = julia === nothing ? settings.julia : julia
-    occursin(JULIA_VERSION, julia_floor) ||
-        throw(ArgumentError("--julia must have the form MAJOR.MINOR, got '$julia_floor'"))
+    julia_floor = julia === nothing ? settings.julia : check_floor(julia, "--julia")
     request = Request(
         package,
         directory,
